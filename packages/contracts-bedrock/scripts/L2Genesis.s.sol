@@ -2,23 +2,31 @@
 pragma solidity 0.8.15;
 
 import { Script } from "forge-std/Script.sol";
+import { console2 as console } from "forge-std/console2.sol";
+import { stdJson } from "forge-std/StdJson.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
 
 import { L2StandardBridge } from "src/L2/L2StandardBridge.sol";
 import { L2CrossDomainMessenger } from "src/L2/L2CrossDomainMessenger.sol";
+import { L1CrossDomainMessenger } from "src/L1/L1CrossDomainMessenger.sol";
+import { L1StandardBridge } from "src/L1/L1StandardBridge.sol";
 import { SequencerFeeVault } from "src/L2/SequencerFeeVault.sol";
 import { FeeVault } from "src/universal/FeeVault.sol";
 import { OptimismMintableERC20Factory } from "src/universal/OptimismMintableERC20Factory.sol";
 import { GovernanceToken } from "src/governance/GovernanceToken.sol";
+import { DeployConfig } from "scripts/DeployConfig.s.sol";
+import { Artifacts } from "scripts/Artifacts.s.sol";
 
 interface IInitializable {
     function initialize() external;
 }
 
 // @title
-contract L2Genesis is Script {
+contract L2Genesis is Script, Artifacts {
     uint256 constant PROXY_COUNT = 2048;
     uint256 constant PRECOMPILE_COUNT = 256;
+    DeployConfig public constant cfg =
+        DeployConfig(address(uint160(uint256(keccak256(abi.encode("optimism.deployconfig"))))));
 
     /// @notice The storage slot that holds the address of a proxy implementation.
     /// @dev `bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1)`
@@ -29,10 +37,21 @@ contract L2Genesis is Script {
     /// @dev `bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1)`
     bytes32 internal constant PROXY_ADMIN_ADDRESS = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
 
+    mapping(string => address) deployments;
+
     string outfile;
 
-    function setUp() external {
-        outfile = string.concat(vm.projectRoot(), "/genesis.json");
+    function setUp() public override {
+        Artifacts.setUp();
+
+        string memory path = string.concat(vm.projectRoot(), "/deploy-config/", deploymentContext, ".json");
+        vm.etch(address(cfg), vm.getDeployedCode("DeployConfig.s.sol:DeployConfig"));
+        vm.label(address(cfg), "DeployConfig");
+        vm.allowCheatcodes(address(cfg));
+        cfg.read(path);
+
+        outfile = string.concat(vm.projectRoot(), "/deployments/", deploymentContext, "/genesis.json");
+        _loadAddresses(string.concat(vm.projectRoot(), "/deployments/", deploymentContext, "/.deploy"));
     }
 
     function run() public {
@@ -109,19 +128,49 @@ contract L2Genesis is Script {
         // TODO: this is ignored in Go code?
     }
 
+    // TODO Differing deployed bytecode from previous L2 genesis
     function _setWETH9() internal {
-        vm.etch(Predeploys.WETH9, vm.getDeployedCode("WETH9.sol:WETH9"));
+        vm.etch(
+            Predeploys.WETH9,
+            vm.getDeployedCode("WETH9.sol:WETH9")
+        );
+        vm.store(
+            Predeploys.WETH9,
+            hex"0000000000000000000000000000000000000000000000000000000000000000",
+            hex"577261707065642045746865720000000000000000000000000000000000001a"
+        );
+        vm.store(
+            Predeploys.WETH9,
+            hex"0000000000000000000000000000000000000000000000000000000000000001",
+            hex"5745544800000000000000000000000000000000000000000000000000000008"
+        );
+        vm.store(
+            Predeploys.WETH9,
+            hex"0000000000000000000000000000000000000000000000000000000000000002",
+            hex"0000000000000000000000000000000000000000000000000000000000000012"
+        );
     }
 
     function _setL2StandardBridge() internal {
-        address l1CrossDomainMessenger = address(0);
+        L2StandardBridge bridge = new L2StandardBridge();
         address impl = _predeployToCodeNamespace(Predeploys.L2_STANDARD_BRIDGE);
 
-        L2StandardBridge bridge = new L2StandardBridge(payable(l1CrossDomainMessenger));
         vm.etch(impl, address(bridge).code);
-
-        IInitializable(impl).initialize();
-        IInitializable(Predeploys.L2_STANDARD_BRIDGE).initialize();
+        vm.store(
+            Predeploys.L2_STANDARD_BRIDGE,
+            hex"0000000000000000000000000000000000000000000000000000000000000000",
+            hex"0000000000000000000000000000000000000000000000000000000000000001"
+        );
+        vm.store(
+            Predeploys.L2_STANDARD_BRIDGE,
+            hex"0000000000000000000000000000000000000000000000000000000000000003",
+            hex"0000000000000000000000004200000000000000000000000000000000000007"
+        );
+        vm.store(
+            Predeploys.L2_STANDARD_BRIDGE,
+            hex"0000000000000000000000000000000000000000000000000000000000000004",
+            hex"0000000000000000000000000c8b5822b6e02cda722174f19a1439a7495a3fa6"
+        );
 
         vm.etch(address(bridge), hex"");
         vm.resetNonce(address(bridge));
@@ -129,15 +178,31 @@ contract L2Genesis is Script {
 
     /// @notice
     function _setL2CrossDomainMessenger() internal {
-        // TODO: wrong argument
-        address l1CrossDomainMessenger = address(0);
+        L2CrossDomainMessenger messenger = new L2CrossDomainMessenger();
         address impl = _predeployToCodeNamespace(Predeploys.L2_CROSS_DOMAIN_MESSENGER);
 
-        L2CrossDomainMessenger messenger = new L2CrossDomainMessenger(l1CrossDomainMessenger);
-
         vm.etch(impl, address(messenger).code);
-        IInitializable(impl).initialize();
-        IInitializable(Predeploys.L2_CROSS_DOMAIN_MESSENGER).initialize();
+
+        vm.store(
+            Predeploys.L2_CROSS_DOMAIN_MESSENGER,
+            hex"0000000000000000000000000000000000000000000000000000000000000000",
+            hex"0000000000000000000000010000000000000000000000000000000000000000"
+        );
+        vm.store(
+            Predeploys.L2_CROSS_DOMAIN_MESSENGER,
+            hex"00000000000000000000000000000000000000000000000000000000000000cc",
+            hex"000000000000000000000000000000000000000000000000000000000000dead"
+        );
+        vm.store(
+            Predeploys.L2_CROSS_DOMAIN_MESSENGER,
+            hex"00000000000000000000000000000000000000000000000000000000000000cd",
+            hex"0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        vm.store(
+            Predeploys.L2_CROSS_DOMAIN_MESSENGER,
+            hex"00000000000000000000000000000000000000000000000000000000000000cf",
+            hex"00000000000000000000000020a42a5a785622c6ba2576b2d6e924aa82bfa11d"
+        );
 
         // TODO: upstream filtering out of empty accounts?
         vm.etch(address(messenger), hex"");
@@ -146,8 +211,8 @@ contract L2Genesis is Script {
 
     function _setSequencerFeeVault() internal {
         SequencerFeeVault vault = new SequencerFeeVault({
-            _recipient: address(0),
-            _minWithdrawalAmount: 0,
+            _recipient: cfg.sequencerFeeVaultRecipient(),
+            _minWithdrawalAmount: cfg.sequencerFeeVaultMinimumWithdrawalAmount(),
             _withdrawalNetwork: FeeVault.WithdrawalNetwork.L2
         });
 
@@ -158,11 +223,20 @@ contract L2Genesis is Script {
     }
 
     function _setOptimismMintableERC20Factory() internal {
-        OptimismMintableERC20Factory factory = new OptimismMintableERC20Factory({
-            _bridge: Predeploys.L2_STANDARD_BRIDGE
-        });
+        address impl = _predeployToCodeNamespace(Predeploys.OPTIMISM_MINTABLE_ERC20_FACTORY);
+        OptimismMintableERC20Factory factory = new OptimismMintableERC20Factory();
 
-        vm.etch(_predeployToCodeNamespace(Predeploys.SEQUENCER_FEE_WALLET), address(factory).code);
+        vm.etch(impl, address(factory).code);
+        vm.store(
+            Predeploys.OPTIMISM_MINTABLE_ERC20_FACTORY,
+            hex"0000000000000000000000000000000000000000000000000000000000000000",
+            hex"0000000000000000000000000000000000000000000000000000000000000001"
+        );
+        vm.store(
+            Predeploys.OPTIMISM_MINTABLE_ERC20_FACTORY,
+            hex"0000000000000000000000000000000000000000000000000000000000000001",
+            hex"0000000000000000000000004200000000000000000000000000000000000010"
+        );
 
         vm.etch(address(factory), hex"");
         vm.resetNonce(address(factory));
@@ -182,13 +256,30 @@ contract L2Genesis is Script {
         );
     }
 
-    // TODO: needs conditional logic to not include based on config
     function _setGovernanceToken() internal {
-        GovernanceToken token = new GovernanceToken();
-        vm.etch(Predeploys.GOVERNANCE_TOKEN, address(token).code);
+        if (!cfg.enableGovernance()) {
+            console.log("Governance not enabled, skipping setting governanace token");
+            return;
+        }
+        // TODO Transfer to cfg.finalSystemOwner?
 
-        vm.etch(address(token), hex"");
-        vm.resetNonce(address(token));
+        vm.etch(Predeploys.GOVERNANCE_TOKEN, vm.getDeployedCode("GovernanceToken.sol:GovernanceToken"));
+
+        vm.store(
+            Predeploys.GOVERNANCE_TOKEN,
+            hex"0000000000000000000000000000000000000000000000000000000000000003",
+            hex"4f7074696d69736d000000000000000000000000000000000000000000000010"
+        );
+        vm.store(
+            Predeploys.GOVERNANCE_TOKEN,
+            hex"0000000000000000000000000000000000000000000000000000000000000004",
+            hex"4f50000000000000000000000000000000000000000000000000000000000004"
+        );
+        vm.store(
+            Predeploys.GOVERNANCE_TOKEN,
+            hex"000000000000000000000000000000000000000000000000000000000000000a",
+            hex"000000000000000000000000a0ee7a142d267c1f36714e4a8f75612f20a79720"
+        );
     }
 
     function _setL1Block() internal {

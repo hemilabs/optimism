@@ -38,6 +38,7 @@ contract DeployConfig is Script {
     uint256 public l1FeeVaultMinimumWithdrawalAmount;
     address public sequencerFeeVaultRecipient;
     uint256 public sequencerFeeVaultMinimumWithdrawalAmount;
+    bool public enableGovernance;
     string public governanceTokenName;
     string public governanceTokenSymbol;
     address public governanceTokenOwner;
@@ -92,6 +93,7 @@ contract DeployConfig is Script {
         l1FeeVaultMinimumWithdrawalAmount = stdJson.readUint(_json, "$.l1FeeVaultMinimumWithdrawalAmount");
         sequencerFeeVaultRecipient = stdJson.readAddress(_json, "$.sequencerFeeVaultRecipient");
         sequencerFeeVaultMinimumWithdrawalAmount = stdJson.readUint(_json, "$.sequencerFeeVaultMinimumWithdrawalAmount");
+        enableGovernance = stdJson.readBool(_json, "$.enableGovernance");
         governanceTokenName = stdJson.readString(_json, "$.governanceTokenName");
         governanceTokenSymbol = stdJson.readString(_json, "$.governanceTokenSymbol");
         governanceTokenOwner = stdJson.readAddress(_json, "$.governanceTokenOwner");

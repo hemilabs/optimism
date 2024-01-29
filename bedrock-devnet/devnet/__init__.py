@@ -207,43 +207,46 @@ def devnet_deploy(paths):
         log.info('L2 genesis and rollup configs already generated.')
     else:
         log.info('Generating L2 genesis and rollup configs.')
+        # run_command([
+        #     'go', 'run', 'cmd/main.go', 'genesis', 'l2',
+        #     '--l1-rpc', 'http://localhost:8545',
+        #     '--deploy-config', paths.devnet_config_path,
+        #     '--l1-deployments', paths.addresses_json_path,
+        #     '--outfile.l2', paths.genesis_l2_path,
+        #     '--outfile.rollup', paths.rollup_config_path
+        # ], cwd=paths.op_node_dir)
         run_command([
-            'go', 'run', 'cmd/main.go', 'genesis', 'l2',
-            '--l1-rpc', 'http://localhost:8545',
-            '--deploy-config', paths.devnet_config_path,
-            '--l1-deployments', paths.addresses_json_path,
-            '--outfile.l2', paths.genesis_l2_path,
-            '--outfile.rollup', paths.rollup_config_path
-        ], cwd=paths.op_node_dir)
+            'forge', 'script', './scripts/L2Genesis.s.sol:L2Genesis'
+        ], cwd=paths.contracts_bedrock_dir)
 
-    rollup_config = read_json(paths.rollup_config_path)
-    addresses = read_json(paths.addresses_json_path)
+    # rollup_config = read_json(paths.rollup_config_path)
+    # addresses = read_json(paths.addresses_json_path)
 
-    log.info('Bringing up L2.')
-    run_command(['docker', 'compose', 'up', '-d', 'l2'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir
-    })
-    wait_up(9545)
-    wait_for_rpc_server('127.0.0.1:9545')
+    # log.info('Bringing up L2.')
+    # run_command(['docker', 'compose', 'up', '-d', 'l2'], cwd=paths.ops_bedrock_dir, env={
+    #     'PWD': paths.ops_bedrock_dir
+    # })
+    # wait_up(9545)
+    # wait_for_rpc_server('127.0.0.1:9545')
 
-    l2_output_oracle = addresses['L2OutputOracleProxy']
-    log.info(f'Using L2OutputOracle {l2_output_oracle}')
-    batch_inbox_address = rollup_config['batch_inbox_address']
-    log.info(f'Using batch inbox {batch_inbox_address}')
+    # l2_output_oracle = addresses['L2OutputOracleProxy']
+    # log.info(f'Using L2OutputOracle {l2_output_oracle}')
+    # batch_inbox_address = rollup_config['batch_inbox_address']
+    # log.info(f'Using batch inbox {batch_inbox_address}')
 
-    log.info('Bringing up `op-node`, `op-proposer` and `op-batcher`.')
-    run_command(['docker', 'compose', 'up', '-d', 'op-node', 'op-proposer', 'op-batcher'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir,
-        'L2OO_ADDRESS': l2_output_oracle,
-        'SEQUENCER_BATCH_INBOX_ADDRESS': batch_inbox_address
-    })
+    # log.info('Bringing up `op-node`, `op-proposer` and `op-batcher`.')
+    # run_command(['docker', 'compose', 'up', '-d', 'op-node', 'op-proposer', 'op-batcher'], cwd=paths.ops_bedrock_dir, env={
+    #     'PWD': paths.ops_bedrock_dir,
+    #     'L2OO_ADDRESS': l2_output_oracle,
+    #     'SEQUENCER_BATCH_INBOX_ADDRESS': batch_inbox_address
+    # })
 
-    log.info('Bringing up `artifact-server`')
-    run_command(['docker', 'compose', 'up', '-d', 'artifact-server'], cwd=paths.ops_bedrock_dir, env={
-        'PWD': paths.ops_bedrock_dir
-    })
+    # log.info('Bringing up `artifact-server`')
+    # run_command(['docker', 'compose', 'up', '-d', 'artifact-server'], cwd=paths.ops_bedrock_dir, env={
+    #     'PWD': paths.ops_bedrock_dir
+    # })
 
-    log.info('Devnet ready.')
+    # log.info('Devnet ready.')
 
 
 def eth_accounts(url):
