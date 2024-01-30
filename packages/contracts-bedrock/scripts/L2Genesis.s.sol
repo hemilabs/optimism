@@ -19,6 +19,7 @@ import { DeployConfig } from "scripts/DeployConfig.s.sol";
 import { Artifacts } from "scripts/Artifacts.s.sol";
 
 // import { MultiCall3 } from "multicall/Multicall3.sol";
+import { Create2Deployer } from "create2deployer/Create2Deployer.sol";
 
 interface IInitializable {
     function initialize() external;
@@ -61,6 +62,7 @@ contract L2Genesis is Script, Artifacts {
         _setPrecompiles();
         _setProxies();
         _setImplementations();
+        _setPreinstalls();
 
         vm.dumpState(outfile);
     }
@@ -298,12 +300,12 @@ contract L2Genesis is Script, Artifacts {
     }
 
     function _setCreate2Deployer() internal {
-        // MultiCall3 multicall3 = new MultiCall3();
+        Create2Deployer deployer = new Create2Deployer();
 
-        // vm.etch(PreInstalls.MULTICALL3, address(multicall3).code);
+        vm.etch(PreInstalls.CREATE2_DEPLOYER, address(deployer).code);
 
-        // vm.etch(address(multicall3), hex"");
-        // vm.resetNonce(address(multicall3));
+        vm.etch(address(deployer), hex"");
+        vm.resetNonce(address(deployer));
     }
 
     /// @dev Function to compute the expected address of the predeploy implementation

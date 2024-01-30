@@ -22,6 +22,7 @@ remappings = [
   'kontrol-cheatcodes/=lib/kontrol-cheatcodes/src',
   'solady/=lib/solady/src',
   "multicall/=lib/multicall/src",
+  "create2deployer/=lib/create2deployer/contracts",
 ]
 extra_output = ['devdoc', 'userdoc', 'metadata', 'storageLayout']
 bytecode_hash = 'none'
