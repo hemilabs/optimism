@@ -32,6 +32,3 @@
 [submodule "packages/contracts-bedrock/lib/create2deployer"]
 	path = packages/contracts-bedrock/lib/create2deployer
 	url = https://github.com/pcaversaccio/create2deployer
-[submodule "packages/contracts-bedrock/lib/safe-smart-account"]
-	path = packages/contracts-bedrock/lib/safe-smart-account
-	url = https://github.com/safe-global/safe-smart-account
