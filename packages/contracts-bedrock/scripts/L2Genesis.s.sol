@@ -5,6 +5,7 @@ import { Script } from "forge-std/Script.sol";
 import { console2 as console } from "forge-std/console2.sol";
 import { stdJson } from "forge-std/StdJson.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
+import { PreInstalls } from "src/libraries/PreInstalls.sol";
 
 import { L2StandardBridge } from "src/L2/L2StandardBridge.sol";
 import { L2CrossDomainMessenger } from "src/L2/L2CrossDomainMessenger.sol";
@@ -16,6 +17,8 @@ import { OptimismMintableERC20Factory } from "src/universal/OptimismMintableERC2
 import { GovernanceToken } from "src/governance/GovernanceToken.sol";
 import { DeployConfig } from "scripts/DeployConfig.s.sol";
 import { Artifacts } from "scripts/Artifacts.s.sol";
+
+// import { MultiCall3 } from "multicall/Multicall3.sol";
 
 interface IInitializable {
     function initialize() external;
@@ -291,7 +294,16 @@ contract L2Genesis is Script, Artifacts {
 
     /// @dev
     function _setPreinstalls() internal {
-        //
+        _setCreate2Deployer();
+    }
+
+    function _setCreate2Deployer() internal {
+        // MultiCall3 multicall3 = new MultiCall3();
+
+        // vm.etch(PreInstalls.MULTICALL3, address(multicall3).code);
+
+        // vm.etch(address(multicall3), hex"");
+        // vm.resetNonce(address(multicall3));
     }
 
     /// @dev Function to compute the expected address of the predeploy implementation
