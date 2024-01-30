@@ -42,8 +42,11 @@ contract DeployConfig is Script {
     string public governanceTokenName;
     string public governanceTokenSymbol;
     address public governanceTokenOwner;
+    uint256 public l2GenesisBlockNumber;
     uint256 public l2GenesisBlockGasLimit;
     uint256 public l2GenesisBlockBaseFeePerGas;
+    uint256 public l2GenesisRegolithTimeOffset;
+    uint256 public l2GenesisCanyonTimeOffset;
     uint256 public gasPriceOracleOverhead;
     uint256 public gasPriceOracleScalar;
     uint256 public eip1559Denominator;
@@ -97,8 +100,11 @@ contract DeployConfig is Script {
         governanceTokenName = stdJson.readString(_json, "$.governanceTokenName");
         governanceTokenSymbol = stdJson.readString(_json, "$.governanceTokenSymbol");
         governanceTokenOwner = stdJson.readAddress(_json, "$.governanceTokenOwner");
+        l2GenesisBlockNumber = stdJson.readUint(_json, "$.l2GenesisBlockNumber");
         l2GenesisBlockGasLimit = stdJson.readUint(_json, "$.l2GenesisBlockGasLimit");
         l2GenesisBlockBaseFeePerGas = stdJson.readUint(_json, "$.l2GenesisBlockBaseFeePerGas");
+        l2GenesisRegolithTimeOffset = stdJson.readUint(_json, "$.l2GenesisRegolithTimeOffset");
+        l2GenesisCanyonTimeOffset = stdJson.readUint(_json, "$.l2GenesisCanyonTimeOffset");
         gasPriceOracleOverhead = stdJson.readUint(_json, "$.gasPriceOracleOverhead");
         gasPriceOracleScalar = stdJson.readUint(_json, "$.gasPriceOracleScalar");
         eip1559Denominator = stdJson.readUint(_json, "$.eip1559Denominator");

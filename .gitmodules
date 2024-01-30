@@ -26,6 +26,3 @@
 [submodule "packages/contracts-bedrock/lib/lib-keccak"]
 	path = packages/contracts-bedrock/lib/lib-keccak
 	url = https://github.com/ethereum-optimism/lib-keccak
-[submodule "packages/contracts-bedrock/lib/permit2"]
-	path = packages/contracts-bedrock/lib/permit2
-	url = https://github.com/Uniswap/permit2

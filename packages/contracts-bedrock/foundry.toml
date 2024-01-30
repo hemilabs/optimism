@@ -21,7 +21,6 @@ remappings = [
   'safe-contracts/=lib/safe-contracts/contracts',
   'kontrol-cheatcodes/=lib/kontrol-cheatcodes/src',
   'solady/=lib/solady/src',
-  "permit2/=lib/permit2/src",
 ]
 extra_output = ['devdoc', 'userdoc', 'metadata', 'storageLayout']
 bytecode_hash = 'none'
