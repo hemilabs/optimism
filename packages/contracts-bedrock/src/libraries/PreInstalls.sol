@@ -4,6 +4,8 @@ pragma solidity ^0.8.0;
 /// @title PreInstalls
 /// @notice Contains constant addresses for contracts that are pre-installed to the L2 system.
 library PreInstalls {
+    /// @notice Address of the Permit2 preinstall.
+    address internal constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
     /// @notice Address of the Multicall3 preinstall.
     address internal constant MULTICALL3 = 0xcA11bde05977b3631167028862bE2a173976CA11;
     /// @notice Address of the Create2Deployer preinstall.

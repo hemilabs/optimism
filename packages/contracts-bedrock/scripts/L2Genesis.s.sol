@@ -18,6 +18,8 @@ import { GovernanceToken } from "src/governance/GovernanceToken.sol";
 import { DeployConfig } from "scripts/DeployConfig.s.sol";
 import { Artifacts } from "scripts/Artifacts.s.sol";
 
+import { Permit2 } from "permit2/Permit2.sol";
+
 interface IInitializable {
     function initialize() external;
 }
@@ -293,10 +295,20 @@ contract L2Genesis is Script, Artifacts {
 
     /// @dev
     function _setPreinstalls() internal {
-        _setCreate2Deployer();
+        _setPermit2();
+        // _setCreate2Deployer();
         // _setSafe_v130();
         // _setSafeL2_v130();
         // _setMultiSendCallOnly_v130();
+    }
+
+    function _setPermit2() internal {
+        Permit2 permit2 = new Permit2();
+
+        vm.etch(PreInstalls.PERMIT2, address(permit2).code);
+
+        vm.etch(address(permit2), hex"");
+        vm.resetNonce(address(permit2));
     }
 
     function _setCreate2Deployer() internal {
