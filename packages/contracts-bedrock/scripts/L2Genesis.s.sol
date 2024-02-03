@@ -3,6 +3,7 @@ pragma solidity 0.8.15;
 
 import { Script } from "forge-std/Script.sol";
 import { console2 as console } from "forge-std/console2.sol";
+import { stdJson } from "forge-std/StdJson.sol";
 
 import { Artifacts } from "scripts/Artifacts.s.sol";
 import { DeployConfig } from "scripts/DeployConfig.s.sol";
@@ -83,11 +84,14 @@ contract L2Genesis is Script, Artifacts {
         _setPredeployProxies();
         _setPredeployImplementations();
 
+        /// TODO Can't reset cfg because it's used in _addConfigToGenesis
         /// Reset so its not included state dump
-        vm.etch(address(cfg), "");
+        // vm.etch(address(cfg), "");
 
         vm.dumpState(outfile);
         _sortJsonByKeys(outfile);
+        _addAllocPropertyToGenesis(outfile);
+        _addConfigToGenesis(outfile);
     }
 
     /// @notice Give all of the precompiles 1 wei so that they are
@@ -160,6 +164,10 @@ contract L2Genesis is Script, Artifacts {
         _setSenderCreator();
         _setEntryPoint();
     }
+
+    //////////////////////////////////////////////////////
+    /// Predeploy Setters
+    //////////////////////////////////////////////////////
 
     function _setLegacyMessagePasser() internal {
         _setImplementationCode(Predeploys.LEGACY_MESSAGE_PASSER, "LegacyMessagePasser");
@@ -320,6 +328,10 @@ contract L2Genesis is Script, Artifacts {
         _setImplementationCode(Predeploys.L1_BLOCK_ATTRIBUTES, "L1Block");
     }
 
+    //////////////////////////////////////////////////////
+    /// Preinstall Setters
+    //////////////////////////////////////////////////////
+
     function _setMulticall3() internal {
         vm.etch(Preinstalls.MULTICALL3, Preinstalls.MULTICALL3_DEPLOYED_BYTECODE);
     }
@@ -375,6 +387,77 @@ contract L2Genesis is Script, Artifacts {
     function _setEntryPoint() internal {
         vm.etch(Preinstalls.ENTRY_POINT, Preinstalls.ENTRY_POINT_DEPLOYED_BYTECODE);
     }
+
+    //////////////////////////////////////////////////////
+    /// Other
+    //////////////////////////////////////////////////////
+    function _getHardforkTime(uint256 hardforkTimeOffset, uint256 genesisTime) internal pure returns(uint256) {
+        uint256 _default = 0;
+        if (hardforkTimeOffset > 0) {
+            return genesisTime + hardforkTimeOffset;
+        }
+        return _default;
+    }
+
+    function _getChainConfig() internal returns (string memory) {
+        // TODO Go code is using block.Time() from provided *types.Block.
+        // devnetL1-template.json specifies "l2BlockTime": 2,
+        // so should genesisTime = cfg.l2BlockTime?
+        // block.timestamp = 1
+        uint256 genesisTime = block.timestamp;
+
+        string memory serializedConfigName = "chainConfig";
+        string memory json = "";
+        json = stdJson.serialize(serializedConfigName, "chainId", cfg.l2ChainID());
+        json = stdJson.serialize(serializedConfigName, "homesteadBlock", uint256(0));
+        // TODO DAOForkSupport is probably not supposed to be `false`, if `false` in
+        // deploy config, should we just not include it?
+        json = stdJson.serialize(serializedConfigName, "DAOForkSupport", false);
+        json = stdJson.serialize(serializedConfigName, "eip150Block", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "eip155Block", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "eip158Block", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "byzantiumBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "constantinopleBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "petersburgBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "istanbulBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "muirGlacierBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "berlinBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "londonBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "arrowGlacierBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "grayGlacierBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "mergeNetsplitBlock", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "terminalTotalDifficulty", uint256(0));
+        json = stdJson.serialize(serializedConfigName, "terminalTotalDifficultyPassed", true);
+        // TODO This was previously set as uint64, is it okay to be uint256?
+        json = stdJson.serialize(serializedConfigName, "bedrockBlock", cfg.l2GenesisBlockNumber());
+        json = stdJson.serialize(serializedConfigName, "regolithTime", _getHardforkTime(cfg.l2GenesisRegolithTimeOffset(), genesisTime));
+        json = stdJson.serialize(serializedConfigName, "canyonTime", _getHardforkTime(cfg.l2GenesisCanyonTimeOffset(), genesisTime));
+
+        // TODO
+        json = stdJson.serialize(serializedConfigName, "shanghaiTime", uint256(0));
+        // TODO
+        json = stdJson.serialize(serializedConfigName, "cancunTime", uint256(0));
+        // TODO
+        json = stdJson.serialize(serializedConfigName, "ecotoneTime", uint256(0));
+        // TODO
+        json = stdJson.serialize(serializedConfigName, "interopTime", uint256(0));
+
+        string memory serializedOptimismConfig = "optimismConfig";
+        string memory nestedOptimismConfig = "";
+        // TODO
+        nestedOptimismConfig = stdJson.serialize(serializedOptimismConfig, "eip1559Elasticity", uint256(6));
+        // TODO
+        nestedOptimismConfig = stdJson.serialize(serializedOptimismConfig, "eip1559Denominator", uint256(50));
+        // TODO
+        nestedOptimismConfig = stdJson.serialize(serializedOptimismConfig, "eip1559DenominatorCanyon", uint256(250));
+
+        json = stdJson.serialize(serializedConfigName, "optimism", nestedOptimismConfig);
+        return json;
+    }
+
+    //////////////////////////////////////////////////////
+    /// Helper Functions
+    //////////////////////////////////////////////////////
 
     /// @dev Returns true if the adress is not proxied.
     function _notProxied(address _addr) internal pure returns (bool) {
@@ -434,6 +517,55 @@ contract L2Genesis is Script, Artifacts {
         commands[1] = "-c";
         commands[2] = string.concat("cat <<< $(jq -S '.' ", _path, ") > ", _path);
         vm.ffi(commands);
+    }
+
+    function _overwriteFile(string memory _target, string memory _source) internal {
+        string[] memory updateGenesisOutFileCommands = new string[](3);
+        updateGenesisOutFileCommands[0] = "bash";
+        updateGenesisOutFileCommands[1] = "-c";
+        updateGenesisOutFileCommands[2] = string.concat(
+            "mv -f ",
+            _source,
+            " ",
+            _target
+        );
+        vm.ffi(updateGenesisOutFileCommands);
+    }
+
+    function _addAllocPropertyToGenesis(string memory _path) internal {
+        string memory tmpGenesisPath = string.concat(vm.projectRoot(), "/deployments/", deploymentContext, "/genesis.tmp.json");
+        string[] memory addAllocsKeyToGenesiscommands = new string[](3);
+        addAllocsKeyToGenesiscommands[0] = "bash";
+        addAllocsKeyToGenesiscommands[1] = "-c";
+        addAllocsKeyToGenesiscommands[2] = string.concat(
+            "jq '{ \"alloc\": . }' ",
+            _path,
+            " > ",
+            tmpGenesisPath
+        );
+        vm.ffi(addAllocsKeyToGenesiscommands);
+
+        _overwriteFile(_path, tmpGenesisPath);
+    }
+
+    function _addConfigToGenesis(string memory _path) internal {
+        string memory tmpGenesisPath = string.concat(vm.projectRoot(), "/deployments/", deploymentContext, "/genesis.tmp.json");
+        string[] memory addConfigToGenesiscommands = new string[](3);
+        addConfigToGenesiscommands[0] = "bash";
+        addConfigToGenesiscommands[1] = "-c";
+        addConfigToGenesiscommands[2] = string.concat(
+            "jq '. + ",
+            "{\"config\":",
+            _getChainConfig(),
+            "}",
+            "' ",
+            _path,
+            " > ",
+            tmpGenesisPath
+        );
+        vm.ffi(addConfigToGenesiscommands);
+
+        _overwriteFile(_path, tmpGenesisPath);
     }
 
     //////////////////////////////////////////////////////
