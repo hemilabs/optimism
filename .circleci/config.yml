@@ -1528,9 +1528,6 @@ workflows:
           name: op-service-tests
           module: op-service
           requires: ["go-mod-download"]
-      - op-service-rethdb-tests:
-          requires:
-            - go-mod-download
       - go-e2e-test:
           name: op-e2e-HTTP-tests
           module: op-e2e
