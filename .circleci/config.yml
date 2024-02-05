@@ -1509,6 +1509,10 @@ workflows:
           module: op-challenger
           requires: ["go-mod-download"]
       - go-test:
+          name: op-dispute-mon-tests
+          module: op-dispute-mon
+          requires: ["go-mod-download"]
+      - go-test:
           name: op-conductor-tests
           module: op-conductor
           requires: ["go-mod-download"]
@@ -1635,6 +1639,9 @@ workflows:
           requires:
             - go-mod-download
       - devnet:
+          matrix:
+            parameters:
+              devnet_fpac: ["false", "true"]
           requires:
             - pnpm-monorepo
             - op-batcher-docker-build

@@ -23,23 +23,24 @@ interface IInitializable {
 }
 
 /// @dev The general flow of adding a predeploy is:
-///      1. _setProxies uses vm.etch to set the Proxy.sol deployed bytecode for proxy address `0x420...000` to `0x420...000 + PROXY_COUNT - 1`.
+///      1. _setPredeployProxies uses vm.etch to set the Proxy.sol deployed bytecode for proxy address `0x420...000` to `0x420...000 + PROXY_COUNT - 1`.
 ///      Additionally, the PROXY_ADMIN_ADDRESS and PROXY_IMPLEMENTATION_ADDRESS storage slots are set for the proxy
 ///      address.
-///      2. vm.etch sets the deployed bytecode for each predeploy at the implementation address (i.e. `0xc0d3` namespace).
-///      3. The `initialize` method is called at the implementation address with zero/dummy vaules if it exists.
-///      4. The `initialize` method is called at the proxy address with actual vaules if it exists.
+///      2. `vm.etch` sets the deployed bytecode for each predeploy at the implementation address (i.e. `0xc0d3` namespace).
+///      3. The `initialize` method is called at the implementation address with zero/dummy vaules if the method exists.
+///      4. The `initialize` method is called at the proxy address with actual vaules if the method exists.
 ///      5. A `require` check to verify the expected implementation address is set for the proxy.
 /// @notice The following safety invariants are used when setting state:
 ///         1. `vm.getDeployedBytecode` can only be used with `vm.etch` when there are no side
 ///         effects in the constructor and no immutables in the bytecode.
 ///         2. A contract must be deployed using the `new` syntax if there are immutables in the code.
 ///         Any other side effects from the init code besides setting the immutables must be cleaned up afterwards.
-///         3. A contract is deployed using the `new` syntax because it's not proxied, but still needs to be set
-///         at a specific address. Because just deploying a new instance doesn't give us the contract at our desired
-///         address,
-///         we must use `vm.etch` to set the deployed bytecode, and `vm.store` to set any storage slots. Lastly, we reset
-///         the account the contract was initially deployed by so it's not included in the `vm.dumpState`.
+///         3. A contract is deployed using the `new` syntax, however it's not proxied and is still expected to exist at a
+///         specific implementation address (i.e. `0xc0d3` namespace). In this case we deploy an instance of the contract
+///         using `new` syntax, use `contract.code` to retrieve it's deployed bytecode, `vm.etch` the bytecode at the
+///         expected implementation address, and `vm.store` to set any storage slots that are
+///         expected to be set after a new deployment. Lastly, we reset the account code and storage slots the contract
+///         was initially deployed to so it's not included in the `vm.dumpState`.
 contract L2Genesis is Script, Artifacts {
     uint256 constant PROXY_COUNT = 2048;
     uint256 constant PRECOMPILE_COUNT = 256;
@@ -77,9 +78,9 @@ contract L2Genesis is Script, Artifacts {
     ///      to generate a L2 genesis alloc.
     /// @notice The alloc object is sorted numerically by address.
     function run() public {
-        _setPrecompiles();
-        _setProxies();
-        _setImplementations();
+        _dealEthToPrecompiles();
+        _setPredeployProxies();
+        _setPredeployImplementations();
 
         /// Reset so its not included state dump
         vm.etch(address(cfg), "");
@@ -90,7 +91,7 @@ contract L2Genesis is Script, Artifacts {
 
     /// @notice Give all of the precompiles 1 wei so that they are
     ///         not considered empty accounts.
-    function _setPrecompiles() internal {
+    function _dealEthToPrecompiles() internal {
         for (uint256 i; i < PRECOMPILE_COUNT; i++) {
             vm.deal(address(uint160(i)), 1);
         }
@@ -100,7 +101,7 @@ contract L2Genesis is Script, Artifacts {
     ///      The Proxy bytecode should be set. All proxied predeploys should have
     ///      the 1967 admin slot set to the ProxyAdmin predeploy. All defined predeploys
     ///      should have their implementations set.
-    function _setProxies() internal {
+    function _setPredeployProxies() internal {
         bytes memory code = vm.getDeployedCode("Proxy.sol:Proxy");
         uint160 prefix = uint160(0x420) << 148;
 
@@ -129,7 +130,7 @@ contract L2Genesis is Script, Artifacts {
     /// @notice LEGACY_ERC20_ETH is not being predeployed since it's been deprecated.
     /// @dev Sets all the implementations for the predeploy proxies. For contracts without proxies,
     ///      sets the deployed bytecode at their expected predeploy address.
-    function _setImplementations() internal {
+    function _setPredeployImplementations() internal {
         _setLegacyMessagePasser();
         _setDeployerWhitelist();
         _setWETH9();
@@ -350,7 +351,7 @@ contract L2Genesis is Script, Artifacts {
     /// @notice There isn't a good way to know if the resulting revering is due to abi mismatch
     ///         or because it's already been initialized
     function _verifyCantReinitialize(address _contract, address _arg) internal {
-        vm.expectRevert();
+        vm.expectRevert("Initializable: contract is already initialized");
         IInitializable(_contract).initialize(_arg);
     }
 
