@@ -35,6 +35,7 @@ contract DeployConfig is Script {
     address public l2OutputOracleProposer;
     address public l2OutputOracleChallenger;
     uint256 public finalizationPeriodSeconds;
+    bool public fundDevAccounts;
     address public proxyAdminOwner;
     address public baseFeeVaultRecipient;
     uint256 public baseFeeVaultMinimumWithdrawalAmount;
@@ -42,6 +43,7 @@ contract DeployConfig is Script {
     uint256 public l1FeeVaultMinimumWithdrawalAmount;
     address public sequencerFeeVaultRecipient;
     uint256 public sequencerFeeVaultMinimumWithdrawalAmount;
+    uint256 public sequencerFeeVaultWithdrawalNetwork;
     string public governanceTokenName;
     string public governanceTokenSymbol;
     address public governanceTokenOwner;
@@ -95,6 +97,7 @@ contract DeployConfig is Script {
         l2OutputOracleProposer = stdJson.readAddress(_json, "$.l2OutputOracleProposer");
         l2OutputOracleChallenger = stdJson.readAddress(_json, "$.l2OutputOracleChallenger");
         finalizationPeriodSeconds = stdJson.readUint(_json, "$.finalizationPeriodSeconds");
+        fundDevAccounts = stdJson.readBool(_json, "$.fundDevAccounts");
         proxyAdminOwner = stdJson.readAddress(_json, "$.proxyAdminOwner");
         baseFeeVaultRecipient = stdJson.readAddress(_json, "$.baseFeeVaultRecipient");
         baseFeeVaultMinimumWithdrawalAmount = stdJson.readUint(_json, "$.baseFeeVaultMinimumWithdrawalAmount");
@@ -102,6 +105,7 @@ contract DeployConfig is Script {
         l1FeeVaultMinimumWithdrawalAmount = stdJson.readUint(_json, "$.l1FeeVaultMinimumWithdrawalAmount");
         sequencerFeeVaultRecipient = stdJson.readAddress(_json, "$.sequencerFeeVaultRecipient");
         sequencerFeeVaultMinimumWithdrawalAmount = stdJson.readUint(_json, "$.sequencerFeeVaultMinimumWithdrawalAmount");
+        sequencerFeeVaultWithdrawalNetwork = stdJson.readUint(_json, "$.sequencerFeeVaultWithdrawalNetwork");
         governanceTokenName = stdJson.readString(_json, "$.governanceTokenName");
         governanceTokenSymbol = stdJson.readString(_json, "$.governanceTokenSymbol");
         governanceTokenOwner = stdJson.readAddress(_json, "$.governanceTokenOwner");
