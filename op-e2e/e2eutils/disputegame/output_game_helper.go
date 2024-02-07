@@ -448,7 +448,13 @@ func (g *OutputGameHelper) waitForNewClaim(ctx context.Context, checkPoint int64
 
 func (g *OutputGameHelper) Attack(ctx context.Context, claimIdx int64, claim common.Hash) {
 	g.t.Logf("Attacking claim %v with value %v", claimIdx, claim)
-	tx, err := g.game.Attack(g.opts, big.NewInt(claimIdx), claim)
+
+	claimData, err := g.game.ClaimData(&bind.CallOpts{Context: ctx}, big.NewInt(claimIdx))
+	g.require.NoError(err, "Failed to get claim data")
+	pos := types.NewPositionFromGIndex(claimData.Position)
+	opts := g.makeBondedTransactOpts(ctx, pos.Attack().ToGIndex())
+
+	tx, err := g.game.Attack(opts, big.NewInt(claimIdx), claim)
 	if err != nil {
 		g.require.NoErrorf(err, "Attack transaction did not send. Game state: \n%v", g.gameData(ctx))
 	}
@@ -460,7 +466,13 @@ func (g *OutputGameHelper) Attack(ctx context.Context, claimIdx int64, claim com
 
 func (g *OutputGameHelper) Defend(ctx context.Context, claimIdx int64, claim common.Hash) {
 	g.t.Logf("Defending claim %v with value %v", claimIdx, claim)
-	tx, err := g.game.Defend(g.opts, big.NewInt(claimIdx), claim)
+
+	claimData, err := g.game.ClaimData(&bind.CallOpts{Context: ctx}, big.NewInt(claimIdx))
+	g.require.NoError(err, "Failed to get claim data")
+	pos := types.NewPositionFromGIndex(claimData.Position)
+	opts := g.makeBondedTransactOpts(ctx, pos.Defend().ToGIndex())
+
+	tx, err := g.game.Defend(opts, big.NewInt(claimIdx), claim)
 	if err != nil {
 		g.require.NoErrorf(err, "Defend transaction did not send. Game state: \n%v", g.gameData(ctx))
 	}
@@ -468,6 +480,14 @@ func (g *OutputGameHelper) Defend(ctx context.Context, claimIdx int64, claim com
 	if err != nil {
 		g.require.NoErrorf(err, "Defend transaction was not OK. Game state: \n%v", g.gameData(ctx))
 	}
+}
+
+func (g *OutputGameHelper) makeBondedTransactOpts(ctx context.Context, pos *big.Int) *bind.TransactOpts {
+	opts := *g.opts
+	bond, err := g.game.GetRequiredBond(&bind.CallOpts{Context: ctx}, pos)
+	g.require.NoError(err, "Failed to get required bond")
+	opts.Value = bond
+	return &opts
 }
 
 type ErrWithData interface {
