@@ -6,10 +6,11 @@ SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MONOREPO_DIR=$(cd "$SCRIPTS_DIR/../../" && pwd)
 
 # Grab the foundry commit hash.
-SHA=$(jq -r .foundry < "$MONOREPO_DIR"/versions.json)
+FOUNDRY_VERSION_STR=$(jq -r .foundry < "$MONOREPO_DIR"/versions.json)
 
-# Check if there is a nightly tag corresponding to the commit hash
-TAG="nightly-$SHA"
+# Extract the SHA commit hash from the version string.
+# This assumes the commit hash is always in the format "VERSION_NUMBER (COMMIT_HASH DATE)"
+SHA=$(echo "$FOUNDRY_VERSION_STR" | awk -F '[()]' '{print $2}' | awk '{print $1}')
 
 # If the foundry repository exists and a branch is checked out, we need to abort
 # any changes inside ~/.foundry/foundry-rs/foundry. This is because foundryup will
@@ -30,6 +31,9 @@ echo "Created tempdir @ $TMP_DIR"
 # Clone the foundry repo temporarily. We do this to avoid the need for a personal access
 # token to interact with the GitHub REST API, and clean it up after we're done.
 git clone https://github.com/foundry-rs/foundry.git "$TMP_DIR" && cd "$TMP_DIR"
+
+# Check if there is a nightly tag corresponding to the commit hash
+TAG="nightly-$SHA"
 
 # If the nightly tag exists, we can download the pre-built binaries rather than building
 # from source. Otherwise, clone the repository, check out the commit SHA, and build `forge`,
