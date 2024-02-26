@@ -1,9 +1,9 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "defaultBase": "develop",
   "neverConnectToCloud": true,
+  "defaultBase": "hemi",
   "affected": {
-    "defaultBase": "develop"
+    "defaultBase": "hemi"
   },
   "implicitDependencies": {
     "nx.json": "*",

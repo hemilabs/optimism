@@ -209,6 +209,7 @@ func TestEngineQueue_Finalize(t *testing.T) {
 
 	metrics := &testutils.TestDerivationMetrics{}
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	// we find the common point to initialize to by comparing the L1 origins in the L2 chain with the L1 chain
 	l1F := &testutils.MockL1Source{}
 
@@ -252,7 +253,7 @@ func TestEngineQueue_Finalize(t *testing.T) {
 	prev := &fakeAttributesQueue{}
 
 	ec := NewEngineController(eng, logger, metrics, &rollup.Config{}, sync.CLSync)
-	eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled)
+	eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled, bssc)
 	require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
 
 	require.Equal(t, refB1, ec.SafeL2Head(), "L2 reset should go back to sequence window ago: blocks with origin E and D are not safe until we reconcile, C is extra, and B1 is the end we look for")
@@ -445,6 +446,7 @@ func TestEngineQueue_ResetWhenUnsafeOriginNotCanonical(t *testing.T) {
 
 	metrics := &testutils.TestDerivationMetrics{}
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	// we find the common point to initialize to by comparing the L1 origins in the L2 chain with the L1 chain
 	l1F := &testutils.MockL1Source{}
 
@@ -488,7 +490,7 @@ func TestEngineQueue_ResetWhenUnsafeOriginNotCanonical(t *testing.T) {
 	prev := &fakeAttributesQueue{origin: refE}
 
 	ec := NewEngineController(eng, logger, metrics, &rollup.Config{}, sync.CLSync)
-	eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled)
+	eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled, bssc)
 	require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
 
 	require.Equal(t, refB1, ec.SafeL2Head(), "L2 reset should go back to sequence window ago: blocks with origin E and D are not safe until we reconcile, C is extra, and B1 is the end we look for")
@@ -772,6 +774,7 @@ func TestVerifyNewL1Origin(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			eng := &testutils.MockEngine{}
+			bssc := &testutils.MockBssClient{}
 			// we find the common point to initialize to by comparing the L1 origins in the L2 chain with the L1 chain
 			l1F := &testutils.MockL1Source{}
 
@@ -818,7 +821,7 @@ func TestVerifyNewL1Origin(t *testing.T) {
 
 			prev := &fakeAttributesQueue{origin: refE}
 			ec := NewEngineController(eng, logger, metrics, &rollup.Config{}, sync.CLSync)
-			eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled)
+			eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled, bssc)
 			require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
 
 			require.Equal(t, refB1, ec.SafeL2Head(), "L2 reset should go back to sequence window ago: blocks with origin E and D are not safe until we reconcile, C is extra, and B1 is the end we look for")
@@ -854,6 +857,7 @@ func TestVerifyNewL1Origin(t *testing.T) {
 func TestBlockBuildingRace(t *testing.T) {
 	logger := testlog.Logger(t, log.LevelInfo)
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 
 	rng := rand.New(rand.NewSource(1234))
 
@@ -890,11 +894,14 @@ func TestBlockBuildingRace(t *testing.T) {
 		SequenceNumber: 1,
 	}
 
+	id := eth.PayloadID{0xff}
+
 	l1F := &testutils.MockL1Source{}
 
 	eng.ExpectL2BlockRefByLabel(eth.Finalized, refA0, nil)
 	eng.ExpectL2BlockRefByLabel(eth.Safe, refA0, nil)
 	eng.ExpectL2BlockRefByLabel(eth.Unsafe, refA0, nil)
+
 	l1F.ExpectL1BlockRefByNumber(refA.Number, refA, nil)
 	l1F.ExpectL1BlockRefByHash(refA.Hash, refA, nil)
 	l1F.ExpectL1BlockRefByHash(refA.Hash, refA, nil)
@@ -915,10 +922,8 @@ func TestBlockBuildingRace(t *testing.T) {
 
 	prev := &fakeAttributesQueue{origin: refA, attrs: attrs, islastInSpan: true}
 	ec := NewEngineController(eng, logger, metrics, &rollup.Config{}, sync.CLSync)
-	eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled)
+	eq := NewEngineQueue(logger, cfg, eng, ec, metrics, prev, l1F, &sync.Config{}, safedb.Disabled, bssc)
 	require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
-
-	id := eth.PayloadID{0xff}
 
 	preFc := &eth.ForkchoiceState{
 		HeadBlockHash:      refA0.Hash,
@@ -942,6 +947,12 @@ func TestBlockBuildingRace(t *testing.T) {
 	eng.ExpectForkchoiceUpdate(preFc, attrs, preFcRes, nil)
 	// Don't let the payload be confirmed straight away
 	mockErr := fmt.Errorf("mock error")
+
+	plA := &eth.ExecutionPayload{
+		BlockNumber: 0,
+	}
+	eng.ExpectGetPayload(id, plA, nil) // For keystone index calculation
+
 	eng.ExpectGetPayload(id, nil, mockErr)
 	// The job will be not be cancelled, the untyped error is a temporary error
 
@@ -982,8 +993,10 @@ func TestBlockBuildingRace(t *testing.T) {
 			a1InfoTx,
 		},
 	}
-	envelope := &eth.ExecutionPayloadEnvelope{ExecutionPayload: payloadA1}
-	eng.ExpectGetPayload(id, envelope, nil)
+
+	eng.ExpectGetPayload(id, payloadA1, nil) // For keystone index calculation
+	eng.ExpectGetPayload(id, payloadA1, nil)
+
 	eng.ExpectNewPayload(payloadA1, nil, &eth.PayloadStatusV1{
 		Status:          eth.ExecutionValid,
 		LatestValidHash: &refA1.Hash,
@@ -1019,6 +1032,7 @@ func TestBlockBuildingRace(t *testing.T) {
 func TestResetLoop(t *testing.T) {
 	logger := testlog.Logger(t, log.LevelInfo)
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	l1F := &testutils.MockL1Source{}
 
 	rng := rand.New(rand.NewSource(1234))
@@ -1127,6 +1141,7 @@ func TestResetLoop(t *testing.T) {
 func TestEngineQueue_StepPopOlderUnsafe(t *testing.T) {
 	logger := testlog.Logger(t, log.LevelInfo)
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	l1F := &testutils.MockL1Source{}
 
 	rng := rand.New(rand.NewSource(1234))

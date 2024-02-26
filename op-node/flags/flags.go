@@ -13,6 +13,7 @@ import (
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
+	"github.com/hemilabs/heminetwork/api/bssapi"
 )
 
 // Flags
@@ -40,6 +41,12 @@ func prefixEnvVars(name string) []string {
 
 var (
 	/* Required Flags */
+	BSSNodeAddr = &cli.StringFlag{
+		Name:    "bss",
+		Usage:   "Address of BSS endpoint to use",
+		Value:   bssapi.DefaultURL,
+		EnvVars: prefixEnvVars("BSS_WS"),
+	}
 	L1NodeAddr = &cli.StringFlag{
 		Name:     "l1",
 		Usage:    "Address of L1 User JSON-RPC endpoint to use (eth namespace required)",
@@ -370,6 +377,9 @@ var optionalFlags = []cli.Flag{
 	SyncModeFlag,
 	RPCListenAddr,
 	RPCListenPort,
+	RollupConfig,
+	Network,
+	BSSNodeAddr,
 	L1TrustRPC,
 	L1RPCProviderKind,
 	L1RPCRateLimit,

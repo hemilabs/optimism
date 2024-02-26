@@ -3,6 +3,7 @@ package derive
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethereum/go-ethereum/core/types"
 
@@ -47,6 +48,7 @@ func PayloadToBlockRef(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) 
 		ParentHash:     payload.ParentHash,
 		Time:           uint64(payload.Timestamp),
 		L1Origin:       l1Origin,
+		StateRoot:      common.BytesToHash(payload.StateRoot[:]),
 		SequenceNumber: sequenceNumber,
 	}, nil
 }

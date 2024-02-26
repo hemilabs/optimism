@@ -79,6 +79,8 @@ type OpNode struct {
 
 	closed atomic.Bool
 
+	bssClient client.BssClient
+
 	// cancels execution prematurely, e.g. to halt. This may be nil.
 	cancel context.CancelCauseFunc
 	halted atomic.Bool
@@ -121,6 +123,9 @@ func (n *OpNode) init(ctx context.Context, cfg *Config, snapshotLog log.Logger) 
 	n.log.Info("Initializing rollup node", "version", n.appVersion)
 	if err := n.initTracer(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the trace: %w", err)
+	}
+	if err := n.initBSSConnection(ctx, cfg); err != nil {
+		return fmt.Errorf("failed to init the BSS Websocket connection: %w", err)
 	}
 	if err := n.initL1(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init L1: %w", err)
@@ -384,6 +389,7 @@ func (n *OpNode) initL2(ctx context.Context, cfg *Config, snapshotLog log.Logger
 	var sequencerConductor conductor.SequencerConductor = &conductor.NoOpConductor{}
 	if cfg.ConductorEnabled {
 		sequencerConductor = NewConductorClient(cfg, n.log, n.metrics)
+
 	}
 
 	// if plasma is not explicitly activated in the node CLI, the config + any error will be ignored.
@@ -402,12 +408,43 @@ func (n *OpNode) initL2(ctx context.Context, cfg *Config, snapshotLog log.Logger
 	} else {
 		n.safeDB = safedb.Disabled
 	}
-	n.l2Driver = driver.NewDriver(&cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source, n.beacon, n, n, n.log, snapshotLog, n.metrics, cfg.ConfigPersistence, n.safeDB, &cfg.Sync, sequencerConductor, plasmaDA)
+	n.l2Driver = driver.NewDriver(&cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source, n.beacon, n, n, n.log, snapshotLog, n.metrics, cfg.ConfigPersistence, n.safeDB, &cfg.Sync, sequencerConductor, plasmaDA, n.bssClient)
 	return nil
 }
 
-func (n *OpNode) initRPCServer(cfg *Config) error {
-	server, err := newRPCServer(&cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.safeDB, n.log, n.appVersion, n.metrics)
+func (n *OpNode) initBSSConnection(ctx context.Context, cfg *Config) error {
+	bssc, err := client.NewLiveBssClient(n.log, &cfg.BSS)
+	if err != nil {
+		log.Error("Error creating BSS Client!", "err", err)
+		return fmt.Errorf("failed to create BSS Client: %v", err)
+	}
+	n.bssClient = bssc
+	err = n.bssClient.Run(ctx)
+	if err != nil {
+		log.Error("Error starting up bssClient!", "err", err)
+		return fmt.Errorf("failed to create BSS Client: %v", err)
+	}
+	return nil
+}
+
+func (n *OpNode) initRPCSync(ctx context.Context, cfg *Config) error {
+	rpcSyncClient, rpcCfg, err := cfg.L2Sync.Setup(ctx, n.log, &cfg.Rollup)
+	if err != nil {
+		return fmt.Errorf("failed to setup L2 execution-engine RPC client for backup sync: %w", err)
+	}
+	if rpcSyncClient == nil { // if no RPC client is configured to sync from, then don't add the RPC sync client
+		return nil
+	}
+	syncClient, err := sources.NewSyncClient(n.OnUnsafeL2Payload, rpcSyncClient, n.log, n.metrics.L2SourceCache, rpcCfg)
+	if err != nil {
+		return fmt.Errorf("failed to create sync client: %w", err)
+	}
+	n.rpcSync = syncClient
+	return nil
+}
+
+func (n *OpNode) initRPCServer(ctx context.Context, cfg *Config) error {
+	server, err := newRPCServer(&cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.safeDB, n.log, n.appVersion, n.metrics, n.bssClient)
 	if err != nil {
 		return err
 	}
