@@ -2,6 +2,7 @@ package derive
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethereum/go-ethereum/core/types"
 
@@ -45,6 +46,7 @@ func PayloadToBlockRef(payload *eth.ExecutionPayload, genesis *rollup.Genesis) (
 		ParentHash:     payload.ParentHash,
 		Time:           uint64(payload.Timestamp),
 		L1Origin:       l1Origin,
+		StateRoot:      common.BytesToHash(payload.StateRoot[:]),
 		SequenceNumber: sequenceNumber,
 	}, nil
 }

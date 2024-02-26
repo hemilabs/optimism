@@ -34,15 +34,18 @@ Options can be reviewed with:
 
 To start syncing the rollup:
 
-Connect to at least one L1 RPC and L2 execution engine:
+Connect to at least one L1 RPC and L2 execution engine, and a BSS node:
 
-- L1: use any L1 node / RPC (websocket connection path may differ)
-- L2: run the Optimism fork of geth: [`op-geth`](https://github.com/ethereum-optimism/op-geth)
+- L1:  use any L1 node / RPC (websocket connection path may differ)
+- L2:  run the Optimism fork of geth: [`op-geth`](https://github.com/ethereum-optimism/op-geth)
+- BSS: run the Bitcoin Secure Sequencer daemon from hemi: [`hemi`](https://github.com/hemilabs/heminetwork)
+
 
 ```shell
 # websockets or IPC preferred for event notifications to improve sync, http RPC works with adaptive polling.
 op \
-  --l1=ws://localhost:8546 --l2=ws//localhost:9001 \
+  --l1=ws://localhost:8546 --l2=ws://localhost:9001 \
+  --bss=ws://localhost:8081/v1/ws \
   --rollup.config=./path-to-network-config/rollup.json \
   --rpc.addr=127.0.0.1 \
   --rpc.port=7000

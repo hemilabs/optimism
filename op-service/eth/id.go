@@ -27,6 +27,7 @@ type L2BlockRef struct {
 	ParentHash     common.Hash `json:"parentHash"`
 	Time           uint64      `json:"timestamp"`
 	L1Origin       BlockID     `json:"l1origin"`
+	StateRoot      common.Hash `json:"stateRoot"`
 	SequenceNumber uint64      `json:"sequenceNumber"` // distance to first block of epoch
 }
 

@@ -68,6 +68,8 @@ type OpNode struct {
 
 	closed atomic.Bool
 
+	bssClient client.BssClient
+
 	// cancels execution prematurely, e.g. to halt. This may be nil.
 	cancel context.CancelCauseFunc
 	halted atomic.Bool
@@ -110,6 +112,9 @@ func (n *OpNode) init(ctx context.Context, cfg *Config, snapshotLog log.Logger) 
 	n.log.Info("Initializing rollup node", "version", n.appVersion)
 	if err := n.initTracer(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the trace: %w", err)
+	}
+	if err := n.initBSSConnection(ctx, cfg); err != nil {
+		return fmt.Errorf("failed to init the BSS Websocket connection: %w", err)
 	}
 	if err := n.initL1(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init L1: %w", err)
@@ -308,7 +313,23 @@ func (n *OpNode) initL2(ctx context.Context, cfg *Config, snapshotLog log.Logger
 		return err
 	}
 
-	n.l2Driver = driver.NewDriver(&cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source, n, n, n.log, snapshotLog, n.metrics, cfg.ConfigPersistence, &cfg.Sync)
+	n.l2Driver = driver.NewDriver(&cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source, n, n, n.log, snapshotLog, n.metrics, cfg.ConfigPersistence, &cfg.Sync, n.bssClient)
+
+	return nil
+}
+
+func (n *OpNode) initBSSConnection(ctx context.Context, cfg *Config) error {
+	bssc, err := client.NewLiveBssClient(n.log, &cfg.BSS)
+	if err != nil {
+		log.Error("Error creating BSS Client!", "err", err)
+		return fmt.Errorf("failed to create BSS Client: %v", err)
+	}
+	n.bssClient = bssc
+	err = n.bssClient.Run(ctx)
+	if err != nil {
+		log.Error("Error starting up bssClient!", "err", err)
+		return fmt.Errorf("failed to create BSS Client: %v", err)
+	}
 
 	return nil
 }
@@ -330,7 +351,7 @@ func (n *OpNode) initRPCSync(ctx context.Context, cfg *Config) error {
 }
 
 func (n *OpNode) initRPCServer(ctx context.Context, cfg *Config) error {
-	server, err := newRPCServer(ctx, &cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.log, n.appVersion, n.metrics)
+	server, err := newRPCServer(ctx, &cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.log, n.appVersion, n.metrics, n.bssClient)
 	if err != nil {
 		return err
 	}

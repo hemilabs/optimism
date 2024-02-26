@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/hemilabs/heminetwork/api/bssapi"
+	"github.com/hemilabs/heminetwork/hemi"
 	"math/big"
 	"math/rand"
 	"testing"
@@ -302,7 +304,9 @@ func TestSequencerChaosMonkey(t *testing.T) {
 		}
 	})
 
-	seq := NewSequencer(log, cfg, engControl, attrBuilder, originSelector, metrics.NoopMetrics)
+	bssc := &testutils.MockBssClient{}
+	l2c := &testutils.MockEngine{}
+	seq := NewSequencer(log, cfg, engControl, attrBuilder, originSelector, metrics.NoopMetrics, l2c, bssc)
 	seq.timeNow = clockFn
 
 	// try to build 1000 blocks, with 5x as many planning attempts, to handle errors and clock problems
@@ -332,7 +336,8 @@ func TestSequencerChaosMonkey(t *testing.T) {
 		engControl.errTyp = derive.BlockInsertOK
 
 		// maybe make something maybe fail, or try a new L1 origin
-		switch rng.Intn(20) { // 9/20 = 45% chance to fail sequencer action (!!!)
+		failureRng := rng.Intn(20)
+		switch failureRng { // 9/20 = 45% chance to fail sequencer action (!!!)
 		case 0, 1:
 			originErr = errors.New("mock origin error")
 		case 2, 3:
@@ -347,6 +352,54 @@ func TestSequencerChaosMonkey(t *testing.T) {
 			engControl.err = mockResetErr
 		default:
 			// no error
+		}
+		_, id, _ := seq.engine.BuildingPayload()
+
+		// Check if next Sequencer action is building block, and failure RNG will not cause error before mocked calls are hit
+		if id == (eth.PayloadID{}) && failureRng >= 4 {
+			// Next Sequencer action will be building block
+			buildingBlockIndex := engControl.UnsafeL2Head().Number + 1
+			if buildingBlockIndex%hemi.KeystoneHeaderPeriod == 0 {
+				// Next block built will compute PoP Payouts
+				payoutBlockIndex := buildingBlockIndex - derive.PoPPayoutDelay
+
+				// Mock out arbitrary blocks for L2Chain to return at the heights where L2BlockRefByNumber will be called
+				payoutL1Origin := eth.BlockID{
+					Number: 5555, // Only number will be fetched
+				}
+				payoutBlock := eth.L2BlockRef{
+					Hash:       common.Hash{3},
+					Number:     payoutBlockIndex,
+					ParentHash: common.Hash{2},
+					Time:       777,
+					L1Origin:   payoutL1Origin,
+					StateRoot:  common.Hash{4},
+				}
+
+				payoutPrevKeystoneIndex := payoutBlockIndex - hemi.KeystoneHeaderPeriod
+				payoutPrevKeystoneBlock := eth.L2BlockRef{
+					Hash: common.Hash{1}, // Only care about hash of previous keystone block
+				}
+
+				// Call order: payout block, payout prev keystone block
+				l2c.ExpectL2BlockRefByNumber(payoutBlockIndex, payoutBlock, nil)
+				l2c.ExpectL2BlockRefByNumber(payoutPrevKeystoneIndex, payoutPrevKeystoneBlock, nil)
+
+				l2PayoutKeystone := hemi.L2Keystone{
+					Version:            uint8(1),
+					L1BlockNumber:      uint32(payoutBlock.L1Origin.Number),
+					L2BlockNumber:      uint32(payoutBlock.Number),
+					ParentEPHash:       payoutBlock.ParentHash[:],
+					PrevKeystoneEPHash: payoutPrevKeystoneBlock.Hash[:],
+					StateRoot:          payoutBlock.StateRoot[:],
+					EPHash:             payoutBlock.Hash[:],
+				}
+
+				// Always mock empty PoP Payout for this test
+				popPayout := make([]bssapi.PopPayout, 0)
+
+				bssc.ExpectGetPoPPayouts(l2PayoutKeystone, popPayout, nil)
+			}
 		}
 		payload, err := seq.RunNextSequencerAction(context.Background())
 		require.NoError(t, err)

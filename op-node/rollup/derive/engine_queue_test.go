@@ -206,6 +206,7 @@ func TestEngineQueue_Finalize(t *testing.T) {
 
 	metrics := &testutils.TestDerivationMetrics{}
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	// we find the common point to initialize to by comparing the L1 origins in the L2 chain with the L1 chain
 	l1F := &testutils.MockL1Source{}
 
@@ -248,7 +249,7 @@ func TestEngineQueue_Finalize(t *testing.T) {
 
 	prev := &fakeAttributesQueue{}
 
-	eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{})
+	eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{}, bssc)
 	require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
 
 	require.Equal(t, refB1, eq.SafeL2Head(), "L2 reset should go back to sequence window ago: blocks with origin E and D are not safe until we reconcile, C is extra, and B1 is the end we look for")
@@ -440,6 +441,7 @@ func TestEngineQueue_ResetWhenUnsafeOriginNotCanonical(t *testing.T) {
 
 	metrics := &testutils.TestDerivationMetrics{}
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	// we find the common point to initialize to by comparing the L1 origins in the L2 chain with the L1 chain
 	l1F := &testutils.MockL1Source{}
 
@@ -482,7 +484,7 @@ func TestEngineQueue_ResetWhenUnsafeOriginNotCanonical(t *testing.T) {
 
 	prev := &fakeAttributesQueue{origin: refE}
 
-	eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{})
+	eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{}, bssc)
 	require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
 
 	require.Equal(t, refB1, eq.SafeL2Head(), "L2 reset should go back to sequence window ago: blocks with origin E and D are not safe until we reconcile, C is extra, and B1 is the end we look for")
@@ -768,6 +770,7 @@ func TestVerifyNewL1Origin(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			eng := &testutils.MockEngine{}
+			bssc := &testutils.MockBssClient{}
 			// we find the common point to initialize to by comparing the L1 origins in the L2 chain with the L1 chain
 			l1F := &testutils.MockL1Source{}
 
@@ -813,7 +816,7 @@ func TestVerifyNewL1Origin(t *testing.T) {
 			}, nil)
 
 			prev := &fakeAttributesQueue{origin: refE}
-			eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{})
+			eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{}, bssc)
 			require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
 
 			require.Equal(t, refB1, eq.SafeL2Head(), "L2 reset should go back to sequence window ago: blocks with origin E and D are not safe until we reconcile, C is extra, and B1 is the end we look for")
@@ -851,6 +854,7 @@ func TestVerifyNewL1Origin(t *testing.T) {
 func TestBlockBuildingRace(t *testing.T) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 
 	rng := rand.New(rand.NewSource(1234))
 
@@ -887,11 +891,14 @@ func TestBlockBuildingRace(t *testing.T) {
 		SequenceNumber: 1,
 	}
 
+	id := eth.PayloadID{0xff}
+
 	l1F := &testutils.MockL1Source{}
 
 	eng.ExpectL2BlockRefByLabel(eth.Finalized, refA0, nil)
 	eng.ExpectL2BlockRefByLabel(eth.Safe, refA0, nil)
 	eng.ExpectL2BlockRefByLabel(eth.Unsafe, refA0, nil)
+
 	l1F.ExpectL1BlockRefByNumber(refA.Number, refA, nil)
 	l1F.ExpectL1BlockRefByHash(refA.Hash, refA, nil)
 	l1F.ExpectL1BlockRefByHash(refA.Hash, refA, nil)
@@ -911,10 +918,8 @@ func TestBlockBuildingRace(t *testing.T) {
 	}
 
 	prev := &fakeAttributesQueue{origin: refA, attrs: attrs, islastInSpan: true}
-	eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{})
+	eq := NewEngineQueue(logger, cfg, eng, metrics, prev, l1F, &sync.Config{}, bssc)
 	require.ErrorIs(t, eq.Reset(context.Background(), eth.L1BlockRef{}, eth.SystemConfig{}), io.EOF)
-
-	id := eth.PayloadID{0xff}
 
 	preFc := &eth.ForkchoiceState{
 		HeadBlockHash:      refA0.Hash,
@@ -938,6 +943,12 @@ func TestBlockBuildingRace(t *testing.T) {
 	eng.ExpectForkchoiceUpdate(preFc, attrs, preFcRes, nil)
 	// Don't let the payload be confirmed straight away
 	mockErr := fmt.Errorf("mock error")
+
+	plA := &eth.ExecutionPayload{
+		BlockNumber: 0,
+	}
+	eng.ExpectGetPayload(id, plA, nil) // For keystone index calculation
+
 	eng.ExpectGetPayload(id, nil, mockErr)
 	// The job will be not be cancelled, the untyped error is a temporary error
 
@@ -978,7 +989,10 @@ func TestBlockBuildingRace(t *testing.T) {
 			a1InfoTx,
 		},
 	}
+
+	eng.ExpectGetPayload(id, payloadA1, nil) // For keystone index calculation
 	eng.ExpectGetPayload(id, payloadA1, nil)
+
 	eng.ExpectNewPayload(payloadA1, &eth.PayloadStatusV1{
 		Status:          eth.ExecutionValid,
 		LatestValidHash: &refA1.Hash,
@@ -1014,6 +1028,7 @@ func TestBlockBuildingRace(t *testing.T) {
 func TestResetLoop(t *testing.T) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	l1F := &testutils.MockL1Source{}
 
 	rng := rand.New(rand.NewSource(1234))
@@ -1081,7 +1096,7 @@ func TestResetLoop(t *testing.T) {
 
 	prev := &fakeAttributesQueue{origin: refA, attrs: attrs, islastInSpan: true}
 
-	eq := NewEngineQueue(logger, cfg, eng, metrics.NoopMetrics, prev, l1F, &sync.Config{})
+	eq := NewEngineQueue(logger, cfg, eng, metrics.NoopMetrics, prev, l1F, &sync.Config{}, bssc)
 	eq.unsafeHead = refA2
 	eq.engineSyncTarget = refA2
 	eq.safeHead = refA1
@@ -1114,6 +1129,7 @@ func TestResetLoop(t *testing.T) {
 func TestEngineQueue_StepPopOlderUnsafe(t *testing.T) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	eng := &testutils.MockEngine{}
+	bssc := &testutils.MockBssClient{}
 	l1F := &testutils.MockL1Source{}
 
 	rng := rand.New(rand.NewSource(1234))
@@ -1179,7 +1195,7 @@ func TestEngineQueue_StepPopOlderUnsafe(t *testing.T) {
 
 	prev := &fakeAttributesQueue{origin: refA}
 
-	eq := NewEngineQueue(logger, cfg, eng, metrics.NoopMetrics, prev, l1F, &sync.Config{})
+	eq := NewEngineQueue(logger, cfg, eng, metrics.NoopMetrics, prev, l1F, &sync.Config{}, bssc)
 	eq.unsafeHead = refA2
 	eq.safeHead = refA0
 	eq.finalized = refA0

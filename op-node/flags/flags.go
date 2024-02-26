@@ -2,6 +2,7 @@ package flags
 
 import (
 	"fmt"
+	"github.com/hemilabs/heminetwork/api/bssapi"
 	"strings"
 	"time"
 
@@ -24,6 +25,12 @@ func prefixEnvVars(name string) []string {
 
 var (
 	/* Required Flags */
+	BSSNodeAddr = &cli.StringFlag{
+		Name:    "bss",
+		Usage:   "Address of BSS endpoint to use",
+		Value:   bssapi.DefaultURL,
+		EnvVars: prefixEnvVars("BSS_WS"),
+	}
 	L1NodeAddr = &cli.StringFlag{
 		Name:    "l1",
 		Usage:   "Address of L1 User JSON-RPC endpoint to use (eth namespace required)",
@@ -303,6 +310,7 @@ var optionalFlags = []cli.Flag{
 	RPCListenPort,
 	RollupConfig,
 	Network,
+	BSSNodeAddr,
 	L1TrustRPC,
 	L1RPCProviderKind,
 	L1RPCRateLimit,

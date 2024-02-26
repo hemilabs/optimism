@@ -44,5 +44,6 @@
   "DelayedVetoable",
   "ISemver",
   "StorageSetter",
-  "SuperchainConfig"
+  "SuperchainConfig",
+  "GovernanceToken"
 ]

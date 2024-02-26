@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"math/big"
 	"testing"
 
@@ -26,8 +27,8 @@ func setupSequencerTest(t Testing, sd *e2eutils.SetupData, log log.Logger) (*L1M
 	engine := NewL2Engine(t, log, sd.L2Cfg, sd.RollupCfg.Genesis.L1, jwtPath)
 	l2Cl, err := sources.NewEngineClient(engine.RPCClient(), log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
 	require.NoError(t, err)
-
-	sequencer := NewL2Sequencer(t, log, l1F, l2Cl, sd.RollupCfg, 0)
+	bssc := &testutils.MockBssClient{}
+	sequencer := NewL2Sequencer(t, log, l1F, l2Cl, sd.RollupCfg, 0, bssc)
 	return miner, engine, sequencer
 }
 

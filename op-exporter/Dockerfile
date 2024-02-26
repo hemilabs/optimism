@@ -1,6 +1,7 @@
 FROM golang:1.20.7-alpine3.18 as builder
 
 # build from root of repo
+COPY ./heminetwork /app/heminetwork
 COPY ./op-exporter /app
 
 WORKDIR /app/

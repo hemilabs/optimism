@@ -57,9 +57,9 @@ type L2API interface {
 	OutputV0AtBlock(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error)
 }
 
-func NewL2Verifier(t Testing, log log.Logger, l1 derive.L1Fetcher, eng L2API, cfg *rollup.Config, syncCfg *sync.Config) *L2Verifier {
+func NewL2Verifier(t Testing, log log.Logger, l1 derive.L1Fetcher, eng L2API, cfg *rollup.Config, syncCfg *sync.Config, bssClient client.BssClient) *L2Verifier {
 	metrics := &testutils.TestDerivationMetrics{}
-	pipeline := derive.NewDerivationPipeline(log, cfg, l1, eng, metrics, syncCfg)
+	pipeline := derive.NewDerivationPipeline(log, cfg, l1, eng, metrics, syncCfg, bssClient)
 	pipeline.Reset()
 
 	rollupNode := &L2Verifier{
@@ -81,7 +81,7 @@ func NewL2Verifier(t Testing, log log.Logger, l1 derive.L1Fetcher, eng L2API, cf
 	apis := []rpc.API{
 		{
 			Namespace:     "optimism",
-			Service:       node.NewNodeAPI(cfg, eng, backend, log, m),
+			Service:       node.NewNodeAPI(cfg, eng, backend, log, m, bssClient),
 			Public:        true,
 			Authenticated: false,
 		},

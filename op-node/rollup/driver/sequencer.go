@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hemilabs/heminetwork/hemi"
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -45,9 +48,12 @@ type Sequencer struct {
 	timeNow func() time.Time
 
 	nextAction time.Time
+
+	l2Chain   L2Chain
+	bssClient client.BssClient
 }
 
-func NewSequencer(log log.Logger, cfg *rollup.Config, engine derive.ResettableEngineControl, attributesBuilder derive.AttributesBuilder, l1OriginSelector L1OriginSelectorIface, metrics SequencerMetrics) *Sequencer {
+func NewSequencer(log log.Logger, cfg *rollup.Config, engine derive.ResettableEngineControl, attributesBuilder derive.AttributesBuilder, l1OriginSelector L1OriginSelectorIface, metrics SequencerMetrics, l2 L2Chain, bssClient client.BssClient) *Sequencer {
 	return &Sequencer{
 		log:              log,
 		config:           cfg,
@@ -56,7 +62,88 @@ func NewSequencer(log log.Logger, cfg *rollup.Config, engine derive.ResettableEn
 		attrBuilder:      attributesBuilder,
 		l1OriginSelector: l1OriginSelector,
 		metrics:          metrics,
+		l2Chain:          l2,
+		bssClient:        bssClient,
 	}
+}
+
+func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uint64) ([]byte, error) {
+	// If this is a keystone block, then process PoP payouts
+	if newBlockHeight%hemi.KeystoneHeaderPeriod != 0 {
+		return nil, nil
+	}
+
+	// The first L2 block eligible for PoP payout is the first keystone after the genesis block
+	// Publications of the genesis block are not rewarded because genesis block is impossible to reorg
+	// Example: given PoPPayoutDelay=100 and KeystoneHeaderPeriod=25, keystones are:
+	// {0, 25, 50, 75, 100, 125, ...} and first payout will occur in block 125 for keystone 25
+	if newBlockHeight < derive.PoPPayoutDelay+hemi.KeystoneHeaderPeriod {
+		d.log.Info("Not calculating a PoP Payout for L2 block because not enough blocks"+
+			" have occurred for PoP payouts to begin.", "l2Block", newBlockHeight)
+		return nil, nil
+	}
+
+	// TODO: Move derive.PoPPayoutDelay into hemi instead?
+	payoutBlockHeight := newBlockHeight - derive.PoPPayoutDelay
+	payoutBlockPrevKeystoneHeight := payoutBlockHeight - hemi.KeystoneHeaderPeriod
+	payoutBlock, err := d.l2Chain.L2BlockRefByNumber(ctx, payoutBlockHeight)
+	if err != nil {
+		return nil, derive.NewCriticalError(fmt.Errorf("failed to retrieve PoP payout block: %v", err))
+	}
+
+	payoutPrevKeystoneBlock, err := d.l2Chain.L2BlockRefByNumber(ctx, payoutBlockPrevKeystoneHeight)
+	if err != nil {
+		return nil, derive.NewCriticalError(fmt.Errorf("failed to retrieve PoP payout block prev keystone: %v", err))
+	}
+
+	l2PayoutKeystone := &hemi.L2Keystone{
+		Version:            uint8(1),
+		L1BlockNumber:      uint32(payoutBlock.L1Origin.Number),
+		L2BlockNumber:      uint32(payoutBlock.Number),
+		ParentEPHash:       payoutBlock.ParentHash[:],
+		PrevKeystoneEPHash: payoutPrevKeystoneBlock.Hash[:],
+		StateRoot:          payoutBlock.StateRoot[:],
+		EPHash:             payoutBlock.Hash[:],
+	}
+
+	d.log.Info("Calculating PoP Payout", "block containing payout", newBlockHeight,
+		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+
+	popPayouts, err := d.bssClient.GetPoPPayouts(ctx, *l2PayoutKeystone)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch PoP Payouts from BSS: %v", err)
+	}
+
+	if len(popPayouts) == 0 {
+		d.log.Info("No PoP Payouts for block", "block containing payout", newBlockHeight,
+			"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+		return nil, nil
+	}
+
+	d.log.Info("Received PoP Payouts for block", "payout count", len(popPayouts),
+		"block containing payout", newBlockHeight, "block paid out for", payoutBlockHeight,
+		"hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+
+	// Create PoP payout tx
+	popMinerAddresses := make([]common.Address, len(popPayouts))
+	popMinerAmounts := make([]*big.Int, len(popPayouts))
+
+	for i := 0; i < len(popPayouts); i++ {
+		popMinerAddresses[i] = popPayouts[i].MinerAddress
+		popMinerAmounts[i] = popPayouts[i].Amount
+	}
+
+	popPayoutTx, err := derive.PoPPayoutTxBytes(
+		payoutBlockHeight,
+		popMinerAddresses,
+		popMinerAmounts)
+
+	if err != nil {
+		return nil, derive.NewCriticalError(fmt.Errorf("failed to create PoPPayoutTx: %w", err))
+	}
+
+	return popPayoutTx, nil
+
 }
 
 // StartBuildingBlock initiates a block building job on top of the given L2 head, safe and finalized blocks, and using the provided l1Origin.
@@ -83,6 +170,16 @@ func (d *Sequencer) StartBuildingBlock(ctx context.Context) error {
 	attrs, err := d.attrBuilder.PreparePayloadAttributes(fetchCtx, l2Head, l1Origin.ID())
 	if err != nil {
 		return err
+	}
+
+	popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
+	if err != nil {
+		return err
+	}
+
+	// Append PoP Tx if one was created
+	if popPayoutTx != nil {
+		attrs.Transactions = append(attrs.Transactions, popPayoutTx)
 	}
 
 	// If our next L2 block timestamp is beyond the Sequencer drift threshold, then we must produce

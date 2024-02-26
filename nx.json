@@ -1,7 +1,7 @@
 {
-  "defaultBase": "develop",
+  "defaultBase": "hemi",
   "affected": {
-    "defaultBase": "develop"
+    "defaultBase": "hemi"
   },
   "implicitDependencies": {
     "nx.json": "*",

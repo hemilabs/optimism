@@ -7,13 +7,14 @@ COPY ./go.sum /app/go.sum
 
 WORKDIR /app
 
-RUN go mod download
-
+COPY ./heminetwork /app/heminetwork
 COPY ./endpoint-monitor /app/endpoint-monitor
 COPY ./op-service /app/op-service
 COPY ./op-node /app/op-node
 
 COPY ./.git /app/.git
+
+RUN go mod download
 
 WORKDIR /app/endpoint-monitor
 

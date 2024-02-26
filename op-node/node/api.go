@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"fmt"
+	"github.com/hemilabs/heminetwork/hemi"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -74,15 +76,17 @@ type nodeAPI struct {
 	dr     driverClient
 	log    log.Logger
 	m      metrics.RPCMetricer
+	bsc    client.BssClient
 }
 
-func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, log log.Logger, m metrics.RPCMetricer) *nodeAPI {
+func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, log log.Logger, m metrics.RPCMetricer, bssClient client.BssClient) *nodeAPI {
 	return &nodeAPI{
 		config: config,
 		client: l2Client,
 		dr:     dr,
 		log:    log,
 		m:      m,
+		bsc:    bssClient,
 	}
 }
 
@@ -125,4 +129,22 @@ func (n *nodeAPI) Version(ctx context.Context) (string, error) {
 	recordDur := n.m.RecordRPCServerRequest("optimism_version")
 	defer recordDur()
 	return version.Version + "-" + version.Meta, nil
+}
+
+func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) ([]hemi.L2BTCFinality, error) {
+	recordDur := n.m.RecordRPCServerRequest("optimism_btcFinalityByRecentKeystones")
+	defer recordDur()
+	return n.bsc.BtcFinalityByRecentKeystones(ctx, uint32(numRecentKeystones))
+}
+
+func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) ([]hemi.L2BTCFinality, error) {
+	recordDur := n.m.RecordRPCServerRequest("optimism_btcFinalityByKeystones")
+	defer recordDur()
+	return n.bsc.BtcFinalityByKeystones(ctx, l2Keystones)
+}
+
+func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) ([]hemi.L2BTCFinality, error) {
+	recordDur := n.m.RecordRPCServerRequest("optimism_btcFinalityByBlockHash")
+	defer recordDur()
+	return getBTCFinalityForBlockHash(ctx, blockHash, n.client, n.dr, n.bsc)
 }

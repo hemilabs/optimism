@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"math"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 )
 
 type Config struct {
+	BSS    client.BssEndpointConfig
 	L1     L1EndpointSetup
 	L2     L2EndpointSetup
 	L2Sync L2SyncEndpointSetup

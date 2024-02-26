@@ -7,14 +7,15 @@ COPY ./go.sum /app/go.sum
 
 WORKDIR /app
 
-RUN go mod download
-
 # build indexer with the shared go.mod & go.sum files
+COPY ./heminetwork /app/heminetwork
 COPY ./indexer /app/indexer
 COPY ./op-bindings /app/op-bindings
 COPY ./op-service /app/op-service
 COPY ./op-node /app/op-node
 COPY ./op-chain-ops /app/op-chain-ops
+
+RUN go mod download
 
 WORKDIR /app/indexer
 

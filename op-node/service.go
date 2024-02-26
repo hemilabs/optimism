@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	oppprof "github.com/ethereum-optimism/optimism/op-service/pprof"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/urfave/cli/v2"
@@ -56,6 +57,8 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		return nil, fmt.Errorf("failed to load p2p config: %w", err)
 	}
 
+	BssEndpoint := NewBSSEndpointConfig(ctx)
+
 	l1Endpoint := NewL1EndpointConfig(ctx)
 
 	l2Endpoint, err := NewL2EndpointConfig(ctx, log)
@@ -76,6 +79,7 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	}
 
 	cfg := &node.Config{
+		BSS:    *BssEndpoint,
 		L1:     l1Endpoint,
 		L2:     l2Endpoint,
 		L2Sync: l2SyncEndpoint,
@@ -119,6 +123,12 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func NewBSSEndpointConfig(ctx *cli.Context) *client.BssEndpointConfig {
+	return &client.BssEndpointConfig{
+		BSSURL: ctx.String(flags.BSSNodeAddr.Name),
+	}
 }
 
 func NewL1EndpointConfig(ctx *cli.Context) *node.L1EndpointConfig {

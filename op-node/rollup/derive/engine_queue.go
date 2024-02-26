@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hemilabs/heminetwork/hemi"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"io"
 	"time"
 
@@ -95,6 +97,17 @@ type FinalityData struct {
 	L1Block eth.BlockID
 }
 
+// TODO: Remove unused fields. Only unsafeL2 is used currently - may want to keep some fields for future
+// notifications to BSS about additional chain state though.
+type bssNotification struct {
+	l1Origin             eth.L1BlockRef
+	finalizedL1          eth.L1BlockRef
+	finalizedL2          eth.L2BlockRef
+	safeL2               eth.L2BlockRef
+	unsafeL2             eth.L2BlockRef
+	unsafeL2PrevKeystone eth.L2BlockRef
+}
+
 // EngineQueue queues up payload attributes to consolidate or process with the provided Engine
 type EngineQueue struct {
 	log log.Logger
@@ -145,13 +158,17 @@ type EngineQueue struct {
 	l1Fetcher L1Fetcher
 
 	syncCfg *sync.Config
+
+	bssClient client.BssClient
+
+	bssNotifierCh chan *bssNotification
 }
 
 var _ EngineControl = (*EngineQueue)(nil)
 
 // NewEngineQueue creates a new EngineQueue, which should be Reset(origin) before use.
-func NewEngineQueue(log log.Logger, cfg *rollup.Config, engine Engine, metrics Metrics, prev NextAttributesProvider, l1Fetcher L1Fetcher, syncCfg *sync.Config) *EngineQueue {
-	return &EngineQueue{
+func NewEngineQueue(log log.Logger, cfg *rollup.Config, engine Engine, metrics Metrics, prev NextAttributesProvider, l1Fetcher L1Fetcher, syncCfg *sync.Config, bssClient client.BssClient) *EngineQueue {
+	eq := &EngineQueue{
 		log:            log,
 		cfg:            cfg,
 		engine:         engine,
@@ -161,7 +178,14 @@ func NewEngineQueue(log log.Logger, cfg *rollup.Config, engine Engine, metrics M
 		prev:           prev,
 		l1Fetcher:      l1Fetcher,
 		syncCfg:        syncCfg,
+		bssClient:      bssClient,
+		bssNotifierCh:  make(chan *bssNotification, 10),
 	}
+
+	// XXX see if there is a better place to start this goroutine.
+	go eq.bssNotifier()
+
+	return eq
 }
 
 // Origin identifies the L1 chain (incl.) that included and/or produced all the safe L2 blocks.
@@ -251,6 +275,58 @@ func (eq *EngineQueue) EngineSyncTarget() eth.L2BlockRef {
 // Determine if the engine is syncing to the target block
 func (eq *EngineQueue) isEngineSyncing() bool {
 	return eq.unsafeHead.Hash != eq.engineSyncTarget.Hash
+}
+
+func (eq *EngineQueue) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
+	prevKeystoneHash := [common.HashLength]byte{}
+
+	if &bn.unsafeL2PrevKeystone != nil {
+		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
+	}
+
+	l2Keystone := &hemi.L2Keystone{
+		Version:            0x01,
+		L1BlockNumber:      uint32(bn.unsafeL2.L1Origin.Number),
+		L2BlockNumber:      uint32(bn.unsafeL2.Number),
+		ParentEPHash:       bn.unsafeL2.ParentHash[:],
+		PrevKeystoneEPHash: prevKeystoneHash[:],
+		StateRoot:          bn.unsafeL2.StateRoot[:],
+		EPHash:             bn.unsafeL2.Hash[:],
+	}
+
+	eq.log.Info("Sending notification to BSS of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
+		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
+		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
+		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
+		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
+
+	err := eq.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (eq *EngineQueue) bssNotifier() {
+	ctx := context.Background()
+	for {
+		bn := <-eq.bssNotifierCh
+
+		// Keystone based on L2 block number
+		if bn.unsafeL2.Number == 0 || bn.unsafeL2.Number%hemi.KeystoneHeaderPeriod != 0 {
+			continue
+		}
+
+		eq.log.Info(fmt.Sprintf("Sending BSS keystone notification for L2 block %v with L1 origin %v",
+			bn.unsafeL2.Number, bn.unsafeL2.L1Origin.Number))
+
+		if err := eq.notifyBSSKeystone(ctx, bn); err != nil {
+			eq.log.Warn("Failed to notify BSS of keystone", "err", err)
+			continue
+		}
+		eq.log.Info("BSS notified of keystone")
+	}
 }
 
 func (eq *EngineQueue) Step(ctx context.Context) error {
@@ -718,6 +794,35 @@ func (eq *EngineQueue) ConfirmPayload(ctx context.Context) (out *eth.ExecutionPa
 		SafeBlockHash:      eq.safeHead.Hash,
 		FinalizedBlockHash: eq.finalized.Hash,
 	}
+
+	// Do this work before calling Confirm Payload, so building fails if previous keystone is not found
+	newPayload, err := eq.engine.GetPayload(ctx, eq.buildingID)
+	if err != nil {
+		return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to fetch payload for buildingID %d", eq.buildingID))
+	}
+
+	prevKeystoneHeight := int64(newPayload.BlockNumber-(newPayload.BlockNumber%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
+	if newPayload.BlockNumber%hemi.KeystoneHeaderPeriod != 0 {
+		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
+	}
+
+	eq.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", newPayload.BlockNumber, prevKeystoneHeight))
+
+	var prevKeystoneRef *eth.L2BlockRef = nil
+
+	if prevKeystoneHeight > 0 {
+		prevKeystone, err := eq.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+		if err != nil {
+			return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+		}
+
+		ref, err := PayloadToBlockRef(prevKeystone, &eq.cfg.Genesis)
+		if err != nil {
+			return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+		}
+		prevKeystoneRef = &ref
+	}
+
 	// Update the safe head if the payload is built with the last attributes in the batch.
 	updateSafe := eq.buildingSafe && eq.safeAttributes != nil && eq.safeAttributes.isLastInSpan
 	payload, errTyp, err := ConfirmPayload(ctx, eq.log, eq.engine, fc, eq.buildingID, updateSafe)
@@ -743,6 +848,27 @@ func (eq *EngineQueue) ConfirmPayload(ctx context.Context) (out *eth.ExecutionPa
 		}
 	}
 	eq.resetBuildingState()
+
+	eq.log.Info("Confirmed new payload, sending notification to BSS channel", "payload number", ref.Number)
+
+	bn := &bssNotification{
+		l1Origin:    eq.origin,
+		finalizedL1: eq.FinalizedL1(),
+		finalizedL2: eq.Finalized(),
+		safeL2:      eq.SafeL2Head(),
+		unsafeL2:    eq.UnsafeL2Head(),
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
+	select {
+	case eq.bssNotifierCh <- bn:
+	default:
+		eq.log.Warn("BSS notifier channel full, dropping event...")
+	}
+
 	return payload, BlockInsertOK, nil
 }
 

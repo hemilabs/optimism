@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -17,7 +18,8 @@ func setupVerifier(t Testing, sd *e2eutils.SetupData, log log.Logger, l1F derive
 	jwtPath := e2eutils.WriteDefaultJWT(t)
 	engine := NewL2Engine(t, log, sd.L2Cfg, sd.RollupCfg.Genesis.L1, jwtPath)
 	engCl := engine.EngineClient(t, sd.RollupCfg)
-	verifier := NewL2Verifier(t, log, l1F, engCl, sd.RollupCfg, syncCfg)
+	bssc := &testutils.MockBssClient{}
+	verifier := NewL2Verifier(t, log, l1F, engCl, sd.RollupCfg, syncCfg, bssc)
 	return engine, verifier
 }
 

@@ -621,6 +621,8 @@ abstract contract Deployer is Script {
             return "sepolia";
         } else if (chainid == Chains.OPSepolia) {
             return "optimism-sepolia";
+        } else if (chainid == Chains.HEMISepolia) {
+            return "hemi-sepolia";
         } else {
             return vm.toString(chainid);
         }
