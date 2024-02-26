@@ -1,0 +1,74 @@
+# Hemi Optimism Fork
+
+This branch contains the Optimism code with changes for Hemi Network.
+
+## Updating
+
+In order to resync against upstream, the following can be performed:
+```
+git checkout develop
+git fetch https://github.com/ethereum-optimism/optimism develop
+git rebase FETCH_HEAD
+
+git checkout master
+git fetch https://github.com/ethereum-optimism/optimism master
+git rebase FETCH_HEAD
+
+git checkout hemi
+git rebase develop
+
+git push origin hemi develop master
+```
+
+Run submodule update if upstream changed
+```
+git submodule update
+```
+
+## hemi
+
+The hemi directory is a subtree of the hemilabs/heminetwork repository.
+
+This was added via:
+```
+git subtree add --squash --prefix=heminetwork git@github.com:hemilabs/heminetwork main
+```
+
+And can be updated via:
+```
+git subtree pull --squash --prefix=heminetwork git@github.com:hemilabs/heminetwork main
+```
+
+Every time `heminetwork` is updated run the subtree pull command and `go mod tidy`
+in the optimism directory and then push the changes.
+
+The typical workflow is:
+```
+git checkout hemi
+git pull --ff --rebase
+git submodule update
+go mod tidy
+```
+
+Commit and push go mod tidy (and/or submodule update) if needed.
+```
+git commit -am "go mod tidy"
+git push
+```
+
+Merge upstream hemi:
+```
+git subtree pull --squash --prefix=heminetwork git@github.com:hemilabs/heminetwork main
+git submodule update
+go mod tidy
+```
+
+Commit go mod tidy and/or submodule update if needed.
+```
+git commit -am "go mod tidy"
+```
+
+Push to origin:
+```
+git push
+```
