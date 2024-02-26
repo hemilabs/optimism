@@ -1,13 +1,16 @@
-package sequencer
+package actions
 
 import (
 	"math/big"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-e2e/config"
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 
-	"github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -15,22 +18,55 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
+	plasma "github.com/ethereum-optimism/optimism/op-plasma"
+	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
+func EngineWithP2P() EngineOption {
+	return func(ethCfg *ethconfig.Config, nodeCfg *node.Config) error {
+		p2pKey, err := crypto.GenerateKey()
+		if err != nil {
+			return err
+		}
+		nodeCfg.P2P = p2p.Config{
+			MaxPeers:    100,
+			NoDiscovery: true,
+			ListenAddr:  "127.0.0.1:0",
+			PrivateKey:  p2pKey,
+		}
+		return nil
+	}
+}
+
+func setupSequencerTest(t Testing, sd *e2eutils.SetupData, log log.Logger) (*L1Miner, *L2Engine, *L2Sequencer) {
+	jwtPath := e2eutils.WriteDefaultJWT(t)
+
+	miner := NewL1Miner(t, log, sd.L1Cfg)
+
+	l1F, err := sources.NewL1Client(miner.RPCClient(), log, nil, sources.L1ClientDefaultConfig(sd.RollupCfg, false, sources.RPCKindStandard))
+	require.NoError(t, err)
+	engine := NewL2Engine(t, log, sd.L2Cfg, sd.RollupCfg.Genesis.L1, jwtPath, EngineWithP2P())
+	l2Cl, err := sources.NewEngineClient(engine.RPCClient(), log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
+	require.NoError(t, err)
+
+	bssc := &testutils.MockBssClient{}
+	sequencer := NewL2Sequencer(t, log, l1F, miner.BlobStore(), plasma.Disabled, l2Cl, sd.RollupCfg, 0, bssc)
+	return miner, engine, sequencer
+}
+
 func TestL2Sequencer_SequencerDrift(gt *testing.T) {
-	t := helpers.NewDefaultTesting(gt)
+	t := NewDefaultTesting(gt)
 	p := &e2eutils.TestParams{
 		MaxSequencerDrift:   20, // larger than L1 block time we simulate in this test (12)
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
-	sd := e2eutils.Setup(t, dp, helpers.DefaultAlloc)
+	sd := e2eutils.Setup(t, dp, defaultAlloc)
 	log := testlog.Logger(t, log.LevelDebug)
-	miner, engine, sequencer := helpers.SetupSequencerTest(t, sd, log)
+	miner, engine, sequencer := setupSequencerTest(t, sd, log)
 	miner.ActL1SetFeeRecipient(common.Address{'A'})
 
 	sequencer.ActL2PipelineFull(t)
@@ -44,7 +80,7 @@ func TestL2Sequencer_SequencerDrift(gt *testing.T) {
 			ChainID:   sd.L2Cfg.Config.ChainID,
 			Nonce:     n,
 			GasTipCap: big.NewInt(2 * params.GWei),
-			GasFeeCap: new(big.Int).Add(miner.L1Chain().CurrentBlock().BaseFee, big.NewInt(2*params.GWei)),
+			GasFeeCap: new(big.Int).Add(miner.l1Chain.CurrentBlock().BaseFee, big.NewInt(2*params.GWei)),
 			Gas:       params.TxGas,
 			To:        &dp.Addresses.Bob,
 			Value:     e2eutils.Ether(2),
@@ -62,7 +98,7 @@ func TestL2Sequencer_SequencerDrift(gt *testing.T) {
 	miner.ActL1StartBlock(12)(t)
 	miner.ActL1EndBlock(t)
 	sequencer.ActL1HeadSignal(t)
-	origin := miner.L1Chain().CurrentBlock()
+	origin := miner.l1Chain.CurrentBlock()
 
 	// L2 makes blocks to catch up
 	for sequencer.SyncStatus().UnsafeL2.Time+sd.RollupCfg.BlockTime < origin.Time {
@@ -78,7 +114,7 @@ func TestL2Sequencer_SequencerDrift(gt *testing.T) {
 	sequencer.ActL1HeadSignal(t)
 
 	// Make blocks up till the sequencer drift is about to surpass, but keep the old L1 origin
-	for sequencer.SyncStatus().UnsafeL2.Time+sd.RollupCfg.BlockTime <= origin.Time+sd.ChainSpec.MaxSequencerDrift(origin.Time) {
+	for sequencer.SyncStatus().UnsafeL2.Time+sd.RollupCfg.BlockTime <= origin.Time+sd.RollupCfg.MaxSequencerDrift {
 		sequencer.ActL2KeepL1Origin(t)
 		makeL2BlockWithAliceTx()
 		require.Equal(t, uint64(1), sequencer.SyncStatus().UnsafeL2.L1Origin.Number, "expected to keep old L1 origin")
@@ -87,18 +123,18 @@ func TestL2Sequencer_SequencerDrift(gt *testing.T) {
 	// We passed the sequencer drift: we can still keep the old origin, but can't include any txs
 	sequencer.ActL2KeepL1Origin(t)
 	sequencer.ActL2StartBlock(t)
-	require.True(t, engine.EngineApi.ForcedEmpty(), "engine should not be allowed to include anything after sequencer drift is surpassed")
+	require.True(t, engine.engineApi.ForcedEmpty(), "engine should not be allowed to include anything after sequencer drift is surpassed")
 }
 
 // TestL2Sequencer_SequencerOnlyReorg regression-tests a Goerli halt where the sequencer
 // would build an unsafe L2 block with a L1 origin that then gets reorged out,
 // while the verifier-codepath only ever sees the valid post-reorg L1 chain.
 func TestL2Sequencer_SequencerOnlyReorg(gt *testing.T) {
-	t := helpers.NewDefaultTesting(gt)
-	dp := e2eutils.MakeDeployParams(t, helpers.DefaultRollupTestParams())
-	sd := e2eutils.Setup(t, dp, helpers.DefaultAlloc)
+	t := NewDefaultTesting(gt)
+	dp := e2eutils.MakeDeployParams(t, defaultRollupTestParams)
+	sd := e2eutils.Setup(t, dp, defaultAlloc)
 	log := testlog.Logger(t, log.LevelDebug)
-	miner, _, sequencer := helpers.SetupSequencerTest(t, sd, log)
+	miner, _, sequencer := setupSequencerTest(t, sd, log)
 
 	// Sequencer at first only recognizes the genesis as safe.
 	// The rest of the L1 chain will be incorporated as L1 origins into unsafe L2 blocks.
@@ -112,15 +148,9 @@ func TestL2Sequencer_SequencerOnlyReorg(gt *testing.T) {
 	sequencer.ActL1HeadSignal(t)
 	sequencer.ActBuildToL1HeadUnsafe(t)
 
-	// If sequencer does not pick up on pre-reorg chain in derivation,
-	// then derivation won't see the difference in L1 chains,
-	// and not trigger a reorg if we traverse from 0 to the new chain later on
-	// (but would once it gets to consolidate unsafe head later).
-	sequencer.ActL2PipelineFull(t)
 	status := sequencer.SyncStatus()
 	require.Zero(t, status.SafeL2.L1Origin.Number, "no safe head progress")
 	require.Equal(t, status.HeadL1.Hash, status.UnsafeL2.L1Origin.Hash, "have head L1 origin")
-	require.NotZero(t, status.UnsafeL2.L1Origin.Number, "have head L1 origin")
 	// reorg out block with coinbase A, and make a block with coinbase B
 	miner.ActL1RewindToParent(t)
 	miner.ActL1SetFeeRecipient(common.Address{'B'})
@@ -136,11 +166,6 @@ func TestL2Sequencer_SequencerOnlyReorg(gt *testing.T) {
 	// No batches are submitted yet however,
 	// so it'll keep the L2 block with the old L1 origin, since no conflict is detected.
 	sequencer.ActL1HeadSignal(t)
-
-	postReorgStatus := sequencer.SyncStatus()
-	require.Zero(t, postReorgStatus.SafeL2.L1Origin.Number, "no safe head progress")
-	require.NotEqual(t, postReorgStatus.HeadL1.Hash, postReorgStatus.UnsafeL2.L1Origin.Hash, "no longer have head L1 origin")
-
 	sequencer.ActL2PipelineFull(t)
 	// Verifier should detect the inconsistency of the L1 origin and reset the pipeline to follow the reorg
 	newStatus := sequencer.SyncStatus()
@@ -151,6 +176,9 @@ func TestL2Sequencer_SequencerOnlyReorg(gt *testing.T) {
 	// the block N+1 cannot build on the old N which still refers to the now orphaned L1 origin
 	require.Equal(t, status.UnsafeL2.L1Origin.Number, newStatus.HeadL1.Number-1, "seeing N+1 to attempt to build on N")
 	require.NotEqual(t, status.UnsafeL2.L1Origin.Hash, newStatus.HeadL1.ParentHash, "but N+1 cannot fit on N")
+
+	// After hitting a reset error, it resets derivation, and drops the old L1 chain
+	sequencer.ActL2PipelineFull(t)
 
 	// Can build new L2 blocks with good L1 origin
 	sequencer.ActBuildToL1HeadUnsafe(t)

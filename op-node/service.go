@@ -1,31 +1,32 @@
 package opnode
 
 import (
-	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
+	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
+	plasma "github.com/ethereum-optimism/optimism/op-plasma"
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/ethereum-optimism/optimism/op-service/oppprof"
+	oppprof "github.com/ethereum-optimism/optimism/op-service/pprof"
+	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/urfave/cli/v2"
 
-	altda "github.com/ethereum-optimism/optimism/op-alt-da"
-	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	"github.com/ethereum-optimism/optimism/op-node/flags"
 	"github.com/ethereum-optimism/optimism/op-node/node"
 	p2pcli "github.com/ethereum-optimism/optimism/op-node/p2p/cli"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	opflags "github.com/ethereum-optimism/optimism/op-service/flags"
-	"github.com/ethereum-optimism/optimism/op-service/oppprof"
-	"github.com/ethereum-optimism/optimism/op-service/rpc"
-	"github.com/ethereum-optimism/optimism/op-service/sources"
 )
 
 // NewConfig creates a Config from the provided flags or environment variables.
@@ -48,7 +49,7 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 
 	driverConfig := NewDriverConfig(ctx)
 
-	p2pSignerSetup, err := p2pcli.LoadSignerSetup(ctx, log)
+	p2pSignerSetup, err := p2pcli.LoadSignerSetup(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load p2p signer: %w", err)
 	}
@@ -57,6 +58,8 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load p2p config: %w", err)
 	}
+
+	BssEndpoint := NewBSSEndpointConfig(ctx)
 
 	l1Endpoint := NewL1EndpointConfig(ctx)
 
@@ -75,19 +78,13 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		haltOption = ""
 	}
 
-	if ctx.IsSet(flags.HeartbeatEnabledFlag.Name) ||
-		ctx.IsSet(flags.HeartbeatMonikerFlag.Name) ||
-		ctx.IsSet(flags.HeartbeatURLFlag.Name) {
-		log.Warn("Heartbeat functionality is not supported anymore, CLI flags will be removed in following release.")
-	}
-	conductorRPCEndpoint := ctx.String(flags.ConductorRpcFlag.Name)
 	cfg := &node.Config{
-		L1:            l1Endpoint,
-		L2:            l2Endpoint,
-		Rollup:        *rollupConfig,
-		Driver:        *driverConfig,
-		Beacon:        NewBeaconEndpointConfig(ctx),
-		InteropConfig: NewSupervisorEndpointConfig(ctx),
+		BSS:    *BssEndpoint,
+		L1:     l1Endpoint,
+		L2:     l2Endpoint,
+		Rollup: *rollupConfig,
+		Driver: *driverConfig,
+		Beacon: NewBeaconEndpointConfig(ctx),
 		RPC: node.RPCConfig{
 			ListenAddr:  ctx.String(flags.RPCListenAddr.Name),
 			ListenPort:  ctx.Int(flags.RPCListenPort.Name),
@@ -103,20 +100,22 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		P2PSigner:                   p2pSignerSetup,
 		L1EpochPollInterval:         ctx.Duration(flags.L1EpochPollIntervalFlag.Name),
 		RuntimeConfigReloadInterval: ctx.Duration(flags.RuntimeConfigReloadIntervalFlag.Name),
-		ConfigPersistence:           configPersistence,
-		SafeDBPath:                  ctx.String(flags.SafeDBPath.Name),
-		Sync:                        *syncConfig,
-		RollupHalt:                  haltOption,
-
-		ConductorEnabled: ctx.Bool(flags.ConductorEnabledFlag.Name),
-		ConductorRpc: func(context.Context) (string, error) {
-			return conductorRPCEndpoint, nil
+		Heartbeat: node.HeartbeatConfig{
+			Enabled: ctx.Bool(flags.HeartbeatEnabledFlag.Name),
+			Moniker: ctx.String(flags.HeartbeatMonikerFlag.Name),
+			URL:     ctx.String(flags.HeartbeatURLFlag.Name),
 		},
+		ConfigPersistence: configPersistence,
+		SafeDBPath:        ctx.String(flags.SafeDBPath.Name),
+		Sync:              *syncConfig,
+		RollupHalt:        haltOption,
+		RethDBPath:        ctx.String(flags.L1RethDBPath.Name),
+
+		ConductorEnabled:    ctx.Bool(flags.ConductorEnabledFlag.Name),
+		ConductorRpc:        ctx.String(flags.ConductorRpcFlag.Name),
 		ConductorRpcTimeout: ctx.Duration(flags.ConductorRpcTimeoutFlag.Name),
 
-		AltDA: altda.ReadCLIConfig(ctx),
-
-		IgnoreMissingPectraBlobSchedule: ctx.Bool(flags.IgnoreMissingPectraBlobSchedule.Name),
+		Plasma: plasma.ReadCLIConfig(ctx),
 	}
 
 	if err := cfg.LoadPersisted(log); err != nil {
@@ -134,22 +133,19 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	return cfg, nil
 }
 
-func NewSupervisorEndpointConfig(ctx *cli.Context) *interop.Config {
-	return &interop.Config{
-		SupervisorAddr:   ctx.String(flags.InteropSupervisor.Name),
-		RPCAddr:          ctx.String(flags.InteropRPCAddr.Name),
-		RPCPort:          ctx.Int(flags.InteropRPCPort.Name),
-		RPCJwtSecretPath: ctx.String(flags.InteropJWTSecret.Name),
-	}
-}
-
 func NewBeaconEndpointConfig(ctx *cli.Context) node.L1BeaconEndpointSetup {
 	return &node.L1BeaconEndpointConfig{
 		BeaconAddr:             ctx.String(flags.BeaconAddr.Name),
 		BeaconHeader:           ctx.String(flags.BeaconHeader.Name),
-		BeaconFallbackAddrs:    ctx.StringSlice(flags.BeaconFallbackAddrs.Name),
+		BeaconArchiverAddr:     ctx.String(flags.BeaconArchiverAddr.Name),
 		BeaconCheckIgnore:      ctx.Bool(flags.BeaconCheckIgnore.Name),
 		BeaconFetchAllSidecars: ctx.Bool(flags.BeaconFetchAllSidecars.Name),
+	}
+}
+
+func NewBSSEndpointConfig(ctx *cli.Context) *client.BssEndpointConfig {
+	return &client.BssEndpointConfig{
+		BSSURL: ctx.String(flags.BSSNodeAddr.Name),
 	}
 }
 
@@ -162,22 +158,36 @@ func NewL1EndpointConfig(ctx *cli.Context) *node.L1EndpointConfig {
 		BatchSize:        ctx.Int(flags.L1RPCMaxBatchSize.Name),
 		HttpPollInterval: ctx.Duration(flags.L1HTTPPollInterval.Name),
 		MaxConcurrency:   ctx.Int(flags.L1RPCMaxConcurrency.Name),
-		CacheSize:        ctx.Uint(flags.L1CacheSize.Name),
 	}
 }
 
-func NewL2EndpointConfig(ctx *cli.Context, logger log.Logger) (*node.L2EndpointConfig, error) {
+func NewL2EndpointConfig(ctx *cli.Context, log log.Logger) (*node.L2EndpointConfig, error) {
 	l2Addr := ctx.String(flags.L2EngineAddr.Name)
 	fileName := ctx.String(flags.L2EngineJWTSecret.Name)
-	secret, err := rpc.ObtainJWTSecret(logger, fileName, true)
-	if err != nil {
-		return nil, err
+	var secret [32]byte
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return nil, fmt.Errorf("file-name of jwt secret is empty")
 	}
-	l2RpcTimeout := ctx.Duration(flags.L2EngineRpcTimeout.Name)
+	if data, err := os.ReadFile(fileName); err == nil {
+		jwtSecret := common.FromHex(strings.TrimSpace(string(data)))
+		if len(jwtSecret) != 32 {
+			return nil, fmt.Errorf("invalid jwt secret in path %s, not 32 hex-formatted bytes", fileName)
+		}
+		copy(secret[:], jwtSecret)
+	} else {
+		log.Warn("Failed to read JWT secret from file, generating a new one now. Configure L2 geth with --authrpc.jwt-secret=" + fmt.Sprintf("%q", fileName))
+		if _, err := io.ReadFull(rand.Reader, secret[:]); err != nil {
+			return nil, fmt.Errorf("failed to generate jwt secret: %w", err)
+		}
+		if err := os.WriteFile(fileName, []byte(hexutil.Encode(secret[:])), 0o600); err != nil {
+			return nil, err
+		}
+	}
+
 	return &node.L2EndpointConfig{
-		L2EngineAddr:        l2Addr,
-		L2EngineJWTSecret:   secret,
-		L2EngineCallTimeout: l2RpcTimeout,
+		L2EngineAddr:      l2Addr,
+		L2EngineJWTSecret: secret,
 	}, nil
 }
 
@@ -196,7 +206,6 @@ func NewDriverConfig(ctx *cli.Context) *driver.Config {
 		SequencerEnabled:    ctx.Bool(flags.SequencerEnabledFlag.Name),
 		SequencerStopped:    ctx.Bool(flags.SequencerStoppedFlag.Name),
 		SequencerMaxSafeLag: ctx.Uint64(flags.SequencerMaxSafeLagFlag.Name),
-		RecoverMode:         ctx.Bool(flags.SequencerRecoverMode.Name),
 	}
 }
 
@@ -236,9 +245,7 @@ Conflicting configuration is deprecated, and will stop the op-node from starting
 	defer file.Close()
 
 	var rollupConfig rollup.Config
-	dec := json.NewDecoder(file)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&rollupConfig); err != nil {
+	if err := json.NewDecoder(file).Decode(&rollupConfig); err != nil {
 		return nil, fmt.Errorf("failed to decode rollup config: %w", err)
 	}
 	return &rollupConfig, nil
@@ -257,27 +264,25 @@ func applyOverrides(ctx *cli.Context, rollupConfig *rollup.Config) {
 		ecotone := ctx.Uint64(opflags.EcotoneOverrideFlagName)
 		rollupConfig.EcotoneTime = &ecotone
 	}
-	if ctx.IsSet(opflags.FjordOverrideFlagName) {
-		fjord := ctx.Uint64(opflags.FjordOverrideFlagName)
-		rollupConfig.FjordTime = &fjord
+}
+
+func NewSnapshotLogger(ctx *cli.Context) (log.Logger, error) {
+	snapshotFile := ctx.String(flags.SnapshotLog.Name)
+	if snapshotFile == "" {
+		return log.NewLogger(log.DiscardHandler()), nil
 	}
-	if ctx.IsSet(opflags.GraniteOverrideFlagName) {
-		granite := ctx.Uint64(opflags.GraniteOverrideFlagName)
-		rollupConfig.GraniteTime = &granite
+
+	sf, err := os.OpenFile(snapshotFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
 	}
-	if ctx.IsSet(opflags.HoloceneOverrideFlagName) {
-		holocene := ctx.Uint64(opflags.HoloceneOverrideFlagName)
-		rollupConfig.HoloceneTime = &holocene
-	}
-	if ctx.IsSet(opflags.PectraBlobScheduleOverrideFlagName) {
-		pectrablobschedule := ctx.Uint64(opflags.PectraBlobScheduleOverrideFlagName)
-		rollupConfig.PectraBlobScheduleTime = &pectrablobschedule
-	}
+	handler := log.JSONHandler(sf)
+	return log.NewLogger(handler), nil
 }
 
 func NewSyncConfig(ctx *cli.Context, log log.Logger) (*sync.Config, error) {
 	if ctx.IsSet(flags.L2EngineSyncEnabled.Name) && ctx.IsSet(flags.SyncModeFlag.Name) {
-		return nil, errors.New("cannot set both --l2.engine-sync and --syncmode at the same time")
+		return nil, errors.New("cannot set both --l2.engine-sync and --syncmode at the same time.")
 	} else if ctx.IsSet(flags.L2EngineSyncEnabled.Name) {
 		log.Error("l2.engine-sync is deprecated and will be removed in a future release. Use --syncmode=execution-layer instead.")
 	}
@@ -285,12 +290,9 @@ func NewSyncConfig(ctx *cli.Context, log log.Logger) (*sync.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	engineKind := engine.Kind(ctx.String(flags.L2EngineKind.Name))
 	cfg := &sync.Config{
-		SyncMode:                       mode,
-		SkipSyncStartCheck:             ctx.Bool(flags.SkipSyncStartCheck.Name),
-		SupportsPostFinalizationELSync: engineKind.SupportsPostFinalizationELSync(),
+		SyncMode:           mode,
+		SkipSyncStartCheck: ctx.Bool(flags.SkipSyncStartCheck.Name),
 	}
 	if ctx.Bool(flags.L2EngineSyncEnabled.Name) {
 		cfg.SyncMode = sync.ELSync

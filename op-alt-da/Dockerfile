@@ -1,9 +1,32 @@
-ARG OP_STACK_GO_BUILDER=us-docker.pkg.dev/oplabs-tools-artifacts/images/op-stack-go:latest
-FROM $OP_STACK_GO_BUILDER AS builder
-# See "make golang-docker" and /ops/docker/op-stack-go
+FROM --platform=$BUILDPLATFORM golang:1.21.1-alpine3.18 as builder
 
-FROM alpine:3.20
+ARG VERSION=v0.0.0
 
-COPY --from=builder /usr/local/bin/da-server /usr/local/bin/da-server
+RUN apk add --no-cache make gcc musl-dev linux-headers git jq bash
 
-CMD ["da-server"]
+COPY ./go.mod /app/go.mod
+COPY ./go.sum /app/go.sum
+
+WORKDIR /app
+
+# build op-node with the shared go.mod & go.sum files
+COPY ./heminetwork /app/heminetwork
+COPY ./op-node /app/op-node
+COPY ./op-chain-ops /app/op-chain-ops
+COPY ./op-service /app/op-service
+COPY ./op-bindings /app/op-bindings
+COPY ./.git /app/.git
+
+RUN go mod download
+
+WORKDIR /app/op-node
+
+ARG TARGETOS TARGETARCH
+
+RUN make op-node VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH
+
+FROM alpine:3.18
+
+COPY --from=builder /usr/local/bin/op-node /usr/local/bin/op-node
+
+CMD ["op-node"]
