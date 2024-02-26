@@ -1,134 +1,141 @@
-<div align="center">
-  <br />
-  <br />
-  <a href="https://optimism.io"><img alt="Optimism" src="https://raw.githubusercontent.com/ethereum-optimism/brand-kit/main/assets/svg/OPTIMISM-R.svg" width=600></a>
-  <br />
-  <h3><a href="https://optimism.io">Optimism</a> is Ethereum, scaled.</h3>
-  <br />
-</div>
+# Hemi Network
 
-**Table of Contents**
+<details>
+  <summary>Table of Contents</summary>
 
-<!--TOC-->
+* [What is the Hemi Network?](#what-is-the-hemi-network)
+  * [Services](#services)
+  * [License](#license)
+* [Getting Started](#getting-started)
+  * [Building from Source](#building-from-source)
+  * [Downloading Binaries from Releases](#downloading-binaries-from-releases)
+  * [Running](#running)
+  * [Running popmd](#running-popmd)
+    * [CLI](#cli)
+    * [Web](#web)
+  * [Running bfgd](#running-bfgd)
+  * [Running bssd](#running-bssd)
 
-- [What is Optimism?](#what-is-optimism)
-- [Documentation](#documentation)
-- [Specification](#specification)
-- [Community](#community)
-- [Contributing](#contributing)
-- [Security Policy and Vulnerability Reporting](#security-policy-and-vulnerability-reporting)
-- [Directory Structure](#directory-structure)
-- [Development and Release Process](#development-and-release-process)
-  - [Overview](#overview)
-  - [Production Releases](#production-releases)
-  - [Development branch](#development-branch)
-- [License](#license)
+</details>
 
-<!--TOC-->
+## What is the Hemi Network?
 
-## What is Optimism?
+Hemi is an EVM compatible L2 blockchain that brings Bitcoin security and Ethereum programability together.
 
-[Optimism](https://www.optimism.io/) is a project dedicated to scaling Ethereum's technology and expanding its ability to coordinate people from across the world to build effective decentralized economies and governance systems. The [Optimism Collective](https://www.optimism.io/vision) builds open-source software that powers scalable blockchains and aims to address key governance and economic challenges in the wider Ethereum ecosystem. Optimism operates on the principle of **impact=profit**, the idea that individuals who positively impact the Collective should be proportionally rewarded with profit. **Change the incentives and you change the world.**
+### Services
 
-In this repository you'll find numerous core components of the OP Stack, the decentralized software stack maintained by the Optimism Collective that powers Optimism and forms the backbone of blockchains like [OP Mainnet](https://explorer.optimism.io/) and [Base](https://base.org). The OP Stack is designed to be aggressively open-source — you are welcome to explore, modify, and extend this code.
+Hemi Network consists of 3 services:
 
-## Documentation
+* [PoP Miner (popmd)](service/popm): "mines" L2 Keystones into BTC blocks for proof-of-proof
+* [Bitcoin Finality Governor (bfgd)](service/bfg): Hemi's gateway to the BTC network.
+* [Bitcoin Secure Sequencer (bssd)](service/bss): Optimism's gateway to BFG, manages Hemi Network's consensus
 
-- If you want to build on top of OP Mainnet, refer to the [Optimism Documentation](https://docs.optimism.io)
-- If you want to build your own OP Stack based blockchain, refer to the [OP Stack Guide](https://docs.optimism.io/stack/getting-started) and make sure to understand this repository's [Development and Release Process](#development-and-release-process)
+### License
 
-## Specification
+This project is licensed under the [MIT License](LICENSE).
 
-Detailed specifications for the OP Stack can be found within the [OP Stack Specs](https://github.com/ethereum-optimism/specs) repository.
+## Getting Started
 
-## Community
+### Building from Source
 
-General discussion happens most frequently on the [Optimism discord](https://discord.gg/optimism).
-Governance discussion can also be found on the [Optimism Governance Forum](https://gov.optimism.io/).
+To build, you must have the following installed:
 
-## Contributing
+* `git`
+* `make`
+* `go 1.21+`
 
-The OP Stack is a collaborative project. By collaborating on free, open software and shared standards, the Optimism Collective aims to prevent siloed software development and rapidly accelerate the development of the Ethereum ecosystem. Come contribute, build the future, and redefine power, together.
+First, clone the repository:
 
-[CONTRIBUTING.md](./CONTRIBUTING.md) contains a detailed explanation of the contributing process for this repository. Make sure to use the [Developer Quick Start](./CONTRIBUTING.md#development-quick-start) to properly set up your development environment.
+```shell
+git clone https://github.com/hemilabs/heminetwork.git
+```
 
-[Good First Issues](https://github.com/ethereum-optimism/optimism/issues?q=is:open+is:issue+label:D-good-first-issue) are a great place to look for tasks to tackle if you're not sure where to start, and see [CONTRIBUTING.md](./CONTRIBUTING.md) for info on larger projects.
+Then build:
 
-## Security Policy and Vulnerability Reporting
+```shell
+make
+```
 
-Please refer to the canonical [Security Policy](https://github.com/ethereum-optimism/.github/blob/master/SECURITY.md) document for detailed information about how to report vulnerabilities in this codebase.
-Bounty hunters are encouraged to check out the [Optimism Immunefi bug bounty program](https://immunefi.com/bounty/optimism/).
-The Optimism Immunefi program offers up to $2,000,042 for in-scope critical vulnerabilities.
+This will put built binaries in `<path-to-repo>/bin/`
 
-## Directory Structure
+### Downloading Binaries from Releases
 
-<pre>
-├── <a href="./docs">docs</a>: A collection of documents including audits and post-mortems
-├── <a href="./kurtosis-devnet">kurtosis-devnet</a>: OP-Stack Kurtosis devnet
-├── <a href="./op-batcher">op-batcher</a>: L2-Batch Submitter, submits bundles of batches to L1
-├── <a href="./op-chain-ops">op-chain-ops</a>: State surgery utilities
-├── <a href="./op-challenger">op-challenger</a>: Dispute game challenge agent
-├── <a href="./op-e2e">op-e2e</a>: End-to-End testing of all bedrock components in Go
-├── <a href="./op-node">op-node</a>: rollup consensus-layer client
-├── <a href="./op-preimage">op-preimage</a>: Go bindings for Preimage Oracle
-├── <a href="./op-program">op-program</a>: Fault proof program
-├── <a href="./op-proposer">op-proposer</a>: L2-Output Submitter, submits proposals to L1
-├── <a href="./op-service">op-service</a>: Common codebase utilities
-├── <a href="./op-wheel">op-wheel</a>: Database utilities
-├── <a href="./ops">ops</a>: Various operational packages
-├── <a href="./packages">packages</a>
-│   ├── <a href="./packages/contracts-bedrock">contracts-bedrock</a>: OP Stack smart contracts
-├── <a href="./.semgrep">semgrep</a>: Semgrep rules and tests
-</pre>
+You can find releases on the [Releases Page](https://github.com/hemilabs/heminetwork/releases)
 
-## Development and Release Process
+### Running
 
-### Overview
+To view options for any of the services, you may run the following
 
-Please read this section carefully if you're planning to fork or make frequent PRs into this repository.
+```shell
+./bin/popmd --help
+```
 
-### Production Releases
+```shell
+./bin/bfgd --help
+```
 
-Production releases are always tags, versioned as `<component-name>/v<semver>`.
-For example, an `op-node` release might be versioned as `op-node/v1.1.2`, and  smart contract releases might be versioned as `op-contracts/v1.0.0`.
-Release candidates are versioned in the format `op-node/v1.1.2-rc.1`.
-We always start with `rc.1` rather than `rc`.
+```shell
+./bin/bssd --help
+```
 
-For contract releases, refer to the GitHub release notes for a given release which will list the specific contracts being released. Not all contracts are considered production ready within a release and many are under active development.
+### Running popmd
 
-Tags of the form `v<semver>`, such as `v1.1.4`, indicate releases of all Go code only, and **DO NOT** include smart contracts.
-This naming scheme is required by Golang.
-In the above list, this means these `v<semver>` releases contain all `op-*` components and exclude all `contracts-*` components.
+popmd has a few crucial requirements to run:
 
-`op-geth` embeds upstream geth’s version inside its own version as follows: `vMAJOR.GETH_MAJOR GETH_MINOR GETH_PATCH.PATCH`.
-Basically, geth’s version is our minor version.
-For example if geth is at `v1.12.0`, the corresponding op-geth version would be `v1.101200.0`.
-Note that we pad out to three characters for the geth minor version and two characters for the geth patch version.
-Since we cannot left-pad with zeroes, the geth major version is not padded.
+* a BTC private key that is funded, this can be a testnet address if you configure popmd as such
+* a BFG URL to connect to
 
-See the [Node Software Releases](https://docs.optimism.io/builders/node-operators/releases) page of the documentation for more information about releases for the latest node components.
+if configured correctly and running, then popmd will start "mining" L2 Keystones by adding them to btc blocks that make
+it into the chain
 
-The full set of components that have releases are:
+#### CLI
 
-- `op-batcher`
-- `op-contracts`
-- `op-challenger`
-- `op-node`
-- `op-proposer`
+```shell
+./bin/popmd
+```
 
-All other components and packages should be considered development components only and do not have releases.
+#### Web
 
-### Development branch
+```shell
+cd ./web
+make
+go run ./integrationtest
+```
 
-The primary development branch is [`develop`](https://github.com/ethereum-optimism/optimism/tree/develop/).
-`develop` contains the most up-to-date software that remains backwards compatible with the latest experimental [network deployments](https://docs.optimism.io/chain/networks).
-If you're making a backwards compatible change, please direct your pull request towards `develop`.
+### Running bfgd
 
-**Changes to contracts within `packages/contracts-bedrock/src` are usually NOT considered backwards compatible.**
-Some exceptions to this rule exist for cases in which we absolutely must deploy some new contract after a tag has already been fully deployed.
-If you're changing or adding a contract and you're unsure about which branch to make a PR into, default to using a feature branch.
-Feature branches are typically used when there are conflicts between 2 projects touching the same code, to avoid conflicts from merging both into `develop`.
+bfgd has a few crucial requirements to run:
 
-## License
+* a postgres database, bfgd expects the sql scripts in `./database/bfgd/scripts/` to be run to set up your schema
+* an electrumx node connected to the proper bitcoin network (testnet vs mainnet, etc.)
 
-All other files within this repository are licensed under the [MIT License](https://github.com/ethereum-optimism/optimism/blob/master/LICENSE) unless stated otherwise.
+### Running bssd
+
+bssd has a few crucial requirements to run:
+
+* a bfgd instance running to connect to
+
+### Running Network
+
+Prerequisites: `docker`
+
+To run the full network locally, you can run the following.  Note that this will create
+L2Keytones and BTC Blocks at a high rate.  You can modify these in `./e2e/mocktimism/mocktimism.go`
+or `./e2e/docker-compose.yml`.
+
+note: the `--build` flag is optional if you want to rebuild your code
+
+```
+docker-compose -f ./e2e/docker-compose.yml up --build
+```
+
+### Running the full network tests
+
+This runs a test with an entirely local heminet, it uses bitcoind in regtest
+mode for the bitcoin chain
+
+Prerequisites: `docker`
+
+```
+make networktest
+```
