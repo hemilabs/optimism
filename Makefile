@@ -1,208 +1,95 @@
-COMPOSEFLAGS=-d
-ITESTS_L2_HOST=http://localhost:9545
-BEDROCK_TAGS_REMOTE?=origin
-OP_STACK_GO_BUILDER?=us-docker.pkg.dev/oplabs-tools-artifacts/images/op-stack-go:latest
+# Copyright (c) 2024 Hemi Labs, Inc.
+# Use of this source code is governed by the MIT License,
+# which can be found in the LICENSE file.
 
-# Requires at least Python v3.9; specify a minor version below if needed
-PYTHON?=python3
+# PROJECTPATH is the project root directory.
+# This Makefile is stored in the project root directory, so the directory is
+# retrieved by getting the directory of this Makefile.
+PROJECTPATH = $(abspath $(dir $(realpath $(firstword $(MAKEFILE_LIST)))))
 
-build: build-go build-ts
-.PHONY: build
+export GOBIN=$(PROJECTPATH)/bin
+export GOCACHE=$(PROJECTPATH)/.gocache
+export GOPKG=$(PROJECTPATH)/pkg
+DIST=$(PROJECTPATH)/dist
 
-build-go: submodules op-node op-proposer op-batcher
-.PHONY: build-go
+ifeq ($(GOOS),windows)
+BIN_EXT = .exe
+endif
 
-lint-go:
-	golangci-lint run -E goimports,sqlclosecheck,bodyclose,asciicheck,misspell,errorlint --timeout 5m -e "errors.As" -e "errors.Is" ./...
-.PHONY: lint-go
+project = heminetwork
+version = $(shell git describe --tags 2>/dev/null || echo "v0.0.0")
 
-build-ts: submodules
-	if [ -n "$$NVM_DIR" ]; then \
-		. $$NVM_DIR/nvm.sh && nvm use; \
-	fi
-	pnpm install:ci
-	pnpm prepare
-	pnpm build
-.PHONY: build-ts
+cmds = \
+	bfgd \
+	bssd \
+	extool \
+	keygen \
+	popmd \
+	hemictl
 
-ci-builder:
-	docker build -t ci-builder -f ops/docker/ci-builder/Dockerfile .
-.PHONY: ci-builder
+.PHONY: all clean clean-dist deps $(cmds) build install lint lint-deps tidy race test vulncheck \
+	vulncheck-deps dist archive sources checksums networktest
 
-golang-docker:
-	# We don't use a buildx builder here, and just load directly into regular docker, for convenience.
-	GIT_COMMIT=$$(git rev-parse HEAD) \
-	GIT_DATE=$$(git show -s --format='%ct') \
-	IMAGE_TAGS=$$(git rev-parse HEAD),latest \
-	docker buildx bake \
-			--progress plain \
-			--load \
-			-f docker-bake.hcl \
-			op-node op-batcher op-proposer op-challenger
-.PHONY: golang-docker
+all: lint tidy test build install
 
-contracts-bedrock-docker:
-	IMAGE_TAGS=$$(git rev-parse HEAD),latest \
-	docker buildx bake \
-			--progress plain \
-			--load \
-			-f docker-bake.hcl \
-		  contracts-bedrock
-.PHONY: contracts-bedrock-docker
+clean: clean-dist
+	rm -rf $(GOBIN) $(GOCACHE) $(GOPKG)
 
-submodules:
-	git submodule update --init --recursive
-.PHONY: submodules
+clean-dist:
+	rm -rf $(DIST)
 
-op-bindings:
-	make -C ./op-bindings
-.PHONY: op-bindings
+deps: lint-deps vulncheck-deps
+	go mod download
+	go mod verify
 
-op-node:
-	make -C ./op-node op-node
-.PHONY: op-node
+$(cmds):
+	go build -trimpath -o $(GOBIN)/$@$(BIN_EXT) ./cmd/$@
 
-generate-mocks-op-node:
-	make -C ./op-node generate-mocks
-.PHONY: generate-mocks-op-node
+build:
+	go build ./...
 
-generate-mocks-op-service:
-	make -C ./op-service generate-mocks
-.PHONY: generate-mocks-op-service
+install: $(cmds)
 
-op-batcher:
-	make -C ./op-batcher op-batcher
-.PHONY: op-batcher
+lint:
+	$(shell go env GOPATH)/bin/goimports -w -l .
+	$(shell go env GOPATH)/bin/gofumpt -w -l .
+	go vet ./...
 
-op-proposer:
-	make -C ./op-proposer op-proposer
-.PHONY: op-proposer
+lint-deps:
+	GOBIN=$(shell go env GOPATH)/bin go install golang.org/x/tools/cmd/goimports@latest
+	GOBIN=$(shell go env GOPATH)/bin go install mvdan.cc/gofumpt@latest
 
-op-challenger:
-	make -C ./op-challenger op-challenger
-.PHONY: op-challenger
+tidy:
+	go mod tidy
 
-op-dispute-mon:
-	make -C ./op-dispute-mon op-dispute-mon
-.PHONY: op-dispute-mon
+race:
+	go test -v -race ./...
 
-op-program:
-	make -C ./op-program op-program
-.PHONY: op-program
+test:
+	go test -test.timeout=20m ./...
 
-cannon:
-	make -C ./cannon cannon
-.PHONY: cannon
+vulncheck:
+	$(shell go env GOPATH)/bin/govulncheck ./...
 
-reproducible-prestate:
-	make -C ./op-program reproducible-prestate
-.PHONY: reproducible-prestate
+vulncheck-deps:
+	GOBIN=$(shell go env GOPATH)/bin go install golang.org/x/vuln/cmd/govulncheck@latest
 
-cannon-prestate: op-program cannon
-	./cannon/bin/cannon load-elf --path op-program/bin/op-program-client.elf --out op-program/bin/prestate.json --meta op-program/bin/meta.json
-	./cannon/bin/cannon run --proof-at '=0' --stop-at '=1' --input op-program/bin/prestate.json --meta op-program/bin/meta.json --proof-fmt 'op-program/bin/%d.json' --output ""
-	mv op-program/bin/0.json op-program/bin/prestate-proof.json
-.PHONY: cannon-prestate
+dist:
+	mkdir -p $(DIST)
 
-mod-tidy:
-	# Below GOPRIVATE line allows mod-tidy to be run immediately after
-	# releasing new versions. This bypasses the Go modules proxy, which
-	# can take a while to index new versions.
-	#
-	# See https://proxy.golang.org/ for more info.
-	export GOPRIVATE="github.com/ethereum-optimism" && go mod tidy
-	make -C ./op-ufm mod-tidy
-.PHONY: mod-tidy
+archive: dist install
+ifeq ($(GOOS),windows)
+	cd $(GOBIN) && zip -r $(DIST)/$(project)_$(version)_$(GOOS)_$(GOARCH).zip *$(BIN_EXT)
+else
+	cd $(GOBIN) && tar -czvf $(DIST)/$(project)_$(version)_$(GOOS)_$(GOARCH).tar.gz *
+endif
 
-clean:
-	rm -rf ./bin
-.PHONY: clean
+sources: dist
+	tar --exclude=dist --exclude=bin -czvf $(DIST)/$(project)_$(version)_sources.tar.gz * .gitignore .github
 
-nuke: clean devnet-clean
-	git clean -Xdf
-.PHONY: nuke
+checksums: dist
+	cd $(DIST) && shasum -a 256 * > $(project)_$(version)_checksums.txt
 
-pre-devnet: submodules
-	@if ! [ -x "$(command -v geth)" ]; then \
-		make install-geth; \
-	fi
-	@if [ ! -e op-program/bin ]; then \
-		make cannon-prestate; \
-	fi
-.PHONY: pre-devnet
-
-devnet-up: pre-devnet
-	./ops/scripts/newer-file.sh .devnet/allocs-l1.json ./packages/contracts-bedrock \
-		|| make devnet-allocs
-	PYTHONPATH=./bedrock-devnet $(PYTHON) ./bedrock-devnet/main.py --monorepo-dir=.
-.PHONY: devnet-up
-
-devnet-test: pre-devnet
-	PYTHONPATH=./bedrock-devnet $(PYTHON) ./bedrock-devnet/main.py --monorepo-dir=. --test
-.PHONY: devnet-test
-
-devnet-down:
-	@(cd ./ops-bedrock && GENESIS_TIMESTAMP=$(shell date +%s) docker compose stop)
-.PHONY: devnet-down
-
-devnet-clean:
-	rm -rf ./packages/contracts-bedrock/deployments/devnetL1
-	rm -rf ./.devnet
-	cd ./ops-bedrock && docker compose down
-	docker image ls 'ops-bedrock*' --format='{{.Repository}}' | xargs -r docker rmi
-	docker volume ls --filter name=ops-bedrock --format='{{.Name}}' | xargs -r docker volume rm
-.PHONY: devnet-clean
-
-devnet-allocs: pre-devnet
-	PYTHONPATH=./bedrock-devnet $(PYTHON) ./bedrock-devnet/main.py --monorepo-dir=. --allocs
-.PHONY: devnet-allocs
-
-devnet-logs:
-	@(cd ./ops-bedrock && docker compose logs -f)
-.PHONY: devnet-logs
-
-test-unit:
-	make -C ./op-node test
-	make -C ./op-proposer test
-	make -C ./op-batcher test
-	make -C ./op-e2e test
-	pnpm test
-.PHONY: test-unit
-
-test-integration:
-	bash ./ops-bedrock/test-integration.sh \
-		./packages/contracts-bedrock/deployments/devnetL1
-.PHONY: test-integration
-
-# Remove the baseline-commit to generate a base reading & show all issues
-semgrep:
-	$(eval DEV_REF := $(shell git rev-parse develop))
-	SEMGREP_REPO_NAME=ethereum-optimism/optimism semgrep ci --baseline-commit=$(DEV_REF)
-.PHONY: semgrep
-
-clean-node-modules:
-	rm -rf node_modules
-	rm -rf packages/**/node_modules
-.PHONY: clean-node-modules
-
-tag-bedrock-go-modules:
-	./ops/scripts/tag-bedrock-go-modules.sh $(BEDROCK_TAGS_REMOTE) $(VERSION)
-.PHONY: tag-bedrock-go-modules
-
-update-op-geth:
-	./ops/scripts/update-op-geth.py
-.PHONY: update-op-geth
-
-bedrock-markdown-links:
-	docker run --init -it -v `pwd`:/input lycheeverse/lychee --verbose --no-progress --exclude-loopback \
-		--exclude twitter.com --exclude explorer.optimism.io --exclude linux-mips.org --exclude vitalik.ca \
-		--exclude-mail /input/README.md "/input/specs/**/*.md"
-.PHONY: bedrock-markdown-links
-
-install-geth:
-	./ops/scripts/geth-version-checker.sh && \
-	 	(echo "Geth versions match, not installing geth..."; true) || \
- 		(echo "Versions do not match, installing geth!"; \
- 			go install -v github.com/ethereum/go-ethereum/cmd/geth@$(shell jq -r .geth < versions.json); \
- 			echo "Installed geth!"; true)
-.PHONY: install-geth
+networktest:
+	HEMI_RUN_NETWORK_TEST=1	\
+		go test -count=1 -v -run TestFullNetwork -v ./e2e/network_test.go
