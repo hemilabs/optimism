@@ -41,7 +41,7 @@ func lastDeposit(txns []eth.Data) (int, error) {
 
 func sanityCheckPayload(payload *eth.ExecutionPayload) error {
 	// Sanity check payload before inserting it
-	if len(payload.Transactions) == 0 {
+	if len(payload.Transactions) == 0 && payload.Timestamp != 0 {
 		return errors.New("no transactions in returned payload")
 	}
 	if payload.Transactions[0][0] != types.DepositTxType {
