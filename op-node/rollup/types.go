@@ -235,9 +235,6 @@ func (cfg *Config) Check() error {
 	if cfg.Genesis.L2.Hash == cfg.Genesis.L1.Hash {
 		return ErrGenesisHashesSame
 	}
-	if cfg.Genesis.L2Time == 0 {
-		return ErrMissingGenesisL2Time
-	}
 	if cfg.Genesis.SystemConfig.BatcherAddr == (common.Address{}) {
 		return ErrMissingBatcherAddr
 	}
