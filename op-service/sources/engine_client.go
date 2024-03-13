@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -126,6 +127,8 @@ func (s *EngineClient) GetPayload(ctx context.Context, payloadId eth.PayloadID) 
 		}
 		return nil, err
 	}
+
+	e.Trace(spew.Sdump(result))
 	e.Trace("Received payload")
 	return result.ExecutionPayload, nil
 }
