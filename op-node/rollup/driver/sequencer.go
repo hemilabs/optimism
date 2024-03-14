@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"math/big"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -105,6 +107,8 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		StateRoot:          payoutBlock.StateRoot[:],
 		EPHash:             payoutBlock.Hash[:],
 	}
+
+	d.log.Info("L2Keystone", spew.Sdump(l2PayoutKeystone))
 
 	d.log.Info("Calculating PoP Payout", "block containing payout", newBlockHeight,
 		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
