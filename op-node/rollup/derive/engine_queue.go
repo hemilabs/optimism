@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hemilabs/heminetwork/hemi"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"io"
 	"time"
-
-	"github.com/ethereum-optimism/optimism/op-service/client"
-	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -287,12 +286,12 @@ func (eq *EngineQueue) notifyBSSKeystone(ctx context.Context, bn *bssNotificatio
 
 	l2Keystone := &hemi.L2Keystone{
 		Version:            0x01,
-		L1BlockNumber:      uint32(bn.safeL2.L1Origin.Number),
-		L2BlockNumber:      uint32(bn.safeL2.Number),
-		ParentEPHash:       bn.safeL2.ParentHash[:],
+		L1BlockNumber:      uint32(bn.unsafeL2.L1Origin.Number),
+		L2BlockNumber:      uint32(bn.unsafeL2.Number),
+		ParentEPHash:       bn.unsafeL2.ParentHash[:],
 		PrevKeystoneEPHash: prevKeystoneHash[:],
-		StateRoot:          bn.safeL2.StateRoot[:],
-		EPHash:             bn.safeL2.Hash[:],
+		StateRoot:          bn.unsafeL2.StateRoot[:],
+		EPHash:             bn.unsafeL2.Hash[:],
 	}
 
 	eq.log.Info("Sending notification to BSS of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
