@@ -675,6 +675,7 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
+	eq.log.Info("safe heads", "pending", eq.pendingSafeHead.Number, "safe", eq.safeHead.Number)
 	payload, err := eq.engine.PayloadByNumber(ctx, eq.pendingSafeHead.Number+1)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
