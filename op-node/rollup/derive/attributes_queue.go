@@ -52,6 +52,7 @@ func (aq *AttributesQueue) Origin() eth.L1BlockRef {
 func (aq *AttributesQueue) NextAttributes(ctx context.Context, parent eth.L2BlockRef) (*AttributesWithParent, error) {
 	// Get a batch if we need it
 	if aq.batch == nil {
+		aq.log.Info("getting new batch")
 		batch, isLastInSpan, err := aq.prev.NextBatch(ctx, parent)
 		if err != nil {
 			return nil, err
