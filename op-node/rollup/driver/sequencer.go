@@ -173,15 +173,15 @@ func (d *Sequencer) StartBuildingBlock(ctx context.Context) error {
 		return err
 	}
 
-	// popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
-	// if err != nil {
-	// 	return err
-	// }
+	popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
+	if err != nil {
+		return err
+	}
 
 	// Append PoP Tx if one was created
-	// if popPayoutTx != nil {
-	// 	attrs.Transactions = append(attrs.Transactions, popPayoutTx)
-	// }
+	if popPayoutTx != nil {
+		attrs.Transactions = append(attrs.Transactions, popPayoutTx)
+	}
 
 	// If our next L2 block timestamp is beyond the Sequencer drift threshold, then we must produce
 	// empty blocks (other than the L1 info deposit and any user deposits). We handle this by
