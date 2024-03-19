@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"math/big"
 	"time"
+
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -172,10 +173,10 @@ func (d *Sequencer) StartBuildingBlock(ctx context.Context) error {
 		return err
 	}
 
-	popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
-	if err != nil {
-		return err
-	}
+	// popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
+	// if err != nil {
+	// 	return err
+	// }
 
 	// Append PoP Tx if one was created
 	if popPayoutTx != nil {
