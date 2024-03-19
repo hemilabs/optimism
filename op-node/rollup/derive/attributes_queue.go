@@ -91,6 +91,8 @@ func (aq *AttributesQueue) createNextAttributes(ctx context.Context, batch *Sing
 		return nil, err
 	}
 
+	aq.log("prepared prevrandao", attrs.PrevRandao)
+
 	// we are verifying, not sequencing, we've got all transactions and do not pull from the tx-pool
 	// (that would make the block derivation non-deterministic)
 	attrs.NoTxPool = true
