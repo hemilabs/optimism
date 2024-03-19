@@ -93,6 +93,11 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		seqNumber = l2Parent.SequenceNumber + 1
 	}
 
+	l1Info, err = ba.l1.InfoByHash(ctx, epoch.Hash)
+	if err != nil {
+		return nil, NewTemporaryError(fmt.Errorf("failed to fetch L1 block info: %w", err))
+	}
+
 	// Sanity check the L1 origin was correctly selected to maintain the time invariant between L1 and L2
 	nextL2Time := l2Parent.Time + ba.cfg.BlockTime
 	if nextL2Time < l1Info.Time() {
