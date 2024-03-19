@@ -331,6 +331,7 @@ func (eq *EngineQueue) bssNotifier() {
 }
 
 func (eq *EngineQueue) Step(ctx context.Context) error {
+	eq.log.Info("fork choice update", "needForkchoiceUpdate", eq.needForkchoiceUpdate)
 	if eq.needForkchoiceUpdate {
 		return eq.tryUpdateEngine(ctx)
 	}
