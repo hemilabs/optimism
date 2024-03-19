@@ -88,7 +88,7 @@ func (aq *AttributesQueue) createNextAttributes(ctx context.Context, batch *Sing
 	defer cancel()
 
 	newEpoch := l2SafeHead.L1Origin.Number != batch.Epoch().Number
-	aq.log.Info("new epoch?", "newEpoch", newEpoch)
+	aq.log.Info("new epoch?", "newEpoch", newEpoch, "origin", l2SafeHead.L1Origin.Number, "epoch", batch.Epoch().Number)
 
 	attrs, err := aq.builder.PreparePayloadAttributes(fetchCtx, l2SafeHead, batch.Epoch())
 	if err != nil {
