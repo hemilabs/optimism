@@ -369,7 +369,7 @@ func (eq *EngineQueue) Step(ctx context.Context) error {
 	} else {
 		eq.safeAttributes = next
 		eq.log.Debug("Adding next safe attributes", "safe_head", eq.safeHead,
-			"pending_safe_head", eq.pendingSafeHead, "next", next, "safe prevrandao", next.attributes.PrevRandao)
+			"pending_safe_head", eq.pendingSafeHead, "next", next, "safe prevrand", next.attributes.PrevRandao)
 		return NotEnoughData
 	}
 
@@ -692,6 +692,9 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 		// geth cannot wind back a chain without reorging to a new, previously non-canonical, block
 		return eq.forceNextSafeAttributes(ctx)
 	}
+
+	eq.log.Info("attributes matched!")
+
 	ref, err := PayloadToBlockRef(payload, &eq.cfg.Genesis)
 	if err != nil {
 		return NewResetError(fmt.Errorf("failed to decode L2 block ref from payload: %w", err))
