@@ -685,6 +685,7 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 	}
 
 	eq.log.Info("safeAttributes are: %s", spew.Sdump(eq.safeAttributes))
+	eq.log.Info("safeAttributes.attributes are: %s", spew.Sdump(eq.safeAttributes.attributes))
 
 	if err := AttributesMatchBlock(eq.safeAttributes.attributes, eq.pendingSafeHead.Hash, payload, eq.log); err != nil {
 		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1", "err", err, "unsafe", eq.unsafeHead, "pending_safe", eq.pendingSafeHead, "safe", eq.safeHead)
