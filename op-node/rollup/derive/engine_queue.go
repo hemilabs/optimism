@@ -7,7 +7,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/hemilabs/heminetwork/hemi"
 
@@ -362,6 +361,8 @@ func (eq *EngineQueue) Step(ctx context.Context) error {
 	if err := eq.tryFinalizePastL2Blocks(ctx); err != nil {
 		return err
 	}
+
+	eq.log.Info("getting safe attrs for height", "height", eq.pendingSafeHead.Number)
 	if next, err := eq.prev.NextAttributes(ctx, eq.pendingSafeHead); err == io.EOF {
 		outOfData = true
 	} else if err != nil {
@@ -685,8 +686,10 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 		return NewTemporaryError(fmt.Errorf("failed to get existing unsafe payload to compare against derived attributes from L1: %w", err))
 	}
 
-	eq.log.Info("safeAttributes are: %s", spew.Sdump(eq.safeAttributes))
-	eq.log.Info("safeAttributes.attributes are: %s", spew.Sdump(eq.safeAttributes.attributes))
+	// eq.log.Info("safeAttributes are: %s", spew.Sdump(eq.safeAttributes))
+	// eq.log.Info("safeAttributes.attributes are: %s", spew.Sdump(eq.safeAttributes.attributes))
+
+	eq.log.Info("payload number is", "number", eq.pendingSafeHead.Number+1)
 
 	if err := AttributesMatchBlock(eq.safeAttributes.attributes, eq.pendingSafeHead.Hash, payload, eq.log); err != nil {
 		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1", "err", err, "unsafe", eq.unsafeHead, "pending_safe", eq.pendingSafeHead, "safe", eq.safeHead)
