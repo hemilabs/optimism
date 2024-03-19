@@ -369,7 +369,7 @@ func (eq *EngineQueue) Step(ctx context.Context) error {
 	} else {
 		eq.safeAttributes = next
 		eq.log.Debug("Adding next safe attributes", "safe_head", eq.safeHead,
-			"pending_safe_head", eq.pendingSafeHead, "next", next)
+			"pending_safe_head", eq.pendingSafeHead, "next", next, "safe prevrandao", next.attributes.PrevRandao)
 		return NotEnoughData
 	}
 
