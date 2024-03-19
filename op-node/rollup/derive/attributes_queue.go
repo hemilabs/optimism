@@ -59,6 +59,8 @@ func (aq *AttributesQueue) NextAttributes(ctx context.Context, parent eth.L2Bloc
 		}
 		aq.batch = batch
 		aq.isLastInSpan = isLastInSpan
+	} else {
+		aq.log.Info("not getting new batch")
 	}
 
 	// Actually generate the next attributes
