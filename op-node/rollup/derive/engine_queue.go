@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"io"
 	"time"
+
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -673,7 +674,7 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
-	payload, err := eq.engine.PayloadByNumber(ctx, eq.pendingSafeHead.Number+1)
+	payload, err := eq.engine.PayloadByNumber(ctx, eq.pendingSafeHead.Number+2)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
 			// engine may have restarted, or inconsistent safe head. We need to reset

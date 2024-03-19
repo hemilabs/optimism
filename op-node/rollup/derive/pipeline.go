@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"io"
+
+	"github.com/ethereum-optimism/optimism/op-service/client"
 
 	"github.com/ethereum/go-ethereum/log"
 
