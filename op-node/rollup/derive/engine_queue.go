@@ -787,6 +787,8 @@ func (eq *EngineQueue) StartPayload(ctx context.Context, parent eth.L2BlockRef, 
 		SafeBlockHash:      eq.safeHead.Hash,
 		FinalizedBlockHash: eq.finalized.Hash,
 	}
+
+	eq.log.Info("StartPayload")
 	id, errTyp, err := StartPayload(ctx, eq.engine, fc, attrs)
 	if err != nil {
 		return errTyp, err
