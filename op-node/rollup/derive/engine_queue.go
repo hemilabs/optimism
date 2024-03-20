@@ -332,7 +332,7 @@ func (eq *EngineQueue) bssNotifier() {
 
 func (eq *EngineQueue) Step(ctx context.Context) error {
 	eq.log.Info("fork choice update", "needForkchoiceUpdate", eq.needForkchoiceUpdate)
-	if eq.needForkchoiceUpdate {
+	if eq.needForkchoiceUpdate && false {
 		return eq.tryUpdateEngine(ctx)
 	}
 	// Trying unsafe payload should be done before safe attributes
