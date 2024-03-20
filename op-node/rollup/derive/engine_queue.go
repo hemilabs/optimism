@@ -332,7 +332,7 @@ func (eq *EngineQueue) bssNotifier() {
 
 func (eq *EngineQueue) Step(ctx context.Context) error {
 	eq.log.Info("fork choice update", "needForkchoiceUpdate", eq.needForkchoiceUpdate)
-	if eq.needForkchoiceUpdate && false {
+	if eq.needForkchoiceUpdate {
 		return eq.tryUpdateEngine(ctx)
 	}
 	// Trying unsafe payload should be done before safe attributes
@@ -602,7 +602,6 @@ func (eq *EngineQueue) tryNextUnsafePayload(ctx context.Context) error {
 		FinalizedBlockHash: eq.finalized.Hash,
 	}
 
-	eq.log.Info("forkchoiceupdate here")
 	fcRes, err := eq.engine.ForkchoiceUpdate(ctx, &fc, nil)
 	if err != nil {
 		var inputErr eth.InputError
@@ -841,6 +840,7 @@ func (eq *EngineQueue) ConfirmPayload(ctx context.Context) (out *eth.ExecutionPa
 
 	// Update the safe head if the payload is built with the last attributes in the batch.
 	updateSafe := eq.buildingSafe && eq.safeAttributes != nil && eq.safeAttributes.isLastInSpan
+	eq.log.Info("ConfirmPayload", "updateSafe", updateSafe)
 	payload, errTyp, err := ConfirmPayload(ctx, eq.log, eq.engine, fc, eq.buildingID, updateSafe)
 	if err != nil {
 		return nil, errTyp, fmt.Errorf("failed to complete building on top of L2 chain %s, id: %s, error (%d): %w", eq.buildingOnto, eq.buildingID, errTyp, err)
