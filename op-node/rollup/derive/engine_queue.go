@@ -601,6 +601,8 @@ func (eq *EngineQueue) tryNextUnsafePayload(ctx context.Context) error {
 		SafeBlockHash:      eq.safeHead.Hash, // this should guarantee we do not reorg past the safe head
 		FinalizedBlockHash: eq.finalized.Hash,
 	}
+
+	eq.log.Info("forkchoiceupdate here")
 	fcRes, err := eq.engine.ForkchoiceUpdate(ctx, &fc, nil)
 	if err != nil {
 		var inputErr eth.InputError
