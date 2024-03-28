@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -57,6 +58,7 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 	// case we need to fetch all transaction receipts from the L1 origin block so we can scan for
 	// user deposits.
 	if l2Parent.L1Origin.Number != epoch.Number {
+		log.Info("getting info via FetchReceipts")
 		info, receipts, err := ba.l1.FetchReceipts(ctx, epoch.Hash)
 		if err != nil {
 			return nil, NewTemporaryError(fmt.Errorf("failed to fetch L1 block info and receipts: %w", err))
@@ -84,6 +86,7 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		if l2Parent.L1Origin.Hash != epoch.Hash {
 			return nil, NewResetError(fmt.Errorf("cannot create new block with L1 origin %s in conflict with L1 origin %s", epoch, l2Parent.L1Origin))
 		}
+		log.Info("getting info via InfoByHash")
 		info, err := ba.l1.InfoByHash(ctx, epoch.Hash)
 		if err != nil {
 			return nil, NewTemporaryError(fmt.Errorf("failed to fetch L1 block info: %w", err))
