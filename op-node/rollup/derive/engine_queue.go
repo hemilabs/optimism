@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"io"
 	"time"
+
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -673,6 +674,7 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
+	eq.log.Info("getting payload by number", "pendingSafeHead.Number", eq.pendingSafeHead.Number+1, "safeAttributes.parent.Number", eq.safeAttributes.parent.Number)
 	payload, err := eq.engine.PayloadByNumber(ctx, eq.pendingSafeHead.Number+1)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
@@ -681,6 +683,8 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 		}
 		return NewTemporaryError(fmt.Errorf("failed to get existing unsafe payload to compare against derived attributes from L1: %w", err))
 	}
+
+	eq.log.Info("is the number still the same?", "safeAttributes.parent.Number", eq.safeAttributes.parent.Number)
 	if err := AttributesMatchBlock(eq.safeAttributes.attributes, eq.pendingSafeHead.Hash, payload, eq.log); err != nil {
 		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1", "err", err, "unsafe", eq.unsafeHead, "pending_safe", eq.pendingSafeHead, "safe", eq.safeHead)
 		// geth cannot wind back a chain without reorging to a new, previously non-canonical, block
