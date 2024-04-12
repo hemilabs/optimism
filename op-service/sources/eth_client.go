@@ -277,9 +277,12 @@ func (s *EthClient) InfoByLabel(ctx context.Context, label eth.BlockLabel) (eth.
 func (s *EthClient) InfoAndTxsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, types.Transactions, error) {
 	if header, ok := s.headersCache.Get(hash); ok {
 		if txs, ok := s.transactionsCache.Get(hash); ok {
+			s.log.Info("InfoAndTxsByHash used cache")
 			return header, txs, nil
 		}
 	}
+
+	s.log.Info("InfoAndTxsByHash did not use cache")
 	return s.blockCall(ctx, "eth_getBlockByHash", hashID(hash))
 }
 
