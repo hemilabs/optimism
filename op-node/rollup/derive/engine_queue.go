@@ -684,7 +684,7 @@ func (eq *EngineQueue) consolidateNextSafeAttributes(ctx context.Context) error 
 		return NewTemporaryError(fmt.Errorf("failed to get existing unsafe payload to compare against derived attributes from L1: %w", err))
 	}
 
-	eq.log.Info("payload has hash and mixdigest", "hash", payload.BlockHash.String(), "mixDigest", payload.PrevRandao.String())
+	eq.log.Info("payload has hash and mixdigest", "hash", payload.BlockHash.String(), "mixDigest", payload.PrevRandao.String(), "number", eq.pendingSafeHead.Number+1)
 
 	eq.log.Info("is the number still the same?", "safeAttributes.parent.Number", eq.safeAttributes.parent.Number)
 	if err := AttributesMatchBlock(eq.safeAttributes.attributes, eq.pendingSafeHead.Hash, payload, eq.log); err != nil {

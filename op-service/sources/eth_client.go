@@ -285,7 +285,7 @@ func (s *EthClient) InfoAndTxsByHash(ctx context.Context, hash common.Hash) (eth
 	s.log.Info("InfoAndTxsByHash did not use cache")
 	info, tx, err := s.blockCall(ctx, "eth_getBlockByHash", hashID(hash))
 
-	s.log.Info("queried for hash, got mixdigest", "hash", hash.String(), "mixdigest", info.MixDigest().String())
+	s.log.Info("queried for hash, got mixdigest", "hash", hash.String(), "mixdigest", info.MixDigest().String(), "number", info.NumberU64())
 	return info, tx, err
 }
 
