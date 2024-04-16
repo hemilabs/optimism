@@ -214,17 +214,14 @@ require (
 )
 
 // Excludes to work around genproto conflicts between op-geth and heminetwork dependencies
-exclude google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
-
-exclude google.golang.org/genproto v0.0.0-20190306203927-b5d61aea6440
-
-exclude google.golang.org/genproto v0.0.0-20181202183823-bd91e49a0898
-
-exclude google.golang.org/genproto v0.0.0-20181029155118-b69ba1387ce2
-
-exclude google.golang.org/genproto v0.0.0-20180831171423-11092d34479b
-
-exclude google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8
+exclude (
+	google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
+	google.golang.org/genproto v0.0.0-20190306203927-b5d61aea6440
+	google.golang.org/genproto v0.0.0-20181202183823-bd91e49a0898
+	google.golang.org/genproto v0.0.0-20181029155118-b69ba1387ce2
+	google.golang.org/genproto v0.0.0-20180831171423-11092d34479b
+	google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8
+)
 
 //replace github.com/ethereum/go-ethereum v1.13.5 => github.com/ethereum-optimism/op-geth v1.101304.2-0.20231130012434-cd5316814d08
 
