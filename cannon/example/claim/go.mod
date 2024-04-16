@@ -1,14 +1,14 @@
 module claim
 
-go 1.21
+go 1.21.1
 
-toolchain go1.21.1
+toolchain go1.21.9
 
 require github.com/ethereum-optimism/optimism v0.0.0
 
 require (
-	golang.org/x/crypto v0.21.0 // indirect
-	golang.org/x/sys v0.18.0 // indirect
+	golang.org/x/crypto v0.19.0 // indirect
+	golang.org/x/sys v0.17.0 // indirect
 )
 
 replace github.com/ethereum-optimism/optimism v0.0.0 => ../../..
