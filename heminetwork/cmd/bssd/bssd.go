@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -99,10 +100,10 @@ func _main() error {
 
 	server, err := bss.NewServer(cfg)
 	if err != nil {
-		return fmt.Errorf("Failed to create BSS server: %v", err)
+		return fmt.Errorf("failed to create BSS server: %w", err)
 	}
-	if err := server.Run(ctx); err != context.Canceled {
-		return fmt.Errorf("BSS server terminated with error: %v", err)
+	if err := server.Run(ctx); !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("BSS server terminated with error: %w", err)
 	}
 
 	return nil
