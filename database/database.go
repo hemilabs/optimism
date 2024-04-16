@@ -57,10 +57,22 @@ func (ve ValidationError) Is(target error) bool {
 	return ok
 }
 
+type ZeroRowsError string
+
+func (ze ZeroRowsError) Error() string {
+	return string(ze)
+}
+
+func (ze ZeroRowsError) Is(target error) bool {
+	_, ok := target.(ZeroRowsError)
+	return ok
+}
+
 var (
 	ErrDuplicate  = DuplicateError("duplicate")
 	ErrNotFound   = NotFoundError("not found")
 	ErrValidation = ValidationError("validation")
+	ErrZeroRows   = ZeroRowsError("zero rows affected")
 )
 
 // ByteArray is a type that corresponds to BYTEA in a database. It supports
@@ -72,11 +84,11 @@ func (ba ByteArray) String() string {
 	return hex.EncodeToString([]byte(ba))
 }
 
-func (ba *ByteArray) MarshalJSON() ([]byte, error) {
-	if *ba == nil {
+func (ba ByteArray) MarshalJSON() ([]byte, error) {
+	if ba == nil {
 		return []byte("null"), nil
 	}
-	return []byte(fmt.Sprintf("\"\\\\x%s\"", hex.EncodeToString([]byte(*ba)))), nil
+	return []byte(fmt.Sprintf("\"\\\\x%s\"", hex.EncodeToString([]byte(ba)))), nil
 }
 
 func (ba *ByteArray) UnmarshalJSON(data []byte) error {
@@ -119,10 +131,10 @@ func (ba ByteArray) Value() (driver.Value, error) {
 	return []byte(ba), nil
 }
 
-//// XXX figure out why this doens't work
-//func (ba *ByteArray) Value() (driver.Value, error) {
+// // XXX figure out why this doens't work
+// func (ba *ByteArray) Value() (driver.Value, error) {
 //	return *ba, nil
-//}
+// }
 
 var _ driver.Valuer = (*ByteArray)(nil)
 
@@ -156,7 +168,7 @@ func (bi *BigInt) SetUint64(val uint64) *BigInt {
 	return bi
 }
 
-func (bi *BigInt) MarshalJSON() ([]byte, error) {
+func (bi BigInt) MarshalJSON() ([]byte, error) {
 	if bi.Int == nil {
 		return []byte("null"), nil
 	}
@@ -214,9 +226,8 @@ type Timestamp struct {
 
 const timestampFormat = `2006-01-02T15:04:05.999999999`
 
-// NewTimestamp returns a Timestamp initialized with the given time.
 func NewTimestamp(time time.Time) Timestamp {
-	return Timestamp{Time: time}
+	return Timestamp{Time: time.Round(0).UTC()}
 }
 
 func (ts Timestamp) MarshalJSON() ([]byte, error) {
@@ -320,7 +331,7 @@ func (tz *TimeZone) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	if err := tz.Parse(s); err != nil {
-		return fmt.Errorf("invalid timezone: %v", err)
+		return fmt.Errorf("invalid timezone: %w", err)
 	}
 	return nil
 }
@@ -335,7 +346,7 @@ func (tz *TimeZone) Scan(value interface{}) error {
 		return fmt.Errorf("not a string (%T)", value)
 	}
 	if err := tz.Parse(s); err != nil {
-		return fmt.Errorf("invalid timezone: %v", err)
+		return fmt.Errorf("invalid timezone: %w", err)
 	}
 	return nil
 }

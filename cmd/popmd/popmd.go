@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -59,6 +60,12 @@ var (
 			Help:         "address and port bssd prometheus listens on",
 			Print:        config.PrintAll,
 		},
+		"POPM_REMINE_THRESHOLD": config.Config{
+			Value:        &cfg.RetryMineThreshold,
+			DefaultValue: uint(0),
+			Help:         "the number of L2 Keystones behind the latest seen that we are willing to remine, this is handy for re-orgs",
+			Print:        config.PrintAll,
+		},
 	}
 )
 
@@ -103,10 +110,10 @@ func _main() error {
 
 	miner, err := popm.NewMiner(cfg)
 	if err != nil {
-		return fmt.Errorf("Failed to create POP miner: %v", err)
+		return fmt.Errorf("failed to create POP miner: %w", err)
 	}
-	if err := miner.Run(ctx); err != context.Canceled {
-		return fmt.Errorf("POP miner terminated: %v", err)
+	if err := miner.Run(ctx); !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("POP miner terminated: %w", err)
 	}
 
 	return nil

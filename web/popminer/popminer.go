@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +86,7 @@ func generateKey(this js.Value, args []js.Value) (any, error) {
 	}
 	privKey, err := dcrsecpk256k1.GeneratePrivateKey()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate secp256k1 private key: %v", err)
+		return nil, fmt.Errorf("failed to generate secp256k1 private key: %w", err)
 	}
 	btcAddress, err := btcutil.NewAddressPubKey(privKey.PubKey().SerializeCompressed(),
 		btcChainParams)
@@ -152,7 +153,7 @@ func runPopMiner(this js.Value, args []js.Value) (any, error) {
 	pm.miner, err = popm.NewMiner(cfg)
 	if err != nil {
 		globalMtx.Unlock()
-		return nil, fmt.Errorf("Failed to create POP miner: %v", err)
+		return nil, fmt.Errorf("failed to create POP miner: %w", err)
 	}
 	globalMtx.Unlock()
 
@@ -160,7 +161,7 @@ func runPopMiner(this js.Value, args []js.Value) (any, error) {
 	pm.wg.Add(1)
 	go func() {
 		defer pm.wg.Done()
-		if err := pm.miner.Run(pm.ctx); err != context.Canceled {
+		if err := pm.miner.Run(pm.ctx); !errors.Is(err, context.Canceled) {
 			globalMtx.Lock()
 			defer globalMtx.Unlock()
 			pm.err = err // Theoretically this can logic race unless we unset om
