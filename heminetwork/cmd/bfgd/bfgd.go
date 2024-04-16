@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -124,10 +125,10 @@ func _main() error {
 
 	server, err := bfg.NewServer(cfg)
 	if err != nil {
-		return fmt.Errorf("Failed to create BFG server: %v", err)
+		return fmt.Errorf("failed to create BFG server: %w", err)
 	}
-	if err := server.Run(ctx); err != context.Canceled {
-		return fmt.Errorf("BFG server terminated: %v", err)
+	if err = server.Run(ctx); !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("BFG server terminated: %w", err)
 	}
 
 	return nil

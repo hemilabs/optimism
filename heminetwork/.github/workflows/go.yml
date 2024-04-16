@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: "go-${{ github.workflow }}-${{ github.event.number || github.ref }}"
-  cancel-in-progress: "${{ github.event.action == 'push' || github.event.action == 'pull_request' }}"
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 permissions:
   contents: read
@@ -60,6 +60,7 @@ jobs:
         if: (success() || failure()) && steps.deps.outcome == 'success'
         env:
           PGTESTURI: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          HEMI_DOCKER_TESTS: "1"
         run: |
           make
           git diff --exit-code
