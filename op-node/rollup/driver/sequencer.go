@@ -99,15 +99,26 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		return nil, derive.NewCriticalError(fmt.Errorf("failed to retrieve PoP payout block prev keystone: %v", err))
 	}
 
+	envelope, err := d.l2Chain.PayloadByHash(ctx, payoutBlock.Hash)
+	if err != nil {
+		return nil, err
+	}
+
 	l2PayoutKeystone := &hemi.L2Keystone{
 		Version:            uint8(1),
 		L1BlockNumber:      uint32(payoutBlock.L1Origin.Number),
 		L2BlockNumber:      uint32(payoutBlock.Number),
 		ParentEPHash:       payoutBlock.ParentHash[:],
 		PrevKeystoneEPHash: payoutPrevKeystoneBlock.Hash[:],
-		StateRoot:          payoutBlock.StateRoot[:],
+		StateRoot:          envelope.ExecutionPayload.StateRoot[:],
 		EPHash:             payoutBlock.Hash[:],
 	}
+
+	d.log.Info("querying for keystone", "L1BlockNumber", l2PayoutKeystone.L1BlockNumber,
+		"L2BlockNumber", l2PayoutKeystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2PayoutKeystone.ParentEPHash),
+		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2PayoutKeystone.PrevKeystoneEPHash),
+		"StateRoot", fmt.Sprintf("%x", l2PayoutKeystone.StateRoot),
+		"EPHash", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
 
 	d.log.Info("Calculating PoP Payout", "block containing payout", newBlockHeight,
 		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))

@@ -193,7 +193,7 @@ func (p *Prefetcher) prefetch(ctx context.Context, hint string) error {
 		precompile := getPrecompiledContract(precompileAddress)
 
 		// KZG Point Evaluation precompile also verifies its input
-		result, err := precompile.Run(hintBytes[20:])
+		result, err := precompile.Run(hintBytes[20:], common.Hash{})
 		if err == nil {
 			result = append(precompileSuccess[:], result...)
 		} else {

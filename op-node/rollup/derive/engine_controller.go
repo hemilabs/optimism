@@ -10,11 +10,13 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/async"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/hemi"
 )
 
 type syncStatusEnum int
@@ -42,6 +44,7 @@ type ExecEngine interface {
 	ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error)
 	NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
+	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
 }
 
 type EngineController struct {
@@ -73,23 +76,33 @@ type EngineController struct {
 	buildingInfo eth.PayloadInfo
 	buildingSafe bool
 	safeAttrs    *AttributesWithParent
+
+	bssNotifierCh chan *bssNotification
+	bssClient     client.BssClient
 }
 
-func NewEngineController(engine ExecEngine, log log.Logger, metrics Metrics, rollupCfg *rollup.Config, syncMode sync.Mode) *EngineController {
+func NewEngineController(engine ExecEngine, log log.Logger, metrics Metrics, rollupCfg *rollup.Config, syncMode sync.Mode, bssClient client.BssClient) *EngineController {
 	syncStatus := syncStatusCL
 	if syncMode == sync.ELSync {
 		syncStatus = syncStatusWillStartEL
 	}
 
-	return &EngineController{
-		engine:     engine,
-		log:        log,
-		metrics:    metrics,
-		rollupCfg:  rollupCfg,
-		syncMode:   syncMode,
-		syncStatus: syncStatus,
-		clock:      clock.SystemClock,
+	e := &EngineController{
+		engine:        engine,
+		log:           log,
+		metrics:       metrics,
+		rollupCfg:     rollupCfg,
+		syncMode:      syncMode,
+		syncStatus:    syncStatus,
+		clock:         clock.SystemClock,
+		bssNotifierCh: make(chan *bssNotification, 10),
+		bssClient:     bssClient,
 	}
+
+	// XXX see if there is a better place to start this goroutine.
+	go e.bssNotifier()
+
+	return e
 }
 
 // State Getters
@@ -190,6 +203,32 @@ func (e *EngineController) StartPayload(ctx context.Context, parent eth.L2BlockR
 }
 
 func (e *EngineController) ConfirmPayload(ctx context.Context, agossip async.AsyncGossiper, sequencerConductor conductor.SequencerConductor) (out *eth.ExecutionPayloadEnvelope, errTyp BlockInsertionErrType, err error) {
+	// Do this work before calling Confirm Payload, so building fails if previous keystone is not found
+
+	l2BlockRef, _, _ := e.BuildingPayload()
+
+	prevKeystoneHeight := int64(l2BlockRef.Number-(l2BlockRef.Number%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
+	if l2BlockRef.Number%hemi.KeystoneHeaderPeriod != 0 {
+		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
+	}
+
+	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockRef.Number, prevKeystoneHeight))
+
+	var prevKeystoneRef *eth.L2BlockRef = nil
+
+	if prevKeystoneHeight > 0 {
+		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+		if err != nil {
+			return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+		}
+
+		ref, err := PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		if err != nil {
+			return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+		}
+		prevKeystoneRef = &ref
+	}
+
 	// don't create a BlockInsertPrestateErr if we have a cached gossip payload
 	if e.buildingInfo == (eth.PayloadInfo{}) && agossip.Get() == nil {
 		return nil, BlockInsertPrestateErr, fmt.Errorf("cannot complete payload building: not currently building a payload")
@@ -236,6 +275,23 @@ func (e *EngineController) ConfirmPayload(ctx context.Context, agossip async.Asy
 	}
 
 	e.resetBuildingState()
+
+	e.log.Info("Confirmed new payload, sending notification to BSS channel", "payload number", envelope.ExecutionPayload.BlockNumber)
+
+	bn := &bssNotification{
+		unsafeL2: *envelope.ExecutionPayload,
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
+	select {
+	case e.bssNotifierCh <- bn:
+	default:
+		e.log.Warn("BSS notifier channel full, dropping event...")
+	}
+
 	return envelope, BlockInsertOK, nil
 }
 
@@ -464,4 +520,70 @@ func (e *EngineController) TryBackupUnsafeReorg(ctx context.Context) (bool, erro
 // ResetBuildingState implements LocalEngineControl.
 func (e *EngineController) ResetBuildingState() {
 	e.resetBuildingState()
+}
+
+func (e *EngineController) bssNotifier() {
+	ctx := context.Background()
+	for {
+		bn := <-e.bssNotifierCh
+
+		var l1OriginNumber uint64
+
+		unsafeL2BlockRef, err := PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+		if err != nil {
+			e.log.Warn(err.Error())
+		} else {
+			l1OriginNumber = unsafeL2BlockRef.L1Origin.Number
+		}
+
+		// Keystone based on L2 block number
+		if bn.unsafeL2.BlockNumber == 0 || bn.unsafeL2.BlockNumber%hemi.KeystoneHeaderPeriod != 0 {
+			continue
+		}
+
+		e.log.Info(fmt.Sprintf("Sending BSS keystone notification for L2 block %v with L1 origin %v",
+			bn.unsafeL2.BlockNumber, l1OriginNumber))
+
+		if err := e.notifyBSSKeystone(ctx, bn); err != nil {
+			e.log.Warn("Failed to notify BSS of keystone", "err", err)
+			continue
+		}
+		e.log.Info("BSS notified of keystone")
+	}
+}
+
+func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
+	prevKeystoneHash := [common.HashLength]byte{}
+
+	if &bn.unsafeL2PrevKeystone != nil {
+		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
+	}
+
+	unsafeL2BlockRef, err := PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+	if err != nil {
+		return err
+	}
+
+	l2Keystone := &hemi.L2Keystone{
+		Version:            0x01,
+		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
+		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
+		ParentEPHash:       unsafeL2BlockRef.ParentHash[:],
+		PrevKeystoneEPHash: prevKeystoneHash[:],
+		StateRoot:          bn.unsafeL2.StateRoot[:],
+		EPHash:             unsafeL2BlockRef.Hash[:],
+	}
+
+	e.log.Info("Sending notification to BSS of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
+		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
+		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
+		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
+		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
+
+	err = e.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
