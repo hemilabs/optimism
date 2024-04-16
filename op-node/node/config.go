@@ -24,7 +24,6 @@ type Config struct {
 	BSS    client.BssEndpointConfig
 	L1     L1EndpointSetup
 	L2     L2EndpointSetup
-	L2Sync L2SyncEndpointSetup
 
 	Driver driver.Config
 

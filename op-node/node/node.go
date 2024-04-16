@@ -146,7 +146,7 @@ func (n *OpNode) init(ctx context.Context, cfg *Config, snapshotLog log.Logger) 
 		return fmt.Errorf("failed to init the P2P stack: %w", err)
 	}
 	// Only expose the server at the end, ensuring all RPC backend components are initialized.
-	if err := n.initRPCServer(cfg); err != nil {
+	if err := n.initRPCServer(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the RPC server: %w", err)
 	}
 	if err := n.initMetricsServer(cfg); err != nil {
@@ -427,24 +427,8 @@ func (n *OpNode) initBSSConnection(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
-func (n *OpNode) initRPCSync(ctx context.Context, cfg *Config) error {
-	rpcSyncClient, rpcCfg, err := cfg.L2Sync.Setup(ctx, n.log, &cfg.Rollup)
-	if err != nil {
-		return fmt.Errorf("failed to setup L2 execution-engine RPC client for backup sync: %w", err)
-	}
-	if rpcSyncClient == nil { // if no RPC client is configured to sync from, then don't add the RPC sync client
-		return nil
-	}
-	syncClient, err := sources.NewSyncClient(n.OnUnsafeL2Payload, rpcSyncClient, n.log, n.metrics.L2SourceCache, rpcCfg)
-	if err != nil {
-		return fmt.Errorf("failed to create sync client: %w", err)
-	}
-	n.rpcSync = syncClient
-	return nil
-}
-
 func (n *OpNode) initRPCServer(ctx context.Context, cfg *Config) error {
-	server, err := newRPCServer(&cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.safeDB, n.log, n.appVersion, n.metrics, n.bssClient)
+	server, err := newRPCServer(ctx, &cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.safeDB, n.log, n.appVersion, n.metrics, n.bssClient)
 	if err != nil {
 		return err
 	}

@@ -161,7 +161,7 @@ func (c *ecrecoverOracle) RequiredGas(input []byte) uint64 {
 	return c.Orig.RequiredGas(input)
 }
 
-func (c *ecrecoverOracle) Run(input []byte) ([]byte, error) {
+func (c *ecrecoverOracle) Run(input []byte, h common.Hash) ([]byte, error) {
 	// Modification note: the L1 precompile behavior may change, but not in incompatible ways.
 	// We want to enforce the subset that represents the EVM behavior activated in L2.
 	// Below is a copy of the Cancun behavior. L1 might expand on that at a later point.
@@ -221,7 +221,7 @@ var (
 	errInvalidBn256PairingCheck = errors.New("invalid bn256Pairing check")
 )
 
-func (b *bn256PairingOracle) Run(input []byte) ([]byte, error) {
+func (b *bn256PairingOracle) Run(input []byte, h common.Hash) ([]byte, error) {
 	// Handle some corner cases cheaply
 	if len(input)%192 > 0 {
 		return nil, errBadPairingInput
@@ -273,7 +273,7 @@ var (
 )
 
 // Run executes the point evaluation precompile.
-func (b *kzgPointEvaluationOracle) Run(input []byte) ([]byte, error) {
+func (b *kzgPointEvaluationOracle) Run(input []byte, h common.Hash) ([]byte, error) {
 	// Modification note: the L1 precompile behavior may change, but not in incompatible ways.
 	// We want to enforce the subset that represents the EVM behavior activated in L2.
 	// Below is a copy of the Cancun behavior. L1 might expand on that at a later point.

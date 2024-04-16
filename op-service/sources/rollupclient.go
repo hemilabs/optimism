@@ -2,7 +2,6 @@ package sources
 
 import (
 	"context"
-	"github.com/hemilabs/heminetwork/hemi"
 
 	"golang.org/x/exp/slog"
 
@@ -49,24 +48,6 @@ func (r *RollupClient) RollupConfig(ctx context.Context) (*rollup.Config, error)
 func (r *RollupClient) Version(ctx context.Context) (string, error) {
 	var output string
 	err := r.rpc.CallContext(ctx, &output, "optimism_version")
-	return output, err
-}
-
-func (r *RollupClient) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones uint32) ([]hemi.L2BTCFinality, error) {
-	var output []hemi.L2BTCFinality
-	err := r.rpc.CallContext(ctx, &output, "optimism_btcFinalityByRecentKeystones", numRecentKeystones)
-	return output, err
-}
-
-func (r *RollupClient) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) ([]hemi.L2BTCFinality, error) {
-	var output []hemi.L2BTCFinality
-	err := r.rpc.CallContext(ctx, &output, "optimism_btcFinalityByKeystones", l2Keystones)
-	return output, err
-}
-
-func (r *RollupClient) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) ([]hemi.L2BTCFinality, error) {
-	var output []hemi.L2BTCFinality
-	err := r.rpc.CallContext(ctx, &output, "optimism_btcFinalityByBlockHash", blockHash)
 	return output, err
 }
 

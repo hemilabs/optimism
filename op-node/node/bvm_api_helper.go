@@ -3,9 +3,10 @@ package node
 import (
 	"context"
 	"fmt"
-	"github.com/hemilabs/heminetwork/hemi"
+
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/hemilabs/heminetwork/hemi"
 )
 
 func getKeystoneProvidingFinality(blockNum uint64) (uint64, error) {
@@ -29,7 +30,7 @@ func getTipHeight(ctx context.Context, driver driverClient) (uint64, error) {
 	return syncStatus.UnsafeL2.Number, nil
 }
 
-func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, bssClient client.BssClient) ([]hemi.L2BTCFinality, error) {
+func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, stateRoot []byte, driver driverClient, bssClient client.BssClient) ([]hemi.L2BTCFinality, error) {
 	nextKeystoneHeight, err := getKeystoneProvidingFinality(blockNum)
 	if err != nil {
 		return nil, err
@@ -66,7 +67,7 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 		L2BlockNumber:      uint32(nextKeystone.Number),
 		ParentEPHash:       nextKeystone.ParentHash[:],
 		PrevKeystoneEPHash: prevKeystoneHash[:],
-		StateRoot:          nextKeystone.StateRoot[:],
+		StateRoot:          stateRoot,
 		EPHash:             nextKeystone.Hash[:],
 	}
 
@@ -96,5 +97,7 @@ func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Cl
 			"%d is %x", blockHash, blockNum, blockNum, blockHash)
 	}
 
-	return getBTCFinalityForBlockNum(ctx, blockNum, driver, bssClient)
+	stateRoot := block.Root()
+
+	return getBTCFinalityForBlockNum(ctx, blockNum, stateRoot[:], driver, bssClient)
 }

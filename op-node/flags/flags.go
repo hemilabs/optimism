@@ -460,8 +460,6 @@ var optionalFlags = []cli.Flag{
 	SyncModeFlag,
 	RPCListenAddr,
 	RPCListenPort,
-	RollupConfig,
-	Network,
 	BSSNodeAddr,
 	L1TrustRPC,
 	L1RPCProviderKind,
