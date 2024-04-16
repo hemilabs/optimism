@@ -1,3 +1,7 @@
+// Copyright (c) 2024 Hemi Labs, Inc.
+// Use of this source code is governed by the MIT License,
+// which can be found in the LICENSE file.
+
 package e2e
 
 import (
@@ -16,14 +20,15 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+	"nhooyr.io/websocket"
+
 	"github.com/hemilabs/heminetwork/api/bssapi"
 	"github.com/hemilabs/heminetwork/api/protocol"
 	"github.com/hemilabs/heminetwork/bitcoin"
 	"github.com/hemilabs/heminetwork/ethereum"
 	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-	"nhooyr.io/websocket"
 )
 
 const (
@@ -88,7 +93,7 @@ func TestFullNetwork(t *testing.T) {
 			"-rpcuser=user",
 			"-rpcpassword=password",
 			"generatetoaddress",
-			"300", // need to generate a lot for greater chance to not spend coinbase
+			"200", // need to generate a lot for greater chance to not spend coinbase
 			btcAddress.EncodeAddress(),
 		})
 	if err != nil {
@@ -212,22 +217,27 @@ func TestFullNetwork(t *testing.T) {
 		}
 	}()
 
+	l2KeystoneRequest := bssapi.L2KeystoneRequest{
+		L2Keystone: l2Keystone,
+	}
+
+	err = bssapi.Write(ctx, bws.conn, "someid", l2KeystoneRequest)
+	if err != nil {
+		t.Logf("error: %s", err)
+		return
+	}
+
+	// give time for the L2 Keystone to propogate to bitcoin tx mempool
+	select {
+	case <-time.After(10 * time.Second):
+	case <-ctx.Done():
+		t.Logf(ctx.Err().Error())
+		return
+	}
+
 	go func() {
-		// create a new block every second, then view pop payouts and finalities
-
-		firstL2Keystone := hemi.L2KeystoneAbbreviate(l2Keystone).Serialize()
-
 		for {
-			l2KeystoneRequest := bssapi.L2KeystoneRequest{
-				L2Keystone: l2Keystone,
-			}
-
-			err = bssapi.Write(ctx, bws.conn, "someid", l2KeystoneRequest)
-			if err != nil {
-				t.Logf("error: %s", err)
-				return
-			}
-
+			// generate a new btc block, this should include the l2 keystone
 			err = runBitcoinCommand(ctx,
 				t,
 				bitcoindContainer,
@@ -246,21 +256,18 @@ func TestFullNetwork(t *testing.T) {
 				return
 			}
 
-			l2Keystone.L1BlockNumber++
-			l2Keystone.L2BlockNumber++
-
-			time.Sleep(1 * time.Second)
-
-			err = bssapi.Write(ctx, bws.conn, "someotherid", bssapi.PopPayoutsRequest{
-				L2BlockForPayout: firstL2Keystone[:],
-			})
-			if err != nil {
-				t.Logf("error: %s", err)
+			// give time for bfg to see the new block
+			select {
+			case <-time.After(10 * time.Second):
+			case <-ctx.Done():
+				t.Log(ctx.Err())
 				return
 			}
 
-			err = bssapi.Write(ctx, bws.conn, "someotheridz", bssapi.BTCFinalityByRecentKeystonesRequest{
-				NumRecentKeystones: 100,
+			// ensure the l2 keystone is in the chain
+			ks := hemi.L2KeystoneAbbreviate(l2Keystone).Serialize()
+			err = bssapi.Write(ctx, bws.conn, "someotherid", bssapi.PopPayoutsRequest{
+				L2BlockForPayout: ks[:],
 			})
 			if err != nil {
 				t.Logf("error: %s", err)
@@ -306,9 +313,12 @@ func createElectrumx(ctx context.Context, t *testing.T, bitcoindEndpoint string)
 	req := testcontainers.ContainerRequest{
 		Image: "lukechilds/electrumx",
 		Env: map[string]string{
-			"DAEMON_URL": bitcoindEndpoint,
-			"COIN":       "BitcoinSegwit",
-			"NET":        "regtest",
+			"DAEMON_URL":      bitcoindEndpoint,
+			"COIN":            "Bitcoin",
+			"COST_HARD_LIMIT": "0",
+			"COST_SOFT_LIMIT": "0",
+			"MAX_SEND":        "8388608",
+			"NET":             "regtest",
 		},
 		ExposedPorts: []string{"50001/tcp"},
 		WaitingFor:   wait.ForLog("INFO:Daemon:daemon #1").WithPollInterval(1 * time.Second),
@@ -379,7 +389,7 @@ func createBfg(ctx context.Context, t *testing.T, pgUri string, electrumxAddr st
 	req := testcontainers.ContainerRequest{
 		Env: map[string]string{
 			"BFG_POSTGRES_URI":     pgUri,
-			"BFG_BTC_START_HEIGHT": "100",
+			"BFG_BTC_START_HEIGHT": "1",
 			"BFG_EXBTC_ADDRESS":    electrumxAddr,
 			"BFG_LOG_LEVEL":        "TRACE",
 			"BFG_PUBLIC_ADDRESS":   ":8383",

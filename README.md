@@ -53,6 +53,8 @@ git clone https://github.com/hemilabs/heminetwork.git
 Then build:
 
 ```shell
+cd heminetwork
+make deps
 make
 ```
 
@@ -120,14 +122,36 @@ bssd has a few crucial requirements to run:
 Prerequisites: `docker`
 
 To run the full network locally, you can run the following.  Note that this will create
-L2Keytones and BTC Blocks at a high rate.  You can modify these in `./e2e/mocktimism/mocktimism.go`
-or `./e2e/docker-compose.yml`.
+L2Keytones and BTC Blocks at a high rate.  
 
 note: the `--build` flag is optional if you want to rebuild your code
 
 ```
-docker-compose -f ./e2e/docker-compose.yml up --build
+docker compose -f ./e2e/docker-compose.yml up --build
 ```
+
+This will take a while upon first build, but following builds should be cached.  
+When rebuilding, popmd, bssd, and bfgd will rebuild (due to `COPY` command breaking
+ the cache).  However if you want to break the cache for the op-stack, use the following args:
+
+For op-geth + optimism (op-node)
+```
+docker compose -f ./e2e/docker-compose.yml build --build-arg OP_GETH_CACHE_BREAK="$(date)"
+```
+
+For optimism cache break only:
+```
+docker compose -f ./e2e/docker-compose.yml build --build-arg OPTIMISM_CACHE_BREAK="$(date)"
+```
+
+**IMPORTANT:** make sure you run the following to tear down, this will remove
+data and give you a fresh start
+
+```
+docker compose -f ./e2e/docker-compose.yml down -v --remove-orphans
+```
+
+
 
 ### Running the full network tests
 

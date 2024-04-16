@@ -1,17 +1,24 @@
+// Copyright (c) 2024 Hemi Labs, Inc.
+// Use of this source code is governed by the MIT License,
+// which can be found in the LICENSE file.
+
 package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/juju/loggo"
+	"nhooyr.io/websocket"
+
 	"github.com/hemilabs/heminetwork/api/bssapi"
 	"github.com/hemilabs/heminetwork/api/protocol"
 	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/juju/loggo"
-	"nhooyr.io/websocket"
 )
 
 const logLevel = "INFO"
@@ -89,7 +96,7 @@ func main() {
 			l2Keystone.L1BlockNumber++
 			l2Keystone.L2BlockNumber++
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Duration(l2BlockCreationSeconds()) * time.Second)
 
 			err = bssapi.Write(ctx, bws.conn, "someotherid", bssapi.PopPayoutsRequest{
 				L2BlockForPayout: firstL2Keystone[:],
@@ -121,4 +128,18 @@ func fillOutBytes(prefix string, size int) []byte {
 	}
 
 	return result
+}
+
+func l2BlockCreationSeconds() int {
+	v := os.Getenv("MOCKTIMISM_L2K_RATE_SECONDS")
+	if v == "" {
+		return 1
+	}
+
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		panic(fmt.Sprintf("invalid value for seconds: %s", v))
+	}
+
+	return i
 }

@@ -42,9 +42,15 @@ const (
 	logLevel = "INFO"
 
 	promSubsystem = "popm_service" // Prometheus
+
+	l2KeystonesMaxSize = 10
 )
 
-var log = loggo.GetLogger("popm")
+var (
+	log = loggo.GetLogger("popm")
+
+	l2KeystoneRetryTimeout = 15 * time.Second
+)
 
 func init() {
 	loggo.ConfigureLoggers(logLevel)
@@ -65,6 +71,8 @@ type Config struct {
 	LogLevel string
 
 	PrometheusListenAddress string
+
+	RetryMineThreshold uint
 }
 
 func NewDefaultConfig() *Config {
@@ -77,6 +85,11 @@ func NewDefaultConfig() *Config {
 type bfgCmd struct {
 	msg any
 	ch  chan any
+}
+
+type L2KeystoneProcessingContainer struct {
+	l2Keystone         hemi.L2Keystone
+	requiresProcessing bool
 }
 
 type Miner struct {
@@ -94,13 +107,16 @@ type Miner struct {
 	btcAddress     *btcutil.AddressPubKeyHash
 
 	lastKeystone *hemi.L2Keystone
-	keystoneCh   chan *hemi.L2Keystone
 
 	// Prometheus
 	isRunning bool
 
 	bfgWg    sync.WaitGroup
 	bfgCmdCh chan bfgCmd // commands to send to bfg
+
+	mineNowCh chan struct{}
+
+	l2Keystones map[string]L2KeystoneProcessingContainer
 }
 
 func NewMiner(cfg *Config) (*Miner, error) {
@@ -110,10 +126,11 @@ func NewMiner(cfg *Config) (*Miner, error) {
 
 	m := &Miner{
 		cfg:            cfg,
-		keystoneCh:     make(chan *hemi.L2Keystone, 3),
 		bfgCmdCh:       make(chan bfgCmd, 10),
 		holdoffTimeout: 5 * time.Second,
 		requestTimeout: 5 * time.Second,
+		mineNowCh:      make(chan struct{}, 1),
+		l2Keystones:    make(map[string]L2KeystoneProcessingContainer, l2KeystonesMaxSize),
 	}
 
 	switch strings.ToLower(cfg.BTCChainName) {
@@ -151,6 +168,10 @@ func (m *Miner) bitcoinBalance(ctx context.Context, scriptHash []byte) (uint64, 
 		return 0, 0, fmt.Errorf("not a BitcoinBalanceResponse %T", res)
 	}
 
+	if bResp.Error != nil {
+		return 0, 0, bResp.Error
+	}
+
 	return bResp.Confirmed, bResp.Unconfirmed, nil
 }
 
@@ -166,6 +187,10 @@ func (m *Miner) bitcoinBroadcast(ctx context.Context, tx []byte) ([]byte, error)
 	bbResp, ok := res.(*bfgapi.BitcoinBroadcastResponse)
 	if !ok {
 		return nil, fmt.Errorf("not a bitcoin broadcast response %T", res)
+	}
+
+	if bbResp.Error != nil {
+		return nil, bbResp.Error
 	}
 
 	return bbResp.TXID, nil
@@ -184,6 +209,10 @@ func (m *Miner) bitcoinHeight(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("not a BitcoinIfnoResponse")
 	}
 
+	if biResp.Error != nil {
+		return 0, biResp.Error
+	}
+
 	return biResp.Height, nil
 }
 
@@ -200,6 +229,10 @@ func (m *Miner) bitcoinUTXOs(ctx context.Context, scriptHash []byte) ([]*bfgapi.
 	buResp, ok := res.(*bfgapi.BitcoinUTXOsResponse)
 	if !ok {
 		return nil, fmt.Errorf("not a buResp %T", res)
+	}
+
+	if buResp.Error != nil {
+		return nil, buResp.Error
 	}
 
 	return buResp.UTXOs, nil
@@ -246,7 +279,7 @@ func createTx(l2Keystone *hemi.L2Keystone, btcHeight uint64, utxo *bfgapi.Bitcoi
 	popTx := pop.TransactionL2{L2Keystone: aks}
 	popTxOpReturn, err := popTx.EncodeToOpReturn()
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode PoP transaction: %v", err)
+		return nil, fmt.Errorf("failed to encode PoP transaction: %w", err)
 	}
 	btx.TxOut = append(btx.TxOut, btcwire.NewTxOut(0, popTxOpReturn))
 
@@ -262,12 +295,12 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 
 	btcHeight, err := m.bitcoinHeight(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get Bitcoin height: %v", err)
+		return fmt.Errorf("failed to get Bitcoin height: %w", err)
 	}
 
 	payToScript, err := btctxscript.PayToAddrScript(m.btcAddress)
 	if err != nil {
-		return fmt.Errorf("failed to get pay to address script: %v", err)
+		return fmt.Errorf("failed to get pay to address script: %w", err)
 	}
 	if len(payToScript) != 25 {
 		return fmt.Errorf("incorrect length for pay to public key script (%d != 25)", len(payToScript))
@@ -282,7 +315,7 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 	// Check balance.
 	confirmed, unconfirmed, err := m.bitcoinBalance(ctx, scriptHash[:])
 	if err != nil {
-		return fmt.Errorf("failed to get Bitcoin balance: %v", err)
+		return fmt.Errorf("failed to get Bitcoin balance: %w", err)
 	}
 	log.Tracef("Bitcoin balance for miner is: %v confirmed, %v unconfirmed", confirmed, unconfirmed)
 
@@ -290,7 +323,7 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 	log.Tracef("Looking for UTXOs for script hash %v", scriptHash)
 	utxos, err := m.bitcoinUTXOs(ctx, scriptHash[:])
 	if err != nil {
-		return fmt.Errorf("failed to get Bitcoin UTXOs: %v", err)
+		return fmt.Errorf("failed to get Bitcoin UTXOs: %w", err)
 	}
 
 	log.Tracef("Found %d UTXOs at Bitcoin height %d", len(utxos), btcHeight)
@@ -301,7 +334,7 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 
 	utxos, err = pickUTXOs(utxos, feeAmount)
 	if err != nil {
-		return fmt.Errorf("failed to pick UTXOs: %v", err)
+		return fmt.Errorf("failed to pick UTXOs: %w", err)
 	}
 
 	if len(utxos) != 1 {
@@ -323,7 +356,7 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 	// broadcast tx
 	var buf bytes.Buffer
 	if err := btx.Serialize(&buf); err != nil {
-		return fmt.Errorf("failed to serialize Bitcoin transaction: %v", err)
+		return fmt.Errorf("failed to serialize Bitcoin transaction: %w", err)
 	}
 	txb := buf.Bytes()
 
@@ -331,11 +364,11 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 
 	txh, err := m.bitcoinBroadcast(ctx, txb)
 	if err != nil {
-		return fmt.Errorf("failed to broadcast PoP transaction: %v", err)
+		return fmt.Errorf("failed to broadcast PoP transaction: %w", err)
 	}
 	txHash, err := btcchainhash.NewHash(txh)
 	if err != nil {
-		return fmt.Errorf("failed to create BTC hash from transaction hash: %v", err)
+		return fmt.Errorf("failed to create BTC hash from transaction hash: %w", err)
 	}
 
 	log.Infof("Successfully broadcast PoP transaction to Bitcoin with TX hash %v", txHash)
@@ -372,6 +405,10 @@ func (m *Miner) L2Keystones(ctx context.Context, count uint64) (*bfgapi.L2Keysto
 		return nil, fmt.Errorf("not a L2KeystonesResponse: %T", res)
 	}
 
+	if kr.Error != nil {
+		return nil, kr.Error
+	}
+
 	return kr, nil
 }
 
@@ -395,6 +432,10 @@ func (m *Miner) BitcoinBalance(ctx context.Context, scriptHash string) (*bfgapi.
 		return nil, fmt.Errorf("not a BitcoinBalanceResponse: %T", res)
 	}
 
+	if br.Error != nil {
+		return nil, br.Error
+	}
+
 	return br, nil
 }
 
@@ -407,6 +448,10 @@ func (m *Miner) BitcoinInfo(ctx context.Context) (*bfgapi.BitcoinInfoResponse, e
 	ir, ok := res.(*bfgapi.BitcoinInfoResponse)
 	if !ok {
 		return nil, fmt.Errorf("not a BitcoinInfoResponse: %T", res)
+	}
+
+	if ir.Error != nil {
+		return nil, ir.Error
 	}
 
 	return ir, nil
@@ -432,7 +477,39 @@ func (m *Miner) BitcoinUTXOs(ctx context.Context, scriptHash string) (*bfgapi.Bi
 		return nil, fmt.Errorf("not a BitcoinUTXOsResponse: %T", res)
 	}
 
+	if ir.Error != nil {
+		return nil, ir.Error
+	}
+
 	return ir, nil
+}
+
+func (m *Miner) mineKnownKeystones(ctx context.Context) {
+	copies := m.l2KeystonesForProcessing()
+
+	for _, e := range copies {
+		serialized := hemi.L2KeystoneAbbreviate(e).Serialize()
+		key := hex.EncodeToString(serialized[:])
+
+		log.Infof("Received keystone for mining with height %v...", e.L2BlockNumber)
+
+		err := m.mineKeystone(ctx, &e)
+		if err != nil {
+			log.Errorf("Failed to mine keystone: %v", err)
+		}
+
+		m.mtx.Lock()
+
+		if v, ok := m.l2Keystones[key]; ok {
+			// if there is an error, mark keystone as "requires processing" so
+			// potentially gets retried, otherwise set this to false to
+			// nothing tries to process it
+			v.requiresProcessing = err != nil
+			m.l2Keystones[key] = v
+		}
+
+		m.mtx.Unlock()
+	}
 }
 
 func (m *Miner) mine(ctx context.Context) {
@@ -441,18 +518,18 @@ func (m *Miner) mine(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case ks := <-m.keystoneCh:
-			log.Tracef("Received new keystone header for mining with height %v...", ks.L2BlockNumber)
-			if err := m.mineKeystone(ctx, ks); err != nil {
-				log.Errorf("Failed to mine keystone: %v", err)
-			}
+		case <-m.mineNowCh:
+			go m.mineKnownKeystones(ctx)
+		case <-time.After(l2KeystoneRetryTimeout):
+			go m.mineKnownKeystones(ctx)
 		}
 	}
 }
 
 func (m *Miner) queueKeystoneForMining(keystone *hemi.L2Keystone) {
+	m.AddL2Keystone(*keystone)
 	select {
-	case m.keystoneCh <- keystone:
+	case m.mineNowCh <- struct{}{}:
 	default:
 	}
 }
@@ -486,6 +563,12 @@ func (m *Miner) processReceivedKeystones(ctx context.Context, l2Keystones []hemi
 			m.lastKeystone = &tmp
 
 			m.queueKeystoneForMining(&tmp)
+		} else if m.cfg.RetryMineThreshold > 0 && (m.lastKeystone.L2BlockNumber-kh.L2BlockNumber) <= uint32(m.cfg.RetryMineThreshold)*hemi.KeystoneHeaderPeriod {
+			log.Tracef("received keystone older than latest, but within threshold, will remine l2 block number = %d", kh.L2BlockNumber)
+			tmp := kh
+			m.queueKeystoneForMining(&tmp)
+		} else {
+			log.Warningf("refusing to mine keystone with height %d, highest received: %d", kh.L2BlockNumber, m.lastKeystone.L2BlockNumber)
 		}
 	}
 }
@@ -540,6 +623,10 @@ func (m *Miner) checkForKeystones(ctx context.Context) error {
 	ghkrResp, ok := res.(*bfgapi.L2KeystonesResponse)
 	if !ok {
 		return fmt.Errorf("not an L2KeystonesResponse")
+	}
+
+	if ghkrResp.Error != nil {
+		return ghkrResp.Error
 	}
 
 	log.Tracef("Got response with %v keystones", len(ghkrResp.L2Keystones))
@@ -622,7 +709,7 @@ func (m *Miner) handleBFGWebsocketRead(ctx context.Context, conn *protocol.Conn)
 			case <-time.After(m.holdoffTimeout):
 			}
 			// XXX this is too noisy
-			log.Errorf("Retrying connectiong to BFG")
+			log.Errorf("Retrying connecting to BFG")
 			continue
 		}
 		switch cmd {
@@ -784,4 +871,76 @@ func (m *Miner) Run(pctx context.Context) error {
 	log.Infof("pop miner service clean shutdown")
 
 	return err
+}
+
+func (m *Miner) AddL2Keystone(val hemi.L2Keystone) {
+	serialized := hemi.L2KeystoneAbbreviate(val).Serialize()
+	key := hex.EncodeToString(serialized[:])
+
+	toInsert := L2KeystoneProcessingContainer{
+		l2Keystone:         val,
+		requiresProcessing: true,
+	}
+
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	// keystone already exists, no-op
+	if _, ok := m.l2Keystones[key]; ok {
+		return
+	}
+
+	if len(m.l2Keystones) < l2KeystonesMaxSize {
+		m.l2Keystones[key] = toInsert
+		return
+	}
+
+	var smallestL2BlockNumber uint32
+	var smallestKey string
+
+	for k, v := range m.l2Keystones {
+		if smallestL2BlockNumber == 0 || v.l2Keystone.L2BlockNumber < smallestL2BlockNumber {
+			smallestL2BlockNumber = v.l2Keystone.L2BlockNumber
+			smallestKey = k
+		}
+	}
+
+	// do not insert an L2Keystone that is older than all of the ones already
+	// added
+	if val.L2BlockNumber < smallestL2BlockNumber {
+		return
+	}
+
+	delete(m.l2Keystones, smallestKey)
+
+	m.l2Keystones[key] = toInsert
+}
+
+// l2KeystonesForProcessing creates copies of the l2 keystones, set them to
+// "processing", then returns the copies with the newest first
+func (m *Miner) l2KeystonesForProcessing() []hemi.L2Keystone {
+	copies := make([]hemi.L2Keystone, 0)
+
+	m.mtx.Lock()
+
+	for i, v := range m.l2Keystones {
+		// if we're currently processing, or we've already processed the keystone
+		// then don't process
+		if !v.requiresProcessing {
+			continue
+		}
+
+		// since we're about to process, mark this as false so others don't
+		// process the same
+		v.requiresProcessing = false
+		m.l2Keystones[i] = v
+		copies = append(copies, v.l2Keystone)
+	}
+	m.mtx.Unlock()
+
+	slices.SortFunc(copies, func(a, b hemi.L2Keystone) int {
+		return int(b.L2BlockNumber) - int(a.L2BlockNumber)
+	})
+
+	return copies
 }

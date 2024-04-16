@@ -5,19 +5,18 @@
 package electrumx
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strings"
-	"sync"
+	"time"
 
 	btcchainhash "github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/juju/loggo"
+	"github.com/sethvargo/go-retry"
 
 	"github.com/hemilabs/heminetwork/bitcoin"
 )
@@ -34,6 +33,22 @@ type JSONRPCRequest struct {
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	ID      uint64          `json:"id"`
+}
+
+// NewJSONRPCRequest creates a new JSONRPCRequest.
+func NewJSONRPCRequest(id uint64, method string, params any) *JSONRPCRequest {
+	req := &JSONRPCRequest{
+		JSONRPC: "2.0",
+		Method:  method,
+		ID:      id,
+	}
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+		}
+		req.Params = b
+	}
+	return req
 }
 
 type JSONRPCResponse struct {
@@ -102,71 +117,65 @@ var (
 
 // Client implements an electrumx JSON RPC client.
 type Client struct {
-	address string
-	id      uint64
-	mtx     sync.Mutex
+	connPool *connPool
 }
+
+var log = loggo.GetLogger("electrumx")
+
+const (
+	clientInitialConnections = 2
+	clientMaximumConnections = 5
+)
 
 // NewClient returns an initialised electrumx client.
 func NewClient(address string) (*Client, error) {
-	return &Client{
-		address: address,
-	}, nil
+	c := &Client{}
+
+	// The address may be empty during tests, ignore empty addresses.
+	if address != "" {
+		pool, err := newConnPool("tcp", address,
+			clientInitialConnections, clientMaximumConnections)
+		if err != nil {
+			return nil, fmt.Errorf("new connection pool: %w", err)
+		}
+		c.connPool = pool
+	}
+
+	return c, nil
 }
 
 func (c *Client) call(ctx context.Context, method string, params, result any) error {
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", c.address)
-	if err != nil {
-		return fmt.Errorf("failed to dial electrumx: %v", err)
+	if c.connPool == nil {
+		// connPool may be nil if the address given to NewClient is empty.
+		return errors.New("connPool is nil")
 	}
-	defer conn.Close()
 
-	c.mtx.Lock()
-	c.id++
-	id := c.id
-	c.mtx.Unlock()
-
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  method,
-		ID:      id,
-	}
-	if params != any(nil) {
-		b, err := json.Marshal(params)
+	backoff := retry.WithJitter(250*time.Millisecond,
+		retry.WithMaxRetries(5, retry.NewExponential(100*time.Millisecond)))
+	return retry.Do(ctx, backoff, func(ctx context.Context) error {
+		conn, err := c.connPool.acquireConn()
 		if err != nil {
+			return retry.RetryableError(fmt.Errorf("acquire connection: %w", err))
 		}
-		req.Params = b
-	}
-	b, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %v", err)
-	}
-	b = append(b, byte('\n'))
-	if _, err := io.Copy(conn, bytes.NewReader(b)); err != nil {
-		return fmt.Errorf("failed to write request: %v", err)
-	}
 
-	reader := bufio.NewReader(conn)
-	b, err = reader.ReadBytes('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read response: %v", err)
-	}
+		if err = conn.call(ctx, method, params, result); err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return retry.RetryableError(err)
+			}
+			c.connPool.freeConn(conn)
+			return err
+		}
 
-	var resp JSONRPCResponse
-	if err := json.Unmarshal(b, &resp); err != nil {
-		return fmt.Errorf("failed to unmarshal response: %v", err)
-	}
-	if resp.ID != req.ID {
-		return fmt.Errorf("response ID differs from request ID (%d != %d)", resp.ID, req.ID)
-	}
-	if resp.Error != nil {
-		return RPCError(resp.Error.Message)
-	}
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return fmt.Errorf("failed to unmarshal result: %v", err)
-	}
+		c.connPool.freeConn(conn)
+		return nil
+	})
+}
 
+// Close closes the client.
+func (c *Client) Close() error {
+	if c.connPool != nil {
+		return c.connPool.Close()
+	}
 	return nil
 }
 
@@ -197,7 +206,7 @@ type UTXO struct {
 func (c *Client) Balance(ctx context.Context, scriptHash []byte) (*Balance, error) {
 	hash, err := btcchainhash.NewHash(scriptHash)
 	if err != nil {
-		return nil, fmt.Errorf("invalid script hash: %v", err)
+		return nil, fmt.Errorf("invalid script hash: %w", err)
 	}
 	params := struct {
 		ScriptHash string `json:"scripthash"`
@@ -223,12 +232,17 @@ func (c *Client) Broadcast(ctx context.Context, rtx []byte) ([]byte, error) {
 	}
 	txHash, err := btcchainhash.NewHashFromStr(txHashStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode transaction hash: %v", err)
+		return nil, fmt.Errorf("failed to decode transaction hash: %w", err)
 	}
 	return txHash[:], nil
 }
 
 func (c *Client) Height(ctx context.Context) (uint64, error) {
+	// TODO: The way this function is used could be improved.
+	//  "blockchain.headers.subscribe" subscribes to receive notifications from
+	//  the ElectrumX server, however this function appears to be used for
+	//  polling instead, which could be replaced by handling the requests sent
+	//  from the ElectrumX server.
 	hn := &HeaderNotification{}
 	if err := c.call(ctx, "blockchain.headers.subscribe", nil, hn); err != nil {
 		return 0, err
@@ -246,11 +260,11 @@ func (c *Client) RawBlockHeader(ctx context.Context, height uint64) (*bitcoin.Bl
 	}
 	var rbhStr string
 	if err := c.call(ctx, "blockchain.block.header", &params, &rbhStr); err != nil {
-		return nil, fmt.Errorf("failed to get block header: %v", err)
+		return nil, fmt.Errorf("failed to get block header: %w", err)
 	}
 	rbh, err := hex.DecodeString(rbhStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode raw block header: %v", err)
+		return nil, fmt.Errorf("failed to decode raw block header: %w", err)
 	}
 	return bitcoin.RawBlockHeaderFromSlice(rbh)
 }
@@ -258,7 +272,7 @@ func (c *Client) RawBlockHeader(ctx context.Context, height uint64) (*bitcoin.Bl
 func (c *Client) RawTransaction(ctx context.Context, txHash []byte) ([]byte, error) {
 	hash, err := btcchainhash.NewHash(txHash)
 	if err != nil {
-		return nil, fmt.Errorf("invalid transaction hash: %v", err)
+		return nil, fmt.Errorf("invalid transaction hash: %w", err)
 	}
 	params := struct {
 		TXHash  string `json:"tx_hash"`
@@ -269,11 +283,11 @@ func (c *Client) RawTransaction(ctx context.Context, txHash []byte) ([]byte, err
 	}
 	var rtxStr string
 	if err := c.call(ctx, "blockchain.transaction.get", &params, &rtxStr); err != nil {
-		return nil, fmt.Errorf("failed to get transaction: %v", err)
+		return nil, fmt.Errorf("failed to get transaction: %w", err)
 	}
 	rtx, err := hex.DecodeString(rtxStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode raw transaction: %v", err)
+		return nil, fmt.Errorf("failed to decode raw transaction: %w", err)
 	}
 	return rtx, nil
 }
@@ -281,7 +295,7 @@ func (c *Client) RawTransaction(ctx context.Context, txHash []byte) ([]byte, err
 func (c *Client) Transaction(ctx context.Context, txHash []byte) ([]byte, error) {
 	hash, err := btcchainhash.NewHash(txHash)
 	if err != nil {
-		return nil, fmt.Errorf("invalid transaction hash: %v", err)
+		return nil, fmt.Errorf("invalid transaction hash: %w", err)
 	}
 	params := struct {
 		TXHash  string `json:"tx_hash"`
@@ -292,9 +306,9 @@ func (c *Client) Transaction(ctx context.Context, txHash []byte) ([]byte, error)
 	}
 	var txJSON json.RawMessage
 	if err := c.call(ctx, "blockchain.transaction.get", &params, &txJSON); err != nil {
-		return nil, fmt.Errorf("failed to get transaction: %v", err)
+		return nil, fmt.Errorf("failed to get transaction: %w", err)
 	}
-	return []byte(txJSON), nil
+	return txJSON, nil
 }
 
 func (c *Client) TransactionAtPosition(ctx context.Context, height, index uint64) ([]byte, []string, error) {
@@ -317,12 +331,12 @@ func (c *Client) TransactionAtPosition(ctx context.Context, height, index uint64
 		} else if strings.HasPrefix(err.Error(), "db error: DBError('block ") && strings.Contains(err.Error(), " not on disk ") {
 			return nil, nil, NewBlockNotOnDiskError(err)
 		}
-		return nil, nil, fmt.Errorf("failed to get transaction from block: %v", err)
+		return nil, nil, fmt.Errorf("failed to get transaction from block: %w", err)
 	}
 
 	txHash, err := btcchainhash.NewHashFromStr(result.TXHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decode transaction hash: %v", err)
+		return nil, nil, fmt.Errorf("failed to decode transaction hash: %w", err)
 	}
 
 	return txHash[:], result.Merkle, nil
@@ -331,7 +345,7 @@ func (c *Client) TransactionAtPosition(ctx context.Context, height, index uint64
 func (c *Client) UTXOs(ctx context.Context, scriptHash []byte) ([]*UTXO, error) {
 	hash, err := btcchainhash.NewHash(scriptHash)
 	if err != nil {
-		return nil, fmt.Errorf("invalid script hash: %v", err)
+		return nil, fmt.Errorf("invalid script hash: %w", err)
 	}
 	params := struct {
 		ScriptHash string `json:"scripthash"`
@@ -346,7 +360,7 @@ func (c *Client) UTXOs(ctx context.Context, scriptHash []byte) ([]*UTXO, error) 
 	for _, eutxo := range eutxos {
 		hash, err := btcchainhash.NewHashFromStr(eutxo.Hash)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode UTXO hash: %v", err)
+			return nil, fmt.Errorf("failed to decode UTXO hash: %w", err)
 		}
 		utxos = append(utxos, &UTXO{
 			Hash:   hash[:],
