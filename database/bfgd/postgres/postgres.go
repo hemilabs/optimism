@@ -124,7 +124,7 @@ func (p *pgdb) L2KeystonesInsert(ctx context.Context, l2ks []bfgd.L2Keystone) er
 
 	defer func() {
 		err := tx.Rollback()
-		if err != nil && err != sql.ErrTxDone {
+		if err != nil && !errors.Is(err, sql.ErrTxDone) {
 			log.Errorf("L2KeystonesInsert could not rollback db tx: %v",
 				err)
 			return
@@ -164,11 +164,11 @@ func (p *pgdb) L2KeystonesInsert(ctx context.Context, l2ks []bfgd.L2Keystone) er
 				log.Errorf("integrity violation occurred: %s", err.Constraint)
 				return database.DuplicateError(fmt.Sprintf("constraint error: %s", err))
 			}
-			return fmt.Errorf("failed to insert l2 keystone: %v", err)
+			return fmt.Errorf("failed to insert l2 keystone: %w", err)
 		}
 		rows, err := result.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("failed to insert l2 keystone rows affected: %v", err)
+			return fmt.Errorf("failed to insert l2 keystone rows affected: %w", err)
 		}
 		if rows < 1 {
 			return fmt.Errorf("failed to insert l2 keystone rows: %v", rows)
@@ -210,7 +210,7 @@ func (p *pgdb) L2KeystoneByAbrevHash(ctx context.Context, aHash [32]byte) (*bfgd
 		&l2ks.ParentEPHash, &l2ks.PrevKeystoneEPHash, &l2ks.StateRoot,
 		&l2ks.EPHash, &l2ks.Version, &l2ks.CreatedAt, &l2ks.UpdatedAt,
 	); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, database.NotFoundError("l2 keystone not found")
 		}
 		return nil, err
@@ -257,7 +257,7 @@ func (p *pgdb) L2KeystonesMostRecentN(ctx context.Context, n uint32) ([]bfgd.L2K
 			&k.ParentEPHash, &k.PrevKeystoneEPHash, &k.StateRoot,
 			&k.EPHash, &k.Version, &k.CreatedAt, &k.UpdatedAt,
 		); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil, database.NotFoundError("pop data not found")
 			}
 			return nil, err
@@ -275,6 +275,7 @@ func (p *pgdb) L2KeystonesMostRecentN(ctx context.Context, n uint32) ([]bfgd.L2K
 func (p *pgdb) BtcBlockInsert(ctx context.Context, bb *bfgd.BtcBlock) error {
 	log.Tracef("BtcBlockInsert")
 	defer log.Tracef("BtcBlockInsert exit")
+
 	const qBtcBlockInsert = `
 		INSERT INTO btc_blocks (hash, header, height)
 		VALUES ($1, $2, $3)
@@ -285,11 +286,11 @@ func (p *pgdb) BtcBlockInsert(ctx context.Context, bb *bfgd.BtcBlock) error {
 		if err, ok := err.(*pq.Error); ok && err.Code.Class().Name() == "integrity_constraint_violation" {
 			return database.DuplicateError(fmt.Sprintf("duplicate btc block entry: %s", err))
 		}
-		return fmt.Errorf("failed to insert btc block: %v", err)
+		return fmt.Errorf("failed to insert btc block: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to insert btc block rows affected: %v", err)
+		return fmt.Errorf("failed to insert btc block rows affected: %w", err)
 	}
 	if rows < 1 {
 		return fmt.Errorf("failed to insert btc block rows: %v", rows)
@@ -312,7 +313,7 @@ func (p *pgdb) BtcBlockByHash(ctx context.Context, hash [32]byte) (*bfgd.BtcBloc
 	row := p.db.QueryRowContext(ctx, q, hash[:])
 	if err := row.Scan(&bb.Hash, &bb.Header, &bb.Height, &bb.CreatedAt,
 		&bb.UpdatedAt); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, database.NotFoundError("btc block not found")
 		}
 		return nil, err
@@ -333,7 +334,7 @@ func (p *pgdb) BtcBlockHeightByHash(ctx context.Context, hash [32]byte) (uint64,
 	var height uint64
 	row := p.db.QueryRowContext(ctx, q, hash[:])
 	if err := row.Scan(&height); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return 0, database.NotFoundError("btc block height not found")
 		}
 		return 0, err
@@ -364,11 +365,11 @@ func (p *pgdb) PopBasisInsertPopMFields(ctx context.Context, pb *bfgd.PopBasis) 
 				return database.DuplicateError(fmt.Sprintf("duplicate pop block entry: %s", err.Error()))
 			}
 		}
-		return fmt.Errorf("failed to insert pop block: %v", err)
+		return fmt.Errorf("failed to insert pop block: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to insert pop block rows affected: %v", err)
+		return fmt.Errorf("failed to insert pop block rows affected: %w", err)
 	}
 	if rows < 1 {
 		return fmt.Errorf("failed to insert pop block rows: %v", rows)
@@ -416,12 +417,12 @@ func (p *pgdb) PopBasisUpdateBTCFields(ctx context.Context, pb *bfgd.PopBasis) (
 				return 0, database.DuplicateError(fmt.Sprintf("duplicate pop block entry: %s", err.Error()))
 			}
 		}
-		return 0, fmt.Errorf("failed to insert pop block: %v", err)
+		return 0, fmt.Errorf("failed to insert pop block: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("failed to insert pop block rows affected: %v", err)
+		return 0, fmt.Errorf("failed to insert pop block rows affected: %w", err)
 	}
 
 	return rows, nil
@@ -464,11 +465,11 @@ func (p *pgdb) PopBasisInsertFull(ctx context.Context, pb *bfgd.PopBasis) error 
 				return database.DuplicateError(fmt.Sprintf("duplicate pop block entry: %s", err.Error()))
 			}
 		}
-		return fmt.Errorf("failed to insert pop block: %v", err)
+		return fmt.Errorf("failed to insert pop block: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to insert pop block rows affected: %v", err)
+		return fmt.Errorf("failed to insert pop block rows affected: %w", err)
 	}
 	if rows < 1 {
 		return fmt.Errorf("failed to insert pop block rows: %v", rows)
