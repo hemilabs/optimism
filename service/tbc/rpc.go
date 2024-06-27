@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -74,17 +75,17 @@ func (s *Server) handleWebsocketRead(ctx context.Context, ws *tbcWs) {
 			}
 
 			go s.handleRequest(ctx, ws, id, cmd, handler)
-		case tbcapi.CmdBlockHeadersBestRawRequest:
+		case tbcapi.CmdBlockHeaderBestRawRequest:
 			handler := func(ctx context.Context) (any, error) {
-				req := payload.(*tbcapi.BlockHeadersBestRawRequest)
-				return s.handleBlockHeadersBestRawRequest(ctx, req)
+				req := payload.(*tbcapi.BlockHeaderBestRawRequest)
+				return s.handleBlockHeaderBestRawRequest(ctx, req)
 			}
 
 			go s.handleRequest(ctx, ws, id, cmd, handler)
-		case tbcapi.CmdBlockHeadersBestRequest:
+		case tbcapi.CmdBlockHeaderBestRequest:
 			handler := func(ctx context.Context) (any, error) {
-				req := payload.(*tbcapi.BlockHeadersBestRequest)
-				return s.handleBlockHeadersBestRequest(ctx, req)
+				req := payload.(*tbcapi.BlockHeaderBestRequest)
+				return s.handleBlockHeaderBestRequest(ctx, req)
 			}
 
 			go s.handleRequest(ctx, ws, id, cmd, handler)
@@ -239,39 +240,39 @@ func (s *Server) handleBlockHeadersByHeightRawRequest(ctx context.Context, req *
 	}, nil
 }
 
-func (s *Server) handleBlockHeadersBestRawRequest(ctx context.Context, _ *tbcapi.BlockHeadersBestRawRequest) (any, error) {
-	log.Tracef("handleBlockHeadersBestRawRequest")
-	defer log.Tracef("handleBlockHeadersBestRawRequest exit")
+func (s *Server) handleBlockHeaderBestRawRequest(ctx context.Context, _ *tbcapi.BlockHeaderBestRawRequest) (any, error) {
+	log.Tracef("handleBlockHeaderBestRawRequest")
+	defer log.Tracef("handleBlockHeaderBestRawRequest exit")
 
-	height, blockHeaders, err := s.RawBlockHeadersBest(ctx)
+	height, blockHeader, err := s.RawBlockHeaderBest(ctx)
 	if err != nil {
 		e := protocol.NewInternalError(err)
-		return &tbcapi.BlockHeadersBestRawResponse{
+		return &tbcapi.BlockHeaderBestRawResponse{
 			Error: e.ProtocolError(),
 		}, e
 	}
 
-	return &tbcapi.BlockHeadersBestRawResponse{
-		Height:       height,
-		BlockHeaders: blockHeaders,
+	return &tbcapi.BlockHeaderBestRawResponse{
+		Height:      height,
+		BlockHeader: blockHeader,
 	}, nil
 }
 
-func (s *Server) handleBlockHeadersBestRequest(ctx context.Context, _ *tbcapi.BlockHeadersBestRequest) (any, error) {
-	log.Tracef("handleBlockHeadersBestRequest")
-	defer log.Tracef("handleBlockHeadersBestRequest exit")
+func (s *Server) handleBlockHeaderBestRequest(ctx context.Context, _ *tbcapi.BlockHeaderBestRequest) (any, error) {
+	log.Tracef("handleBlockHeaderBestRequest")
+	defer log.Tracef("handleBlockHeaderBestRequest exit")
 
-	height, blockHeaders, err := s.BlockHeadersBest(ctx)
+	height, blockHeader, err := s.BlockHeaderBest(ctx)
 	if err != nil {
 		e := protocol.NewInternalError(err)
-		return &tbcapi.BlockHeadersBestResponse{
+		return &tbcapi.BlockHeaderBestResponse{
 			Error: e.ProtocolError(),
 		}, e
 	}
 
-	return &tbcapi.BlockHeadersBestResponse{
-		Height:       height,
-		BlockHeaders: wireBlockHeadersToTBC(blockHeaders),
+	return &tbcapi.BlockHeaderBestResponse{
+		Height:      height,
+		BlockHeader: wireBlockHeaderToTBC(blockHeader),
 	}, nil
 }
 
@@ -338,10 +339,10 @@ func (s *Server) handleUtxosByAddressRequest(ctx context.Context, req *tbcapi.Ut
 		}, nil
 	}
 
-	var responseUtxos []tbcapi.Utxo
+	var responseUtxos []*tbcapi.Utxo
 	for _, utxo := range utxos {
-		responseUtxos = append(responseUtxos, tbcapi.Utxo{
-			TxId:     api.ByteSlice(utxo.ScriptHashSlice()),
+		responseUtxos = append(responseUtxos, &tbcapi.Utxo{
+			TxId:     reverseBytes(utxo.ScriptHashSlice()),
 			Value:    utxo.Value(),
 			OutIndex: utxo.OutputIndex(),
 		})
@@ -366,7 +367,7 @@ func (s *Server) handleTxByIdRawRequest(ctx context.Context, req *tbcapi.TxByIdR
 	tx, err := s.TxById(ctx, [32]byte(req.TxId))
 	if err != nil {
 		if errors.Is(err, database.ErrNotFound) {
-			responseErr := protocol.RequestErrorf("tx not found: %s", hex.EncodeToString(req.TxId))
+			responseErr := protocol.RequestErrorf("tx not found: %s", req.TxId)
 			return &tbcapi.TxByIdRawResponse{
 				Error: responseErr,
 			}, nil
@@ -402,10 +403,10 @@ func (s *Server) handleTxByIdRequest(ctx context.Context, req *tbcapi.TxByIdRequ
 		}, nil
 	}
 
-	tx, err := s.TxById(ctx, [32]byte(req.TxId))
+	tx, err := s.TxById(ctx, [32]byte(reverseBytes(req.TxId)))
 	if err != nil {
 		if errors.Is(err, database.ErrNotFound) {
-			responseErr := protocol.RequestErrorf("not found: %s", hex.EncodeToString(req.TxId))
+			responseErr := protocol.RequestErrorf("tx not found: %s", req.TxId)
 			return &tbcapi.TxByIdResponse{
 				Error: responseErr,
 			}, nil
@@ -418,7 +419,7 @@ func (s *Server) handleTxByIdRequest(ctx context.Context, req *tbcapi.TxByIdRequ
 	}
 
 	return &tbcapi.TxByIdResponse{
-		Tx: *wireTxToTbcapiTx(tx),
+		Tx: wireTxToTBC(tx),
 	}, nil
 }
 
@@ -509,51 +510,60 @@ func randHexId(length int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func wireBlockHeadersToTBC(w []*wire.BlockHeader) []*tbcapi.BlockHeader {
-	blockHeaders := make([]*tbcapi.BlockHeader, len(w))
-	for i, bh := range w {
-		blockHeaders[i] = &tbcapi.BlockHeader{
-			Version:    bh.Version,
-			PrevHash:   bh.PrevBlock.String(),
-			MerkleRoot: bh.MerkleRoot.String(),
-			Timestamp:  bh.Timestamp.Unix(),
-			Bits:       fmt.Sprintf("%x", bh.Bits),
-			Nonce:      bh.Nonce,
-		}
+func wireBlockHeadersToTBC(bhs []*wire.BlockHeader) []*tbcapi.BlockHeader {
+	blockHeaders := make([]*tbcapi.BlockHeader, len(bhs))
+	for i, bh := range bhs {
+		blockHeaders[i] = wireBlockHeaderToTBC(bh)
 	}
 	return blockHeaders
 }
 
-func wireTxToTbcapiTx(w *wire.MsgTx) *tbcapi.Tx {
-	a := &tbcapi.Tx{
+func wireBlockHeaderToTBC(bh *wire.BlockHeader) *tbcapi.BlockHeader {
+	return &tbcapi.BlockHeader{
+		Version:    bh.Version,
+		PrevHash:   reverseBytes(bh.PrevBlock[:]),
+		MerkleRoot: reverseBytes(bh.MerkleRoot[:]),
+		Timestamp:  bh.Timestamp.Unix(),
+		Bits:       fmt.Sprintf("%x", bh.Bits),
+		Nonce:      bh.Nonce,
+	}
+}
+
+func wireTxToTBC(w *wire.MsgTx) *tbcapi.Tx {
+	tx := &tbcapi.Tx{
 		Version:  w.Version,
 		LockTime: w.LockTime,
-		TxIn:     []*tbcapi.TxIn{},
-		TxOut:    []*tbcapi.TxOut{},
+		TxIn:     make([]*tbcapi.TxIn, len(w.TxIn)),
+		TxOut:    make([]*tbcapi.TxOut, len(w.TxOut)),
 	}
 
-	for _, v := range w.TxIn {
-		a.TxIn = append(a.TxIn, &tbcapi.TxIn{
-			Sequence:        v.Sequence,
-			SignatureScript: api.ByteSlice(v.SignatureScript),
+	for i, txIn := range w.TxIn {
+		tx.TxIn[i] = &tbcapi.TxIn{
+			Sequence:        txIn.Sequence,
+			SignatureScript: txIn.SignatureScript,
 			PreviousOutPoint: tbcapi.OutPoint{
-				Hash:  api.ByteSlice(v.PreviousOutPoint.Hash[:]),
-				Index: v.PreviousOutPoint.Index,
+				Hash:  reverseBytes(txIn.PreviousOutPoint.Hash[:]),
+				Index: txIn.PreviousOutPoint.Index,
 			},
-		})
+			Witness: make(tbcapi.TxWitness, len(txIn.Witness)),
+		}
 
-		for _, b := range v.Witness {
-			a.TxIn[len(a.TxIn)-1].Witness = append(a.TxIn[len(a.TxIn)-1].Witness,
-				api.ByteSlice(b))
+		for wi, witness := range txIn.Witness {
+			tx.TxIn[i].Witness[wi] = witness
 		}
 	}
 
-	for _, v := range w.TxOut {
-		a.TxOut = append(a.TxOut, &tbcapi.TxOut{
-			Value:    v.Value,
-			PkScript: api.ByteSlice(v.PkScript),
-		})
+	for i, txOut := range w.TxOut {
+		tx.TxOut[i] = &tbcapi.TxOut{
+			Value:    txOut.Value,
+			PkScript: txOut.PkScript,
+		}
 	}
 
-	return a
+	return tx
+}
+
+func reverseBytes(b []byte) []byte {
+	slices.Reverse(b)
+	return b
 }
