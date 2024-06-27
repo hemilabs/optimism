@@ -29,7 +29,7 @@ cmds = \
 	tbcd
 
 .PHONY: all clean clean-dist deps $(cmds) build install lint lint-deps tidy race test vulncheck \
-	vulncheck-deps dist archive sources checksums networktest
+	vulncheck-deps dist archive sources checksums
 
 all: lint tidy test build install
 
@@ -66,6 +66,12 @@ lint-deps:
 	GOBIN=$(shell go env GOPATH)/bin go install mvdan.cc/gofumpt@latest
 	GOBIN=$(shell go env GOPATH)/bin go install github.com/google/addlicense@latest
 
+staticcheck:
+	$(shell go env GOPATH)/bin/staticcheck ./...
+
+staticcheck-deps:
+	GOBIN=$(shell go env GOPATH)/bin go install honnef.co/go/tools/cmd/staticcheck@latest
+
 tidy:
 	go mod tidy
 
@@ -97,6 +103,3 @@ sources: dist
 checksums: dist
 	cd $(DIST) && shasum -a 256 * > $(project)_$(version)_checksums.txt
 
-networktest:
-	HEMI_RUN_NETWORK_TEST=1	\
-		go test -count=1 -v -run TestFullNetwork -v ./e2e/network_test.go

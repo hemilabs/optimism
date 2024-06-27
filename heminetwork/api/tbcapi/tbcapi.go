@@ -26,11 +26,11 @@ const (
 	CmdBlockHeadersByHeightRequest  = "tbcapi-block-headers-by-height-request"
 	CmdBlockHeadersByHeightResponse = "tbcapi-block-headers-by-height-response"
 
-	CmdBlockHeadersBestRawRequest  = "tbcapi-block-headers-best-raw-request"
-	CmdBlockHeadersBestRawResponse = "tbcapi-block-headers-best-raw-response"
+	CmdBlockHeaderBestRawRequest  = "tbcapi-block-header-best-raw-request"
+	CmdBlockHeaderBestRawResponse = "tbcapi-block-header-best-raw-response"
 
-	CmdBlockHeadersBestRequest  = "tbcapi-block-headers-best-request"
-	CmdBlockHeadersBestResponse = "tbcapi-block-headers-best-response"
+	CmdBlockHeaderBestRequest  = "tbcapi-block-header-best-request"
+	CmdBlockHeaderBestResponse = "tbcapi-block-header-best-response"
 
 	CmdBalanceByAddressRequest  = "tbcapi-balance-by-address-request"
 	CmdBalanceByAddressResponse = "tbcapi-balance-by-address-response"
@@ -62,12 +62,12 @@ type (
 )
 
 type BlockHeader struct {
-	Version    int32  `json:"version"`
-	PrevHash   string `json:"prev_hash"`
-	MerkleRoot string `json:"merkle_root"`
-	Timestamp  int64  `json:"timestamp"`
-	Bits       string `json:"bits"`
-	Nonce      uint32 `json:"nonce"`
+	Version    int32         `json:"version"`
+	PrevHash   api.ByteSlice `json:"prev_hash"`   // reverse order
+	MerkleRoot api.ByteSlice `json:"merkle_root"` // reverse order
+	Timestamp  int64         `json:"timestamp"`
+	Bits       string        `json:"bits"`
+	Nonce      uint32        `json:"nonce"`
 }
 
 type BlockHeadersByHeightRawRequest struct {
@@ -88,20 +88,20 @@ type BlockHeadersByHeightResponse struct {
 	Error        *protocol.Error `json:"error,omitempty"`
 }
 
-type BlockHeadersBestRawRequest struct{}
+type BlockHeaderBestRawRequest struct{}
 
-type BlockHeadersBestRawResponse struct {
-	Height       uint64          `json:"height"`
-	BlockHeaders []api.ByteSlice `json:"block_headers"`
-	Error        *protocol.Error `json:"error,omitempty"`
+type BlockHeaderBestRawResponse struct {
+	Height      uint64          `json:"height"`
+	BlockHeader api.ByteSlice   `json:"block_header"`
+	Error       *protocol.Error `json:"error,omitempty"`
 }
 
-type BlockHeadersBestRequest struct{}
+type BlockHeaderBestRequest struct{}
 
-type BlockHeadersBestResponse struct {
-	Height       uint64          `json:"height"`
-	BlockHeaders []*BlockHeader  `json:"block_headers"`
-	Error        *protocol.Error `json:"error,omitempty"`
+type BlockHeaderBestResponse struct {
+	Height      uint64          `json:"height"`
+	BlockHeader *BlockHeader    `json:"block_header"`
+	Error       *protocol.Error `json:"error,omitempty"`
 }
 
 type BalanceByAddressRequest struct {
@@ -131,18 +131,18 @@ type UtxosByAddressRequest struct {
 }
 
 type Utxo struct {
-	TxId     api.ByteSlice `json:"tx_id"`
+	TxId     api.ByteSlice `json:"tx_id"` // reverse order
 	Value    uint64        `json:"value"`
 	OutIndex uint32        `json:"out_index"`
 }
 
 type UtxosByAddressResponse struct {
-	Utxos []Utxo          `json:"utxos"`
+	Utxos []*Utxo         `json:"utxos"`
 	Error *protocol.Error `json:"error,omitempty"`
 }
 
 type TxByIdRawRequest struct {
-	TxId api.ByteSlice `json:"tx_id"`
+	TxId api.ByteSlice `json:"tx_id"` // natural order
 }
 
 type TxByIdRawResponse struct {
@@ -151,16 +151,16 @@ type TxByIdRawResponse struct {
 }
 
 type TxByIdRequest struct {
-	TxId api.ByteSlice `json:"tx_id"`
+	TxId api.ByteSlice `json:"tx_id"` // reverse order
 }
 
 type TxByIdResponse struct {
-	Tx    Tx              `json:"tx"`
+	Tx    *Tx             `json:"tx"`
 	Error *protocol.Error `json:"error,omitempty"`
 }
 
 type OutPoint struct {
-	Hash  api.ByteSlice `json:"hash"`
+	Hash  api.ByteSlice `json:"hash"` // reverse order
 	Index uint32        `json:"index"`
 }
 
@@ -192,10 +192,10 @@ var commands = map[protocol.Command]reflect.Type{
 	CmdBlockHeadersByHeightRawResponse: reflect.TypeOf(BlockHeadersByHeightRawResponse{}),
 	CmdBlockHeadersByHeightRequest:     reflect.TypeOf(BlockHeadersByHeightRequest{}),
 	CmdBlockHeadersByHeightResponse:    reflect.TypeOf(BlockHeadersByHeightResponse{}),
-	CmdBlockHeadersBestRawRequest:      reflect.TypeOf(BlockHeadersBestRawRequest{}),
-	CmdBlockHeadersBestRawResponse:     reflect.TypeOf(BlockHeadersBestRawResponse{}),
-	CmdBlockHeadersBestRequest:         reflect.TypeOf(BlockHeadersBestRequest{}),
-	CmdBlockHeadersBestResponse:        reflect.TypeOf(BlockHeadersBestResponse{}),
+	CmdBlockHeaderBestRawRequest:       reflect.TypeOf(BlockHeaderBestRawRequest{}),
+	CmdBlockHeaderBestRawResponse:      reflect.TypeOf(BlockHeaderBestRawResponse{}),
+	CmdBlockHeaderBestRequest:          reflect.TypeOf(BlockHeaderBestRequest{}),
+	CmdBlockHeaderBestResponse:         reflect.TypeOf(BlockHeaderBestResponse{}),
 	CmdBalanceByAddressRequest:         reflect.TypeOf(BalanceByAddressRequest{}),
 	CmdBalanceByAddressResponse:        reflect.TypeOf(BalanceByAddressResponse{}),
 	CmdUtxosByAddressRawRequest:        reflect.TypeOf(UtxosByAddressRawRequest{}),
