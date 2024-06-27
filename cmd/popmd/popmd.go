@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/juju/loggo"
 
@@ -51,13 +52,19 @@ var (
 		"POPM_BTC_CHAIN_NAME": config.Config{
 			Value:        &cfg.BTCChainName,
 			DefaultValue: popm.NewDefaultConfig().BTCChainName,
-			Help:         "the name of the bitcoing chain to connect to (ex. \"mainnet\", \"testnet3\")",
+			Help:         "the name of the bitcoin chain to connect to (ex. \"mainnet\", \"testnet3\")",
 			Print:        config.PrintAll,
 		},
 		"POPM_PROMETHEUS_ADDRESS": config.Config{
 			Value:        &cfg.PrometheusListenAddress,
 			DefaultValue: "",
-			Help:         "address and port bssd prometheus listens on",
+			Help:         "address and port popm prometheus listens on",
+			Print:        config.PrintAll,
+		},
+		"POPM_PPROF_ADDRESS": config.Config{
+			Value:        &cfg.PrometheusListenAddress,
+			DefaultValue: "",
+			Help:         "address and port popm pprof listens on (open <address>/debug/pprof to see available profiles)",
 			Print:        config.PrintAll,
 		},
 		"POPM_REMINE_THRESHOLD": config.Config{
@@ -66,13 +73,18 @@ var (
 			Help:         "the number of L2 Keystones behind the latest seen that we are willing to remine, this is handy for re-orgs",
 			Print:        config.PrintAll,
 		},
+		"POPM_STATIC_FEE": config.Config{
+			Value:        &cfg.StaticFee,
+			DefaultValue: uint(1),
+			Help:         "specify the number of sats/vB the PoP Miner will pay for fees",
+			Print:        config.PrintAll,
+		},
 	}
 )
 
 func handleSignals(ctx context.Context, cancel context.CancelFunc, callback func(os.Signal)) {
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	signal.Notify(signalChan, os.Kill)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	defer func() {
 		signal.Stop(signalChan)
 		cancel()

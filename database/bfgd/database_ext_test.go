@@ -6,12 +6,12 @@ package bfgd_test
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"math/rand"
+	mathrand "math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -65,7 +65,7 @@ func createTestDB(ctx context.Context, t *testing.T) (bfgd.Database, *sql.DB, fu
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	dbn := rand.New(rand.NewSource(time.Now().UnixNano())).Intn(9999)
+	dbn := mathrand.IntN(9999)
 	dbName := fmt.Sprintf("%v_%d", testDBPrefix, dbn)
 
 	t.Logf("Creating test database %v", dbName)
@@ -122,7 +122,7 @@ func applySQLFiles(ctx context.Context, t *testing.T, sdb *sql.DB, path string) 
 	sort.Strings(sqlFiles)
 	for _, sqlFile := range sqlFiles {
 		t.Logf("Applying SQL file %v", filepath.Base(sqlFile))
-		sql, err := ioutil.ReadFile(sqlFile)
+		sql, err := os.ReadFile(sqlFile)
 		if err != nil {
 			t.Fatalf("Failed to read SQL file: %v", err)
 		}
@@ -835,10 +835,9 @@ func TestL2KeystoneInsertMostRecentNLimit100(t *testing.T) {
 
 	toInsert := []bfgd.L2Keystone{}
 
-	for i := 0; i < 101; func() {
-		i++
+	for range 101 {
 		l2BlockNumber++
-	}() {
+
 		l2Keystone := bfgd.L2Keystone{
 			Version:            1,
 			L1BlockNumber:      11,
@@ -851,7 +850,6 @@ func TestL2KeystoneInsertMostRecentNLimit100(t *testing.T) {
 		}
 
 		toInsert = append(toInsert, l2Keystone)
-
 	}
 
 	err := db.L2KeystonesInsert(ctx, toInsert)
@@ -1655,6 +1653,168 @@ func TestL2BtcFinalitiesByL2KeystoneNotPublishedHeight(t *testing.T) {
 	}
 }
 
+func TestBtcHeightsNoChildren(t *testing.T) {
+	type testTableItem struct {
+		name                         string
+		numberToCreateWithChildren   int
+		numberToCreateWithNoChildren int
+		overlapCount                 int
+	}
+
+	testTable := []testTableItem{
+		{
+			name:                         "0",
+			numberToCreateWithNoChildren: 0,
+			numberToCreateWithChildren:   43,
+		},
+		{
+			name:                         "less than 100",
+			numberToCreateWithNoChildren: 76,
+			numberToCreateWithChildren:   4,
+		},
+		{
+			name:                         "more than 100",
+			numberToCreateWithNoChildren: 126,
+			numberToCreateWithChildren:   333,
+		},
+		{
+			name:                         "more than 100 and overlap",
+			numberToCreateWithNoChildren: 126,
+			numberToCreateWithChildren:   333,
+			overlapCount:                 98,
+		},
+	}
+
+	createBlocksWithNoChildren := func(ctx context.Context, count int, db bfgd.Database) []int64 {
+		heights := make([]int64, count)
+		for i := range count {
+			height := mathrand.Int64()
+			hash := make([]byte, 32)
+			if _, err := rand.Read(hash); err != nil {
+				t.Fatal(err)
+			}
+			header := make([]byte, 80)
+			if _, err := rand.Read(header); err != nil {
+				t.Fatal(err)
+			}
+
+			btcBlock := bfgd.BtcBlock{
+				Height: uint64(height),
+				Hash:   hash,
+				Header: header,
+			}
+
+			if err := db.BtcBlockInsert(ctx, &btcBlock); err != nil {
+				t.Fatal(err)
+			}
+
+			heights[i] = height
+		}
+
+		return heights
+	}
+
+	createBlocksWithChildren := func(ctx context.Context, count int, db bfgd.Database, avoidHeights []int64, overlapHeights []int64) []int64 {
+		var prevHash []byte
+		overlapHeightI := 0
+		heights := make([]int64, count)
+		for i := range count {
+			var height int64
+			for {
+				if overlapHeightI < len(overlapHeights) {
+					height = overlapHeights[overlapHeightI]
+					overlapHeightI++
+					break
+				}
+
+				height = mathrand.Int64()
+				if !slices.Contains(avoidHeights, height) {
+					break
+				}
+			}
+			hash := make([]byte, 32)
+			if _, err := rand.Read(hash); err != nil {
+				t.Fatal(err)
+			}
+			header := make([]byte, 80)
+			if _, err := rand.Read(header); err != nil {
+				t.Fatal(err)
+			}
+
+			if len(prevHash) > 0 {
+				for k := range 32 {
+					header[k+4] = prevHash[k]
+				}
+			}
+
+			btcBlock := bfgd.BtcBlock{
+				Height: uint64(height),
+				Hash:   hash,
+				Header: header,
+			}
+
+			if err := db.BtcBlockInsert(ctx, &btcBlock); err != nil {
+				t.Fatal(err)
+			}
+			prevHash = hash
+			heights[i] = height
+		}
+		return heights
+	}
+
+	for _, tti := range testTable {
+		t.Run(tti.name, func(t *testing.T) {
+			ctx, cancel := defaultTestContext()
+			defer cancel()
+
+			db, sdb, cleanup := createTestDB(ctx, t)
+			defer func() {
+				db.Close()
+				sdb.Close()
+				cleanup()
+			}()
+
+			var overlapHeights []int64
+			noChildrenHeights := createBlocksWithNoChildren(ctx, tti.numberToCreateWithNoChildren, db)
+
+			childrenHeights := createBlocksWithChildren(ctx, tti.numberToCreateWithChildren, db, nil, overlapHeights)
+
+			if tti.overlapCount > 0 {
+				overlapHeights = noChildrenHeights[:tti.overlapCount]
+				oldChildrenHeights := childrenHeights
+				for _, o := range oldChildrenHeights {
+					if !slices.Contains(overlapHeights, o) {
+						childrenHeights = append(childrenHeights, o)
+					}
+				}
+			}
+
+			heights, err := db.BtcBlocksHeightsWithNoChildren(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			toCmp := make([]uint64, len(noChildrenHeights)+1)
+			for i, c := range noChildrenHeights {
+				toCmp[i] = uint64(c)
+			}
+			toCmp[len(toCmp)-1] = uint64(childrenHeights[len(childrenHeights)-1])
+
+			slices.Sort(heights)
+			slices.Sort(toCmp)
+
+			// we return a nil slice if emtpy, change that here for deep.Equal
+			if len(heights) == 0 {
+				heights = []uint64{}
+			}
+
+			if diff := deep.Equal(toCmp[:len(toCmp)-1], heights); len(diff) != 0 {
+				t.Fatalf("unexpected diff %s", diff)
+			}
+		})
+	}
+}
+
 func createBtcBlock(ctx context.Context, t *testing.T, db bfgd.Database, count int, chain bool, height int, lastHash []byte, l2BlockNumber uint32) bfgd.BtcBlock {
 	header := make([]byte, 80)
 	hash := make([]byte, 32)
@@ -1761,7 +1921,7 @@ func createBtcBlock(ctx context.Context, t *testing.T, db bfgd.Database, count i
 func createBtcBlocksAtStaticHeight(ctx context.Context, t *testing.T, db bfgd.Database, count int, chain bool, height int, lastHash []byte, l2BlockNumber uint32) []bfgd.BtcBlock {
 	blocks := []bfgd.BtcBlock{}
 
-	for i := 0; i < count; i++ {
+	for range count {
 		btcBlock := createBtcBlock(
 			ctx,
 			t,
@@ -1782,7 +1942,7 @@ func createBtcBlocksAtStaticHeight(ctx context.Context, t *testing.T, db bfgd.Da
 func createBtcBlocksAtStartingHeight(ctx context.Context, t *testing.T, db bfgd.Database, count int, chain bool, height int, lastHash []byte, l2BlockNumber uint32) []bfgd.BtcBlock {
 	blocks := []bfgd.BtcBlock{}
 
-	for i := 0; i < count; i++ {
+	for range count {
 		btcBlock := createBtcBlock(
 			ctx,
 			t,

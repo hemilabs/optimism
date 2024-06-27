@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/juju/loggo"
 
@@ -74,10 +75,28 @@ var (
 			Help:         "bitcoin network; mainnet or testnet3",
 			Print:        config.PrintAll,
 		},
+		"TBC_PEERS_WANTED": config.Config{
+			Value:        &cfg.PeersWanted,
+			DefaultValue: 64,
+			Help:         "number of wanted p2p peers",
+			Print:        config.PrintAll,
+		},
 		"TBC_PROMETHEUS_ADDRESS": config.Config{
 			Value:        &cfg.PrometheusListenAddress,
 			DefaultValue: "",
 			Help:         "address and port tbcd prometheus listens on",
+			Print:        config.PrintAll,
+		},
+		"TBC_PPROF_ADDRESS": config.Config{
+			Value:        &cfg.PprofListenAddress,
+			DefaultValue: "",
+			Help:         "address and port tbcd pprof listens on (open <address>/debug/pprof to see available profiles)",
+			Print:        config.PrintAll,
+		},
+		"TBC_SEEDS": config.Config{
+			Value:        &cfg.Seeds,
+			DefaultValue: []string{},
+			Help:         "list of seed domains for Bitcoin P2P, in the format '<host>:<port>' (for localnet, must be a single host:port)",
 			Print:        config.PrintAll,
 		},
 	}
@@ -85,8 +104,7 @@ var (
 
 func HandleSignals(ctx context.Context, cancel context.CancelFunc, callback func(os.Signal)) {
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	signal.Notify(signalChan, os.Kill)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	defer func() {
 		signal.Stop(signalChan)
 		cancel()
@@ -127,6 +145,7 @@ func _main() error {
 	if err != nil {
 		return fmt.Errorf("create tbc server: %w", err)
 	}
+
 	// XXX remove, this is an illustration of calling the direct API of server
 	// go func() {
 	//	for {

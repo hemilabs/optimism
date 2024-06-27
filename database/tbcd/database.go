@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -18,6 +19,26 @@ import (
 
 	"github.com/hemilabs/heminetwork/database"
 )
+
+type InsertType int
+
+const (
+	ITInvalid     InsertType = 0 // Invalid insert
+	ITChainExtend InsertType = 1 // Normal insert, does not require further action.
+	ITChainFork   InsertType = 2 // Chain forked, unwind and rewind indexes.
+	ITForkExtend  InsertType = 3 // Extended a fork, does not require further action.
+)
+
+var itStrings = map[InsertType]string{
+	ITInvalid:     "invalid",
+	ITChainExtend: "chain extended",
+	ITChainFork:   "chain forked",
+	ITForkExtend:  "fork extended",
+}
+
+func (it InsertType) String() string {
+	return itStrings[it]
+}
 
 type Database interface {
 	database.Database
@@ -28,10 +49,13 @@ type Database interface {
 	MetadataPut(ctx context.Context, key, value []byte) error
 
 	// Block header
+	BlockHeaderBest(ctx context.Context) (*BlockHeader, error) // return canonical
 	BlockHeaderByHash(ctx context.Context, hash []byte) (*BlockHeader, error)
-	BlockHeadersBest(ctx context.Context) ([]BlockHeader, error)
+	BlockHeaderGenesisInsert(ctx context.Context, bh [80]byte) error
+
+	// Block headers
 	BlockHeadersByHeight(ctx context.Context, height uint64) ([]BlockHeader, error)
-	BlockHeadersInsert(ctx context.Context, bhs []BlockHeader) error
+	BlockHeadersInsert(ctx context.Context, bhs [][80]byte) (InsertType, *BlockHeader, *BlockHeader, error)
 
 	// Block
 	BlocksMissing(ctx context.Context, count int) ([]BlockIdentifier, error)
@@ -58,12 +82,13 @@ type Database interface {
 	UtxosByScriptHash(ctx context.Context, sh ScriptHash, start uint64, count uint64) ([]Utxo, error)
 }
 
-// BlockHeader contains the first 80 raw bytes of a bitcoin block and its
-// location information (hash+height).
+// BlockHeader contains the first 80 raw bytes of a bitcoin block plus its
+// location information (hash+height) and the cumulative difficulty.
 type BlockHeader struct {
-	Hash   database.ByteArray
-	Height uint64
-	Header database.ByteArray
+	Hash       database.ByteArray
+	Height     uint64
+	Header     database.ByteArray
+	Difficulty big.Int
 }
 
 func (bh BlockHeader) String() string {
@@ -87,6 +112,22 @@ func (bh BlockHeader) Wire() (*wire.BlockHeader, error) {
 		return nil, fmt.Errorf("deserialize: %w", err)
 	}
 	return &wbh, nil
+}
+
+func (bh BlockHeader) BlockHash() *chainhash.Hash {
+	ch, err := chainhash.NewHash(bh.Hash)
+	if err != nil {
+		panic(err)
+	}
+	return ch
+}
+
+func (bh BlockHeader) ParentHash() *chainhash.Hash {
+	wh, err := bh.Wire()
+	if err != nil {
+		panic(err)
+	}
+	return &wh.PrevBlock
 }
 
 // Block contains a raw bitcoin block and its corresponding hash.
@@ -121,7 +162,9 @@ type Peer struct {
 // Outpoint is a bitcoin structure that points to a transaction in a block. It
 // is expressed as an array of bytes in order to pack it as dense as possible
 // for memory conservation reasons.
-type Outpoint [37]byte // Outpoint Tx id
+//
+// The bytes contained by Outpoint is 'u' + txid + index.
+type Outpoint [1 + 32 + 4]byte
 
 // String returns a reversed pretty printed outpoint.
 func (o Outpoint) String() string {
@@ -369,4 +412,34 @@ func NewTxMapping(txId, blockHash *chainhash.Hash) (txKey TxKey) {
 	copy(txKey[33:], blockHash[:])
 
 	return txKey
+}
+
+// Helper functions
+
+// B2H converts a raw block header to a wire block header structure.
+func B2H(header []byte) (*wire.BlockHeader, error) {
+	var bh wire.BlockHeader
+	if err := bh.Deserialize(bytes.NewReader(header)); err != nil {
+		return nil, fmt.Errorf("deserialize block header: %w", err)
+	}
+	return &bh, nil
+}
+
+// HeaderHash return the block hash from a raw block header.
+func HeaderHash(header []byte) *chainhash.Hash {
+	h, err := B2H(header)
+	if err != nil {
+		panic(err)
+	}
+	hash := h.BlockHash()
+	return &hash
+}
+
+// HeaderHash return the parent block hash from a raw block header.
+func HeaderParentHash(header []byte) *chainhash.Hash {
+	h, err := B2H(header)
+	if err != nil {
+		panic(err)
+	}
+	return &h.PrevBlock
 }

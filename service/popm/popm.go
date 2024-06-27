@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +32,7 @@ import (
 	"github.com/hemilabs/heminetwork/bitcoin"
 	"github.com/hemilabs/heminetwork/hemi"
 	"github.com/hemilabs/heminetwork/hemi/pop"
+	"github.com/hemilabs/heminetwork/service/pprof"
 )
 
 // XXX we should debate if we can make pop miner fully transient. It feels like
@@ -72,7 +72,11 @@ type Config struct {
 
 	PrometheusListenAddress string
 
+	PprofListenAddress string
+
 	RetryMineThreshold uint
+
+	StaticFee uint
 }
 
 func NewDefaultConfig() *Config {
@@ -309,7 +313,7 @@ func (m *Miner) mineKeystone(ctx context.Context, ks *hemi.L2Keystone) error {
 
 	// Estimate BTC fees.
 	txLen := 285 // XXX for now all transactions are the same size
-	feePerKB := 1024
+	feePerKB := 1024 * m.cfg.StaticFee
 	feeAmount := (int64(txLen) * int64(feePerKB)) / 1024
 
 	// Check balance.
@@ -658,11 +662,6 @@ func (m *Miner) promRunning() float64 {
 	return 0
 }
 
-func handle(service string, mux *http.ServeMux, pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	mux.HandleFunc(pattern, handler)
-	log.Infof("handle (%v): %v", service, pattern)
-}
-
 func (m *Miner) handleBFGCallCompletion(parrentCtx context.Context, conn *protocol.Conn, bc bfgCmd) {
 	log.Tracef("handleBFGCallCompletion")
 	defer log.Tracef("handleBFGCallCompletion exit")
@@ -800,7 +799,7 @@ func (m *Miner) connectBFG(pctx context.Context) error {
 	log.Debugf("Connected to BFG: %s", m.cfg.BFGWSURL)
 	m.bfgWg.Wait()
 
-	return nil
+	return err
 }
 
 func (m *Miner) bfg(ctx context.Context) error {
@@ -843,6 +842,25 @@ func (m *Miner) Run(pctx context.Context) error {
 		if err := m.handlePrometheus(ctx); err != nil {
 			return fmt.Errorf("handlePrometheus: %w", err)
 		}
+	}
+
+	// pprof
+	if m.cfg.PprofListenAddress != "" {
+		p, err := pprof.NewServer(&pprof.Config{
+			ListenAddress: m.cfg.PprofListenAddress,
+		})
+		if err != nil {
+			return fmt.Errorf("create pprof server: %w", err)
+		}
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			if err := p.Run(ctx); !errors.Is(err, context.Canceled) {
+				log.Errorf("pprof server terminated with error: %v", err)
+				return
+			}
+			log.Infof("pprof server clean shutdown")
+		}()
 	}
 
 	log.Infof("Starting PoP miner with BTC address %v (public key %x)",

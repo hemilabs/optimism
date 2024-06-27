@@ -27,6 +27,7 @@ import (
 	"github.com/hemilabs/heminetwork/ethereum"
 	"github.com/hemilabs/heminetwork/hemi"
 	"github.com/hemilabs/heminetwork/service/deucalion"
+	"github.com/hemilabs/heminetwork/service/pprof"
 )
 
 const (
@@ -61,6 +62,7 @@ type Config struct {
 	ListenAddress           string
 	LogLevel                string
 	PrometheusListenAddress string
+	PprofListenAddress      string
 }
 
 type Server struct {
@@ -152,7 +154,7 @@ func NewServer(cfg *Config) (*Server, error) {
 		requestLimit:   requestLimit,
 		sessions:       make(map[string]*bssWs),
 	}
-	for i := 0; i < requestLimit; i++ {
+	for range requestLimit {
 		s.requestLimiter <- true
 	}
 
@@ -745,6 +747,25 @@ func (s *Server) Run(parrentCtx context.Context) error {
 
 	s.wg.Add(1)
 	go s.bfg(ctx) // Attempt to talk to bfg
+
+	// pprof
+	if s.cfg.PprofListenAddress != "" {
+		p, err := pprof.NewServer(&pprof.Config{
+			ListenAddress: s.cfg.PprofListenAddress,
+		})
+		if err != nil {
+			return fmt.Errorf("create pprof server: %w", err)
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := p.Run(ctx); !errors.Is(err, context.Canceled) {
+				log.Errorf("pprof server terminated with error: %v", err)
+				return
+			}
+			log.Infof("pprof server clean shutdown")
+		}()
+	}
 
 	// Prometheus
 	if s.cfg.PrometheusListenAddress != "" {

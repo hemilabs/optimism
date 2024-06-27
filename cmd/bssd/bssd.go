@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/juju/loggo"
 
@@ -55,13 +56,18 @@ var (
 			Help:         "address and port bssd prometheus listens on",
 			Print:        config.PrintAll,
 		},
+		"BSS_PPROF_ADDRESS": config.Config{
+			Value:        &cfg.PprofListenAddress,
+			DefaultValue: "",
+			Help:         "address and port bssd pprof listens on (open <address>/debug/pprof to see available profiles)",
+			Print:        config.PrintAll,
+		},
 	}
 )
 
 func HandleSignals(ctx context.Context, cancel context.CancelFunc, callback func(os.Signal)) {
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	signal.Notify(signalChan, os.Kill)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	defer func() {
 		signal.Stop(signalChan)
 		cancel()
