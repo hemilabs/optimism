@@ -1,6 +1,6 @@
 module github.com/ethereum-optimism/optimism
 
-go 1.21.1
+go 1.22.2
 
 replace github.com/hemilabs/heminetwork => ./heminetwork
 
@@ -27,7 +27,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.5
 	github.com/hashicorp/raft v1.6.1
 	github.com/hashicorp/raft-boltdb v0.0.0-20231211162105-6c830fa4535e
-	github.com/hemilabs/heminetwork v0.1.0
+	github.com/hemilabs/heminetwork v0.1.3-0.20240626140326-27a5081e365a
 	github.com/holiman/uint256 v1.2.4
 	github.com/ipfs/go-datastore v0.6.0
 	github.com/ipfs/go-ds-leveldb v0.5.0
@@ -253,7 +253,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.2.1 // indirect
-	nhooyr.io/websocket v1.8.10 // indirect
+	nhooyr.io/websocket v1.8.11 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
