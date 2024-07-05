@@ -446,6 +446,45 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 		e.syncStatus = syncStatusFinishedEL
 	}
 
+	e.log.Info("checking whether to notify bss from InsertUnsafePayload")
+	bn := &bssNotification{
+		unsafeL2: *envelope.ExecutionPayload,
+	}
+
+	l2BlockHeight := envelope.ExecutionPayload.BlockNumber
+
+	prevKeystoneHeight := int64(l2BlockHeight-(l2BlockHeight%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
+	if l2BlockHeight%hemi.KeystoneHeaderPeriod != 0 {
+		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
+	}
+
+	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
+
+	var prevKeystoneRef *eth.L2BlockRef = nil
+
+	if prevKeystoneHeight > 0 {
+		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+		if err != nil {
+			return NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+		}
+
+		ref, err := PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		if err != nil {
+			return NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+		}
+		prevKeystoneRef = &ref
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
+	select {
+	case e.bssNotifierCh <- bn:
+	default:
+		e.log.Warn("BSS notifier channel full, dropping event...")
+	}
+
 	return nil
 }
 
