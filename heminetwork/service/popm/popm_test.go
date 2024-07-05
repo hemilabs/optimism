@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -615,13 +614,9 @@ func TestProcessReceivedInAscOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	miner.processReceivedKeystones(context.Background(), firstBatchOfL2Keystones)
-
-	receivedKeystones := []hemi.L2Keystone{}
-
-	for _, c := range miner.l2KeystonesForProcessing() {
-		receivedKeystones = append(receivedKeystones, c)
-	}
+	receivedKeystones := miner.l2KeystonesForProcessing()
 
 	slices.Reverse(receivedKeystones)
 	diff := deep.Equal(firstBatchOfL2Keystones, receivedKeystones)
@@ -761,13 +756,8 @@ func TestProcessReceivedNoDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	receivedKeystones := []hemi.L2Keystone{}
-
 	miner.processReceivedKeystones(context.Background(), keystones)
-
-	for _, c := range miner.l2KeystonesForProcessing() {
-		receivedKeystones = append(receivedKeystones, c)
-	}
+	receivedKeystones := miner.l2KeystonesForProcessing()
 
 	slices.Reverse(keystones)
 
@@ -848,11 +838,7 @@ func TestProcessReceivedInAscOrderOverride(t *testing.T) {
 		miner.processReceivedKeystones(context.Background(), []hemi.L2Keystone{keystone})
 	}
 
-	receivedKeystones := []hemi.L2Keystone{}
-
-	for _, c := range miner.l2KeystonesForProcessing() {
-		receivedKeystones = append(receivedKeystones, c)
-	}
+	receivedKeystones := miner.l2KeystonesForProcessing()
 
 	slices.Reverse(keystones)
 
@@ -957,11 +943,7 @@ func TestProcessReceivedInAscOrderNoInsertIfTooOld(t *testing.T) {
 		},
 	})
 
-	receivedKeystones := []hemi.L2Keystone{}
-
-	for _, c := range miner.l2KeystonesForProcessing() {
-		receivedKeystones = append(receivedKeystones, c)
-	}
+	receivedKeystones := miner.l2KeystonesForProcessing()
 
 	slices.Reverse(keystones)
 
@@ -1026,7 +1008,7 @@ func TestConnectToBFGAndPerformMineWithAuth(t *testing.T) {
 		}
 		missing := false
 		for _, m := range messagesExpected {
-			if !messagesReceived[fmt.Sprintf("%s", m)] {
+			if !messagesReceived[string(m)] {
 				t.Logf("still missing message %v", m)
 				missing = true
 			}
@@ -1090,7 +1072,7 @@ func TestConnectToBFGAndPerformMine(t *testing.T) {
 		}
 		missing := false
 		for _, m := range messagesExpected {
-			if !messagesReceived[fmt.Sprintf("%s", m)] {
+			if !messagesReceived[string(m)] {
 				t.Logf("still missing message %v", m)
 				missing = true
 			}
@@ -1154,7 +1136,7 @@ func TestConnectToBFGAndPerformMineMultiple(t *testing.T) {
 		}
 		missing := false
 		for m := range messagesExpected {
-			message := fmt.Sprintf("%s", m)
+			message := string(m)
 			if messagesReceived[message] != messagesExpected[m] {
 				t.Logf("still missing message %v, found %d want %d", m, messagesReceived[message], messagesExpected[m])
 				missing = true
@@ -1219,7 +1201,7 @@ func TestConnectToBFGAndPerformMineALot(t *testing.T) {
 		}
 		missing := false
 		for m := range messagesExpected {
-			message := fmt.Sprintf("%s", m)
+			message := string(m)
 			if messagesReceived[message] < messagesExpected[m] {
 				t.Logf("still missing message %v, found %d want %d", m, messagesReceived[message], messagesExpected[m])
 				missing = true
@@ -1351,7 +1333,7 @@ func createMockBFG(ctx context.Context, t *testing.T, publicKeys []string, keyst
 
 			go func() {
 				select {
-				case msgCh <- fmt.Sprintf("%s", command):
+				case msgCh <- string(command):
 				case <-ctx.Done():
 					return
 				}
@@ -1359,7 +1341,7 @@ func createMockBFG(ctx context.Context, t *testing.T, publicKeys []string, keyst
 
 			if command == bfgapi.CmdL2KeystonesRequest {
 				response := bfgapi.L2KeystonesResponse{}
-				for i := 0; i < keystoneCount; i++ {
+				for i := range keystoneCount {
 					response.L2Keystones = append(response.L2Keystones, hemi.L2Keystone{
 						L2BlockNumber: uint32(100 + i),
 					})

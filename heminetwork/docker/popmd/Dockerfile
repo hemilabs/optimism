@@ -3,7 +3,7 @@
 # which can be found in the LICENSE file.
 
 # Build stage
-FROM golang:1.22.1-alpine@sha256:fc5e5848529786cf1136563452b33d713d5c60b2c787f6b2a077fa6eeefd9114 as builder
+FROM golang:1.22.2-alpine@sha256:cdc86d9f363e8786845bea2040312b4efa321b828acdeb26f393faa864d887b0 as builder
 
 # Add ca-certificates, timezone data, make and git
 RUN apk --no-cache add --update ca-certificates tzdata make git
@@ -58,6 +58,9 @@ ENV POPM_BTC_PRIVKEY=
 ENV POPM_BFG_URL=
 ENV POPM_BTC_CHAIN_NAME=
 ENV POPM_PROMETHEUS_ADDRESS=
+ENV POPM_PPROF_ADDRESS=
+ENV POPM_REMINE_THRESHOLD=
+ENV POPM_STATIC_FEE=
 
 USER popmd:popmd
 WORKDIR /etc/popmd/

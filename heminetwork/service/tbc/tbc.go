@@ -8,11 +8,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/big"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -39,6 +39,7 @@ import (
 	"github.com/hemilabs/heminetwork/database/tbcd"
 	"github.com/hemilabs/heminetwork/database/tbcd/level"
 	"github.com/hemilabs/heminetwork/service/deucalion"
+	"github.com/hemilabs/heminetwork/service/pprof"
 	"github.com/hemilabs/heminetwork/ttl"
 )
 
@@ -47,10 +48,6 @@ const (
 
 	promSubsystem = "tbc_service" // Prometheus
 
-	mainnetPort  = "8333"
-	testnetPort  = "18333"
-	localnetPort = "18444"
-
 	defaultPeersWanted   = 64
 	defaultPendingBlocks = 128 // 128 * ~4MB max memory use
 
@@ -58,24 +55,30 @@ const (
 
 	networkLocalnet = "localnet" // XXX this needs to be rethought
 
-	defaultCmdTimeout  = 4 * time.Second
-	defaultPingTimeout = 3 * time.Second
+	defaultCmdTimeout          = 4 * time.Second
+	defaultPingTimeout         = 3 * time.Second
+	defaultBlockPendingTimeout = 17 * time.Second
 )
 
 var (
+	zeroHash = new(chainhash.Hash) // used to check if a hash is invalid
+
+	localnetSeeds = []string{
+		"127.0.0.1:18444",
+	}
 	testnetSeeds = []string{
-		"testnet-seed.bitcoin.jonasschnelli.ch",
-		"seed.tbtc.petertodd.org",
-		"seed.testnet.bitcoin.sprovoost.nl",
-		"testnet-seed.bluematt.me",
+		"testnet-seed.bitcoin.jonasschnelli.ch:18333",
+		"seed.tbtc.petertodd.org:18333",
+		"seed.testnet.bitcoin.sprovoost.nl:18333",
+		"testnet-seed.bluematt.me:18333",
 	}
 	mainnetSeeds = []string{
-		"seed.bitcoin.sipa.be",
-		"dnsseed.bluematt.me",
-		"dnsseed.bitcoin.dashjr.org",
-		"seed.bitcoinstats.com",
-		"seed.bitnodes.io",
-		"seed.bitcoin.jonasschnelli.ch",
+		"seed.bitcoin.sipa.be:8333",
+		"dnsseed.bluematt.me:8333",
+		"dnsseed.bitcoin.dashjr.org:8333",
+		"seed.bitcoinstats.com:8333",
+		"seed.bitnodes.io:8333",
+		"seed.bitcoin.jonasschnelli.ch:8333",
 	}
 )
 
@@ -83,7 +86,6 @@ var log = loggo.GetLogger("tbc")
 
 func init() {
 	loggo.ConfigureLoggers(logLevel)
-	rand.Seed(time.Now().UnixNano()) // used for seeding, ok to be math.rand
 }
 
 func tx2Bytes(tx *wire.MsgTx) ([]byte, error) {
@@ -104,7 +106,7 @@ func bytes2Tx(b []byte) (*wire.MsgTx, error) {
 	return &w, nil
 }
 
-func header2Bytes(wbh *wire.BlockHeader) ([]byte, error) {
+func header2Slice(wbh *wire.BlockHeader) ([]byte, error) {
 	var b bytes.Buffer
 	err := wbh.Serialize(&b)
 	if err != nil {
@@ -113,8 +115,16 @@ func header2Bytes(wbh *wire.BlockHeader) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+func header2Array(wbh *wire.BlockHeader) ([80]byte, error) {
+	sb, err := header2Slice(wbh)
+	if err != nil {
+		return [80]byte{}, err
+	}
+	return [80]byte(sb), nil
+}
+
 func h2b(wbh *wire.BlockHeader) []byte {
-	hb, err := header2Bytes(wbh)
+	hb, err := header2Slice(wbh)
 	if err != nil {
 		panic(err)
 	}
@@ -130,39 +140,23 @@ func bytes2Header(header []byte) (*wire.BlockHeader, error) {
 	return &bh, nil
 }
 
-func headerTime(header []byte) *time.Time {
-	h, err := bytes2Header(header)
-	if err != nil {
-		return nil
-	}
-	return &h.Timestamp
-}
-
-func hashEqual(h1 chainhash.Hash, h2 chainhash.Hash) bool {
-	// Fuck you chainhash package
-	return h1.IsEqual(&h2)
-}
-
 func sliceChainHash(ch chainhash.Hash) []byte {
 	// Fuck you chainhash package
 	return ch[:]
 }
 
-type blockPeer struct {
-	expire time.Time // when does this command expire
-	peer   string    // who was handling it
-}
-
 type Config struct {
 	AutoIndex               bool
 	BlockSanity             bool
-	RegtestPort             string
 	LevelDBHome             string
 	ListenAddress           string
 	LogLevel                string
 	MaxCachedTxs            int
 	Network                 string
+	PeersWanted             int
 	PrometheusListenAddress string
+	PprofListenAddress      string
+	Seeds                   []string
 }
 
 func NewDefaultConfig() *Config {
@@ -170,6 +164,7 @@ func NewDefaultConfig() *Config {
 		ListenAddress: tbcapi.DefaultListen,
 		LogLevel:      logLevel,
 		MaxCachedTxs:  defaultMaxCachedTxs,
+		PeersWanted:   defaultPeersWanted,
 	}
 }
 
@@ -189,19 +184,18 @@ type Server struct {
 	wireNet     wire.BitcoinNet
 	chainParams *chaincfg.Params
 	timeSource  blockchain.MedianTimeSource
-	port        string
 	seeds       []string
 
-	peers  map[string]*peer      // active but not necessarily connected
-	blocks map[string]*blockPeer // outstanding block downloads [hash]when/where
-	pings  *ttl.TTL
-
-	// IBD hints
-	lastBlockHeader tbcd.BlockHeader
+	peers  map[string]*peer // active but not necessarily connected
+	blocks *ttl.TTL         // outstanding block downloads [hash]when/where
+	pings  *ttl.TTL         // outstanding pings
 
 	// reentrancy flags for the indexers
-	utxoIndexerRunning bool
-	txIndexerRunning   bool
+	// utxoIndexerRunning bool
+	// txIndexerRunning   bool
+	quiesced bool // when set do not accept blockheaders and ot blocks.
+	// clipped  bool // XXX kill including all surrounding code, this is for test only
+	indexing bool // prevent re-entrant indexing
 
 	db tbcd.Database
 
@@ -222,7 +216,11 @@ func NewServer(cfg *Config) (*Server, error) {
 	if cfg == nil {
 		cfg = NewDefaultConfig()
 	}
-	pings, err := ttl.New(defaultPeersWanted)
+	pings, err := ttl.New(cfg.PeersWanted, true)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := ttl.New(defaultPendingBlocks, true)
 	if err != nil {
 		return nil, err
 	}
@@ -230,10 +228,10 @@ func NewServer(cfg *Config) (*Server, error) {
 	s := &Server{
 		cfg:            cfg,
 		printTime:      time.Now().Add(10 * time.Second),
-		blocks:         make(map[string]*blockPeer, defaultPendingBlocks),
-		peers:          make(map[string]*peer, defaultPeersWanted),
+		blocks:         blocks,
+		peers:          make(map[string]*peer, cfg.PeersWanted),
 		pings:          pings,
-		blocksInserted: make(map[string]struct{}, 8192), // stats
+		blocksInserted: make(map[string]struct{}, 8192), // stats XXX rmeove?
 		timeSource:     blockchain.NewMedianTime(),
 		cmdsProcessed: prometheus.NewCounter(prometheus.CounterOpts{
 			Subsystem: promSubsystem,
@@ -248,21 +246,23 @@ func NewServer(cfg *Config) (*Server, error) {
 
 	switch cfg.Network {
 	case "mainnet":
-		s.port = mainnetPort
 		s.wireNet = wire.MainNet
 		s.chainParams = &chaincfg.MainNetParams
 		s.seeds = mainnetSeeds
 	case "testnet3":
-		s.port = testnetPort
 		s.wireNet = wire.TestNet3
 		s.chainParams = &chaincfg.TestNet3Params
 		s.seeds = testnetSeeds
 	case networkLocalnet:
-		s.port = localnetPort
 		s.wireNet = wire.TestNet
 		s.chainParams = &chaincfg.RegressionNetParams
+		s.seeds = localnetSeeds
 	default:
 		return nil, fmt.Errorf("invalid network: %v", cfg.Network)
+	}
+
+	if len(cfg.Seeds) > 0 {
+		s.seeds = cfg.Seeds
 	}
 
 	return s, nil
@@ -273,34 +273,6 @@ func (s *Server) DB() tbcd.Database {
 	return s.db
 }
 
-// blockPeerExpire removes expired block downloads from the cache and returns
-// the number of used cache slots. Lock must be held.
-func (s *Server) blockPeerExpire() int {
-	log.Tracef("blockPeerExpire exit")
-	defer log.Tracef("blockPeerExpire exit")
-
-	now := time.Now()
-	for k, v := range s.blocks {
-		if v == nil {
-			// not assigned a peer yet
-			continue
-		}
-		if !now.After(v.expire) {
-			continue
-		}
-
-		// mark block as unassigned but do not give up cache slot
-		s.blocks[k] = nil
-		log.Infof("expired block: %v", k) // XXX maybe remove but add to stats
-
-		// kill peer as well since it is slow
-		if p := s.peers[v.peer]; p != nil && p.conn != nil {
-			p.conn.Close() // this will tear down peer
-		}
-	}
-	return len(s.blocks)
-}
-
 func (s *Server) getHeaders(ctx context.Context, p *peer, lastHeaderHash []byte) error {
 	bh, err := bytes2Header(lastHeaderHash)
 	if err != nil {
@@ -309,8 +281,7 @@ func (s *Server) getHeaders(ctx context.Context, p *peer, lastHeaderHash []byte)
 	hash := bh.BlockHash()
 	ghs := wire.NewMsgGetHeaders()
 	ghs.AddBlockLocatorHash(&hash)
-	err = p.write(defaultCmdTimeout, ghs)
-	if err != nil {
+	if err = p.write(defaultCmdTimeout, ghs); err != nil {
 		return fmt.Errorf("write get headers: %w", err)
 	}
 
@@ -336,26 +307,36 @@ func (s *Server) seed(pctx context.Context, peersWanted int) ([]tbcd.Peer, error
 	defer cancel()
 
 	errorsSeen := 0
-	var addrs []net.IP
-	for k := range s.seeds {
-		ips, err := resolver.LookupIP(ctx, "ip", s.seeds[k])
+	var moreSeeds []tbcd.Peer
+	for _, v := range s.seeds {
+		host, port, err := net.SplitHostPort(v)
+		if err != nil {
+			log.Errorf("Failed to parse host/port: %v", err)
+			errorsSeen++
+			continue
+		}
+		ips, err := resolver.LookupIP(ctx, "ip", host)
 		if err != nil {
 			log.Errorf("lookup: %v", err)
 			errorsSeen++
 			continue
 		}
-		addrs = append(addrs, ips...)
+
+		for _, ip := range ips {
+			moreSeeds = append(moreSeeds, tbcd.Peer{
+				Host: ip.String(),
+				Port: port,
+			})
+		}
 	}
+
 	if errorsSeen == len(s.seeds) {
 		return nil, errors.New("could not seed")
 	}
 
 	// insert into peers table
-	for k := range addrs {
-		peers = append(peers, tbcd.Peer{
-			Host: addrs[k].String(),
-			Port: s.port,
-		})
+	for _, ms := range moreSeeds {
+		peers = append(peers, ms)
 	}
 
 	// return fake peers but don't save them to the database
@@ -369,7 +350,7 @@ func (s *Server) seedForever(ctx context.Context, peersWanted int) ([]tbcd.Peer,
 	minW := 5
 	maxW := 59
 	for {
-		holdOff := time.Duration(minW+rand.Intn(maxW-minW)) * time.Second
+		holdOff := time.Duration(minW+rand.IntN(maxW-minW)) * time.Second
 		var em string
 		peers, err := s.seed(ctx, peersWanted)
 		if err != nil {
@@ -415,7 +396,7 @@ func (s *Server) peerManager(ctx context.Context) error {
 	defer log.Tracef("peerManager exit")
 
 	// Channel for peering signals
-	peersWanted := defaultPeersWanted
+	peersWanted := s.cfg.PeersWanted
 	peerC := make(chan string, peersWanted)
 
 	log.Infof("Peer manager connecting to %v peers", peersWanted)
@@ -443,7 +424,7 @@ func (s *Server) peerManager(ctx context.Context) error {
 			// XXX we may want to make peers play along with waitgroup
 
 			// Connect peer
-			for i := 0; i < peersWanted-peersActive; i++ {
+			for range peersWanted - peersActive {
 				address := net.JoinHostPort(seeds[x].Host, seeds[x].Port)
 				peer, err := NewPeer(s.wireNet, address)
 				if err != nil {
@@ -483,7 +464,12 @@ func (s *Server) peerManager(ctx context.Context) error {
 		case address := <-peerC:
 			// peer exited, connect to new one
 			s.peerDelete(address)
-			log.Debugf("peer exited: %v", address)
+
+			// Expire all blocks for peer
+			n := s.blocks.DeleteByValue(func(p any) bool {
+				return p.(*peer).address == address
+			})
+			log.Debugf("peer exited: %v blocks canceled: %v", address, n)
 		case <-loopTicker.C:
 			log.Debugf("pinging active peers: %v", s.peersLen())
 			go s.pingAllPeers(ctx)
@@ -496,10 +482,14 @@ func (s *Server) localPeerManager(ctx context.Context) error {
 	log.Tracef("localPeerManager")
 	defer log.Tracef("localPeerManager exit")
 
+	if len(s.seeds) != 1 {
+		return fmt.Errorf("expecting 1 seed, received %d", len(s.seeds))
+	}
+
 	peersWanted := 1
 	peerC := make(chan string, peersWanted)
-	address := net.JoinHostPort("127.0.0.1", s.port)
-	peer, err := NewPeer(s.wireNet, address)
+
+	peer, err := NewPeer(s.wireNet, s.seeds[0])
 	if err != nil {
 		return fmt.Errorf("new peer: %w", err)
 	}
@@ -618,8 +608,7 @@ func (s *Server) peerConnect(ctx context.Context, peerC chan string, p *peer) {
 				log.Errorf("split host port: %v", err)
 				return
 			}
-			err = s.db.PeerDelete(ctx, host, port)
-			if err != nil {
+			if err = s.db.PeerDelete(ctx, host, port); err != nil {
 				log.Errorf("peer delete (%v): %v", pp, err)
 			} else {
 				log.Debugf("Peer delete: %v", pp)
@@ -629,8 +618,7 @@ func (s *Server) peerConnect(ctx context.Context, peerC chan string, p *peer) {
 		return
 	}
 	defer func() {
-		err := p.close()
-		if err != nil && !errors.Is(err, net.ErrClosed) {
+		if err := p.close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Errorf("peer disconnect: %v %v", p, err)
 		}
 	}()
@@ -647,7 +635,7 @@ func (s *Server) peerConnect(ctx context.Context, peerC chan string, p *peer) {
 	// multiple answers come in the insert of the headers fails or
 	// succeeds. If it fails no more headers will be requested from that
 	// peer.
-	bhs, err := s.db.BlockHeadersBest(ctx)
+	bhb, err := s.db.BlockHeaderBest(ctx)
 	if err != nil {
 		log.Errorf("block headers best: %v", err)
 		// database is closed, nothing we can do, return here to avoid below
@@ -656,20 +644,13 @@ func (s *Server) peerConnect(ctx context.Context, peerC chan string, p *peer) {
 			return
 		}
 	}
-	if len(bhs) != 1 {
-		// XXX fix multiple tips
-		panic(len(bhs))
-	}
-	log.Debugf("block header best hash: %s", bhs[0].Hash)
+	log.Debugf("block header best hash: %s", bhb.Hash)
 
-	err = s.getHeaders(ctx, p, bhs[0].Header)
-	if err != nil {
+	if err = s.getHeaders(ctx, p, bhb.Header); err != nil {
 		// This should not happen
 		log.Errorf("get headers: %v", err)
 		return
 	}
-
-	// XXX kickstart block download, should happen in getHeaders
 
 	verbose := false
 	for {
@@ -690,33 +671,43 @@ func (s *Server) peerConnect(ctx context.Context, peerC chan string, p *peer) {
 		}
 
 		if verbose {
-			spew.Dump(msg)
+			spew.Sdump(msg)
 		}
 
-		// XXX send wire message to pool reader
+		// Commands that are always accepted.
 		switch m := msg.(type) {
 		case *wire.MsgAddr:
 			go s.handleAddr(ctx, p, m)
+			continue
 
 		case *wire.MsgAddrV2:
 			go s.handleAddrV2(ctx, p, m)
+			continue
+
+		case *wire.MsgPing:
+			go s.handlePing(ctx, p, m)
+			continue
+
+		case *wire.MsgPong:
+			go s.handlePong(ctx, p, m)
+			continue
+		}
+
+		// When quiesced do not handle other p2p commands.
+		s.mtx.Lock()
+		quiesced := s.quiesced
+		s.mtx.Unlock()
+		if quiesced {
+			continue
+		}
+
+		switch m := msg.(type) {
+		case *wire.MsgHeaders:
+			go s.handleHeaders(ctx, p, m)
 
 		case *wire.MsgBlock:
 			go s.handleBlock(ctx, p, m)
 
-		case *wire.MsgFeeFilter:
-			// XXX shut up
-
-		case *wire.MsgInv:
-			go s.handleInv(ctx, p, m)
-
-		case *wire.MsgHeaders:
-			go s.handleHeaders(ctx, p, m)
-
-		case *wire.MsgPing:
-			go s.handlePing(ctx, p, m)
-		case *wire.MsgPong:
-			go s.handlePong(ctx, p, m)
 		default:
 			log.Tracef("unhandled message type %v: %T\n", p, msg)
 		}
@@ -748,9 +739,10 @@ func (s *Server) promRunning() float64 {
 // blksMissing checks the block cache and the database and returns true if all
 // blocks have not been downloaded. This function must be called with the lock
 // held.
+// XXX do we still need a locked/unlocked version of this code?
 func (s *Server) blksMissing(ctx context.Context) bool {
 	// Do cheap memory check first
-	if len(s.blocks) != 0 {
+	if s.blocks.Len() != 0 {
 		return true
 	}
 
@@ -785,7 +777,7 @@ func (s *Server) handleAddr(ctx context.Context, p *peer, msg *wire.MsgAddr) {
 	}
 	err := s.db.PeersInsert(ctx, peers)
 	// Don't log insert 0, its a dup.
-	if err != nil && !database.ErrZeroRows.Is(err) {
+	if err != nil && !errors.Is(err, database.ErrZeroRows) {
 		log.Errorf("%v", err)
 	}
 }
@@ -803,7 +795,7 @@ func (s *Server) handleAddrV2(ctx context.Context, p *peer, msg *wire.MsgAddrV2)
 	}
 	err := s.db.PeersInsert(ctx, peers)
 	// Don't log insert 0, its a dup.
-	if err != nil && !database.ErrZeroRows.Is(err) {
+	if err != nil && !errors.Is(err, database.ErrZeroRows) {
 		log.Errorf("%v", err)
 	}
 }
@@ -830,170 +822,6 @@ func (s *Server) handlePong(ctx context.Context, p *peer, pong *wire.MsgPong) {
 	log.Tracef("handlePong %v: pong %v", p.address, pong.Nonce)
 }
 
-func (s *Server) handleInv(ctx context.Context, p *peer, msg *wire.MsgInv) {
-	log.Tracef("handleInv (%v)", p)
-	defer log.Tracef("handleInv exit (%v)", p)
-
-	var bis []tbcd.BlockIdentifier
-	for k := range msg.InvList {
-		switch msg.InvList[k].Type {
-		case wire.InvTypeBlock:
-
-			// XXX height is missing here, looks right but assert
-			// that this isn't broken.
-			log.Infof("handleInv: block %v", msg.InvList[k].Hash)
-
-			bis = append(bis, tbcd.BlockIdentifier{
-				Hash: msg.InvList[k].Hash[:], // fake out
-			})
-			log.Infof("handleInv: block %v", msg.InvList[k].Hash)
-		case wire.InvTypeTx:
-			// XXX silence mempool for now
-			return
-		default:
-			log.Infof("handleInv: skipping inv type %v", msg.InvList[k].Type)
-			return
-		}
-	}
-
-	// XXX This happens during block header download, we should not react
-	// Probably move into the invtype switch
-	log.Infof("download blocks if we like them")
-	// if len(bis) > 0 {
-	//	s.mtx.Lock()
-	//	defer s.mtx.Unlock()
-	//	err := s.downloadBlocks(ctx, bis)
-	//	if err != nil {
-	//		log.Errorf("download blocks: %v", err)
-	//		return
-	//	}
-	// }
-}
-
-func (s *Server) txIndexer(ctx context.Context) {
-	log.Tracef("txIndexer")
-	defer log.Tracef("txIndexer exit")
-
-	if !s.cfg.AutoIndex {
-		return
-	}
-
-	// only one txIndexer may run at any given time
-	s.mtx.Lock()
-	if s.txIndexerRunning {
-		s.mtx.Unlock()
-		return
-	}
-	s.txIndexerRunning = true
-	s.mtx.Unlock()
-
-	// mark txIndexer not running on exit
-	defer func() {
-		s.mtx.Lock()
-		s.txIndexerRunning = false
-		s.mtx.Unlock()
-	}()
-
-	if s.blocksMissing(ctx) {
-		return
-	}
-
-	// Get height from db
-	he, err := s.db.MetadataGet(ctx, TxIndexHeightKey)
-	if err != nil {
-		if !errors.Is(err, database.ErrNotFound) {
-			log.Errorf("tx indexer metadata get: %v", err)
-			return
-		}
-		he = make([]byte, 8)
-	}
-	h := binary.BigEndian.Uint64(he)
-
-	// Skip txIndexer if we are at best block height. This is a bit racy.
-	bhs, err := s.db.BlockHeadersBest(ctx)
-	if err != nil {
-		log.Errorf("utxo indexer block headers best: %v", err)
-		return
-	}
-	if len(bhs) != 1 {
-		log.Errorf("utxo indexer block headers best: unsuported fork")
-		return
-	}
-
-	if bhs[0].Height != h-1 {
-		err = s.TxIndexer(ctx, h, 0)
-		if err != nil {
-			log.Errorf("tx indexer: %v", err)
-			return
-		}
-	}
-}
-
-func (s *Server) utxoIndexer(ctx context.Context) {
-	log.Tracef("utxoIndexer")
-	defer log.Tracef("utxoIndexer exit")
-
-	if !s.cfg.AutoIndex {
-		return
-	}
-
-	// only one utxoIndexer may run at any given time
-	s.mtx.Lock()
-	if s.utxoIndexerRunning {
-		s.mtx.Unlock()
-		return
-	}
-	s.utxoIndexerRunning = true
-	s.mtx.Unlock()
-
-	// mark utxoIndexer not running on exit
-	defer func() {
-		s.mtx.Lock()
-		s.utxoIndexerRunning = false
-		s.mtx.Unlock()
-	}()
-
-	// exit if we aren't synced
-	if s.blocksMissing(ctx) {
-		return
-	}
-
-	// Index all utxos
-
-	// Get height from db
-	he, err := s.db.MetadataGet(ctx, UtxoIndexHeightKey)
-	if err != nil {
-		if !errors.Is(err, database.ErrNotFound) {
-			log.Errorf("utxo indexer metadata get: %v", err)
-			return
-		}
-		he = make([]byte, 8)
-	}
-	h := binary.BigEndian.Uint64(he)
-
-	// Skip UtxoIndex if we are at best block height. This is a bit racy.
-	bhs, err := s.db.BlockHeadersBest(ctx)
-	if err != nil {
-		log.Errorf("utxo indexer block headers best: %v", err)
-		return
-	}
-	if len(bhs) != 1 {
-		log.Errorf("utxo indexer block headers best: unsuported fork")
-		return
-	}
-
-	if bhs[0].Height != h-1 {
-		err = s.UtxoIndexer(ctx, h, 0)
-		if err != nil {
-			log.Errorf("utxo indexer: %v", err)
-			return
-		}
-	}
-
-	// When utxo sync completes kick off tx sync
-	go s.txIndexer(ctx)
-}
-
 func (s *Server) downloadBlock(ctx context.Context, p *peer, ch *chainhash.Hash) {
 	log.Tracef("downloadBlock")
 	defer log.Tracef("downloadBlock exit")
@@ -1015,104 +843,121 @@ func (s *Server) downloadBlock(ctx context.Context, p *peer, ch *chainhash.Hash)
 	}
 }
 
-func (s *Server) downloadBlocks(ctx context.Context) {
-	log.Tracef("downloadBlocks")
-	defer log.Tracef("downloadBlocks exit")
+// blockExpired expires a block download and kills the peer.
+func (s *Server) blockExpired(key any, value any) {
+	log.Tracef("blockExpired")
+	defer log.Tracef("blockExpired exit")
 
-	now := time.Now()
+	p, ok := value.(*peer)
+	if !ok {
+		// this really should not happen
+		log.Errorf("block expired no peer: %v", key)
+		return
+	}
+	log.Infof("block expired %v: %v", p, key)
 
-	defer func() {
-		// if we are complete we need to kick off utxo sync
-		go s.utxoIndexer(ctx)
-	}()
+	p.close() // this will tear down peer
+}
 
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
+// randomPeer returns a random peer from the map. Must be called with lock
+// held.
+func (s *Server) randomPeer(ctx context.Context) (*peer, error) {
+	log.Tracef("randomPeer")
+	defer log.Tracef("randomPeer exit")
 
-	for k, v := range s.blocks {
-		if v != nil && now.After(v.expire) {
-			// kill peer as well since it is slow
-			if p := s.peers[v.peer]; p != nil && p.conn != nil {
-				p.conn.Close() // this will tear down peer
-			}
-
-			// block expired, download block
-			s.blocks[k] = nil
-			v = nil // this will redownload the block
-		}
-		if v != nil {
-			// block already being downloaded and is not expired
+	// unassigned slot, download block
+	for _, p := range s.peers {
+		if p.conn == nil {
+			// Not connected yet
 			continue
 		}
-		// unassigned slot, download block
-		for _, peer := range s.peers {
-			if peer.conn == nil {
-				// Not connected yet
-				continue
-			}
-			ch, err := chainhash.NewHashFromStr(k)
-			if err != nil {
-				// really should not happen
-				log.Errorf("download blocks hash: %v", err)
-				delete(s.blocks, k)
-				continue
-			}
-
-			// sufficiently validated, record in cache
-			s.blocks[k] = &blockPeer{
-				expire: time.Now().Add(37 * time.Second), // XXX make variable?
-				peer:   peer.String(),
-			}
-
-			go s.downloadBlock(ctx, peer, ch)
-
-			break
-		}
+		return p, nil
 	}
+	return nil, errors.New("no peers")
 }
 
 func (s *Server) syncBlocks(ctx context.Context) {
 	log.Tracef("syncBlocks")
 	defer log.Tracef("syncBlocks exit")
 
-	// regardless of cache being full or no more missing blocks kick the
-	// downloader just to make sure we are making forward progress.
-	defer func() {
-		go s.downloadBlocks(ctx)
-	}()
-
-	// Hold lock to fill blocks cache
+	// Prevent race condition with 'want', which may cause the cache
+	// capacity to be exceeded.
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	// Deal with expired block downloads
-	used := s.blockPeerExpire()
-	want := defaultPendingBlocks - used
+	want := defaultPendingBlocks - s.blocks.Len()
 	if want <= 0 {
 		return
 	}
-
 	bm, err := s.db.BlocksMissing(ctx, want)
 	if err != nil {
 		log.Errorf("blocks missing: %v", err)
 		return
 	}
+
+	if len(bm) == 0 {
+		// We can avoid quiescing by verifying if we are already done
+		// indexing.
+		if si := s.synced(ctx); si.Synced {
+			log.Tracef("already synced at %v", si.BlockHeader)
+			return
+		}
+
+		// Exit if AutoIndex isn't enabled.
+		if !s.cfg.AutoIndex {
+			return
+		}
+
+		bhb, err := s.db.BlockHeaderBest(ctx)
+		if err != nil {
+			log.Errorf("sync blocks best block header: %v", err)
+			return
+		}
+		s.quiesced = true // XXX if it's set and we exit with an error, what should we do??
+		go func() {
+			// we really want to push the indexing reentrancy into this call
+			log.Infof("quiescing p2p and indexing to: %v @ %v",
+				bhb, bhb.Height)
+			if err = s.SyncIndexersToHash(ctx, bhb.BlockHash()); err != nil {
+				log.Errorf("sync blocks: %v", err)
+				return
+			}
+		}()
+		return
+	}
+
 	for k := range bm {
 		bi := bm[k]
 		hash, _ := chainhash.NewHash(bi.Hash[:])
 		hashS := hash.String()
-		if _, ok := s.blocks[hashS]; ok {
+		if _, _, err := s.blocks.Get(hashS); err == nil {
+			// Already being downloaded.
 			continue
 		}
-		s.blocks[hashS] = nil // pending block
+		rp, err := s.randomPeer(ctx)
+		if err != nil {
+			// This can happen during startup or when the network
+			// is starved.
+			// XXX: Probably too loud, remove later.
+			log.Errorf("random peer %v: %v", hashS, err)
+			return
+		}
+		s.blocks.Put(ctx, defaultBlockPendingTimeout, hashS, rp,
+			s.blockExpired, nil)
+		go s.downloadBlock(ctx, rp, hash)
 	}
 }
 
 func (s *Server) handleHeaders(ctx context.Context, p *peer, msg *wire.MsgHeaders) {
-	log.Tracef("handleHeaders %v", p)
-	defer log.Tracef("handleHeaders exit %v", p)
+	log.Tracef("handleHeaders (%v): %v", p, len(msg.Headers))
+	defer log.Tracef("handleHeaders exit (%v): %v", p, len(msg.Headers))
 
-	log.Debugf("handleHeaders (%v): %v", p, len(msg.Headers))
+	// s.mtx.Lock()
+	// if s.clipped {
+	//	log.Infof("pretend we are at the height")
+	//	msg.Headers = msg.Headers[0:0]
+	// }
+	// s.mtx.Unlock()
 
 	if len(msg.Headers) == 0 {
 		// This may signify the end of IBD but isn't 100%. We can fart
@@ -1120,13 +965,16 @@ func (s *Server) handleHeaders(ctx context.Context, p *peer, msg *wire.MsgHeader
 		// just behind or if we are nominally where we should be. This
 		// test will never be 100% accurate.
 
-		s.mtx.Lock()
-		lastBH := s.lastBlockHeader.Timestamp()
-		s.mtx.Unlock()
-		if time.Now().Sub(lastBH) > 6*s.chainParams.TargetTimePerBlock {
-			log.Infof("peer not synced: %v", p)
-			return
-		}
+		// s.mtx.Lock()
+		// lastBH := s.lastBlockHeader.Timestamp()
+		// s.mtx.Unlock()
+		// if time.Since(lastBH) > 6*s.chainParams.TargetTimePerBlock {
+		//	log.Infof("peer not synced: %v", p)
+		//	p.close() // get rid of this peer
+		//	return
+		// }
+
+		// only do this if peer is synced
 
 		go s.syncBlocks(ctx)
 
@@ -1139,70 +987,94 @@ func (s *Server) handleHeaders(ctx context.Context, p *peer, msg *wire.MsgHeader
 	//
 	// There really is no good way of determining if we can escape the
 	// expensive calls so we just eat it.
-
-	// Make sure we can connect these headers in database
-	dbpbh, err := s.db.BlockHeaderByHash(ctx, msg.Headers[0].PrevBlock[:])
-	if err != nil {
-		log.Errorf("handle headers no previous block header: %v",
-			msg.Headers[0].BlockHash())
-		return
-	}
-	pbh, err := bytes2Header(dbpbh.Header)
-	if err != nil {
-		log.Errorf("invalid block header: %v", err)
-		return
-	}
-
-	// Construct insert list and nominally validate headers
-	headers := make([]tbcd.BlockHeader, 0, len(msg.Headers))
-	height := dbpbh.Height + 1
+	var pbhHash *chainhash.Hash
+	headers := make([][80]byte, len(msg.Headers))
 	for k := range msg.Headers {
-		if !hashEqual(msg.Headers[k].PrevBlock, pbh.BlockHash()) {
-			log.Errorf("cannot connect %v at height %v",
-				msg.Headers[k].PrevBlock, height)
+		if pbhHash != nil && pbhHash.IsEqual(&msg.Headers[k].PrevBlock) {
+			log.Errorf("cannot connect %v index %v",
+				msg.Headers[k].PrevBlock, k)
+			p.close() // get rid of this misbehaving peer
 			return
 		}
 
-		headers = append(headers, tbcd.BlockHeader{
-			Hash:   sliceChainHash(msg.Headers[k].BlockHash()),
-			Height: height,
-			Header: h2b(msg.Headers[k]),
-		})
-
-		pbh = msg.Headers[k]
-		height++
+		copy(headers[k][0:80], h2b(msg.Headers[k])) // XXX don't double copy
+		pbhHash = &msg.Headers[k].PrevBlock
 	}
 
 	if len(headers) > 0 {
-		err := s.db.BlockHeadersInsert(ctx, headers)
+		it, cbh, lbh, err := s.db.BlockHeadersInsert(ctx, headers)
 		if err != nil {
 			// This ends the race between peers during IBD.
-			if !database.ErrDuplicate.Is(err) {
+			if !errors.Is(database.ErrDuplicate, err) {
+				// XXX do we need to ask for more headers?
 				log.Errorf("block headers insert: %v", err)
 			}
 			return
 		}
 
-		// If we get here try to store the last blockheader that was
-		// inserted. This may race so we have to take the mutex and
-		// check height.
-		lbh := headers[len(headers)-1]
+		// Note that BlockHeadersInsert always returns the canonical
+		// tip blockheader.
+		var height uint64
+		switch it {
+		case tbcd.ITChainExtend:
+			height = cbh.Height
 
-		s.mtx.Lock()
-		if lbh.Height > s.lastBlockHeader.Height {
-			s.lastBlockHeader = lbh
-		}
-		s.mtx.Unlock()
+			// Ask for next batch of headers at canonical tip.
+			if err = s.getHeaders(ctx, p, cbh.Header); err != nil {
+				log.Errorf("get headers: %v", err)
+				return
+			}
 
-		log.Infof("Inserted %v block headers height %v",
-			len(headers), lbh.Height)
+		case tbcd.ITForkExtend:
+			height = lbh.Height
 
-		// Ask for next batch of headers
-		err = s.getHeaders(ctx, p, lbh.Header)
-		if err != nil {
-			log.Errorf("get headers: %v", err)
+			// Ask for more block headers at the fork tip.
+			if err = s.getHeaders(ctx, p, lbh.Header); err != nil {
+				log.Errorf("get headers fork: %v", err)
+				return
+			}
+
+			// Also ask for more block headers at canonical tip
+			if err = s.getHeaders(ctx, p, cbh.Header); err != nil {
+				log.Errorf("get headers canonical: %v", err)
+				return
+			}
+
+		case tbcd.ITChainFork:
+			height = cbh.Height
+
+			if s.Synced(ctx).Synced {
+				// XXX this is racy but is a good enough test
+				// to get past most of this.
+				panic("chain forked, unwind/rewind indexes")
+			}
+
+			// Ask for more block headers at the fork tip.
+			if err = s.getHeaders(ctx, p, lbh.Header); err != nil {
+				log.Errorf("get headers fork: %v", err)
+				return
+			}
+
+			// Also ask for more block headers at canonical tip
+			if err = s.getHeaders(ctx, p, cbh.Header); err != nil {
+				log.Errorf("get headers canonical: %v", err)
+				return
+			}
+
+		default:
+			// XXX can't happen
+			log.Errorf("invalid insert type: %d", it)
 			return
 		}
+
+		// XXX we probably don't want top print it
+		log.Infof("Inserted (%v) %v block headers height %v",
+			it, len(headers), height)
+
+		// s.mtx.Lock()
+		// s.clipped = true
+		// s.mtx.Unlock()
+		// log.Infof("clipped at %v", lbh.Height)
 	}
 }
 
@@ -1253,7 +1125,8 @@ func (s *Server) handleBlock(ctx context.Context, p *peer, msg *wire.MsgBlock) {
 			len(msg.Transactions), msg.Header.Timestamp)
 	}
 
-	// Whatever happens,, delete from cache and potentially try again
+	// Whatever happens, delete from cache and potentially try again
+	log.Infof("inserted block at height %d, parent hash %s", height, block.MsgBlock().Header.PrevBlock)
 	var (
 		printStats      bool
 		blocksSize      uint64
@@ -1270,8 +1143,10 @@ func (s *Server) handleBlock(ctx context.Context, p *peer, msg *wire.MsgBlock) {
 		activePeers    int
 		connectedPeers int
 	)
+	// XXX do we need these? s.mtx.Lock()
+	// XXX rethink lock here
 	s.mtx.Lock()
-	delete(s.blocks, bhs) // remove block from cache regardless of insert result
+	s.blocks.Delete(bhs) // remove block from cache regardless of insert result
 
 	// Stats
 	if err == nil {
@@ -1299,7 +1174,7 @@ func (s *Server) handleBlock(ctx context.Context, p *peer, msg *wire.MsgBlock) {
 		s.printTime = now.Add(10 * time.Second)
 
 		// Grab pending block cache stats
-		blocksPending = len(s.blocks)
+		blocksPending = s.blocks.Len()
 
 		// Grab some peer stats as well
 		activePeers = len(s.peers)
@@ -1328,42 +1203,35 @@ func (s *Server) handleBlock(ctx context.Context, p *peer, msg *wire.MsgBlock) {
 	go s.syncBlocks(ctx)
 }
 
-func (s *Server) insertGenesis(ctx context.Context) ([]tbcd.BlockHeader, error) {
+func (s *Server) insertGenesis(ctx context.Context) error {
 	log.Tracef("insertGenesis")
 	defer log.Tracef("insertGenesis exit")
 
 	// We really should be inserting the block first but block insert
 	// verifies that a block header exists.
 	log.Infof("Inserting genesis block and header: %v", s.chainParams.GenesisHash)
-	gbh, err := header2Bytes(&s.chainParams.GenesisBlock.Header)
+	gbh, err := header2Array(&s.chainParams.GenesisBlock.Header)
 	if err != nil {
-		return nil, fmt.Errorf("serialize genesis block header: %w", err)
+		return fmt.Errorf("serialize genesis block header: %w", err)
 	}
-
-	genesisBlockHeader := &tbcd.BlockHeader{
-		Height: 0,
-		Hash:   s.chainParams.GenesisHash[:],
-		Header: gbh,
-	}
-	err = s.db.BlockHeadersInsert(ctx, []tbcd.BlockHeader{*genesisBlockHeader})
-	if err != nil {
-		return nil, fmt.Errorf("genesis block header insert: %w", err)
+	if err = s.db.BlockHeaderGenesisInsert(ctx, gbh); err != nil {
+		return fmt.Errorf("genesis block header insert: %w", err)
 	}
 
 	log.Debugf("Inserting genesis block")
 	gb, err := btcutil.NewBlock(s.chainParams.GenesisBlock).Bytes()
 	if err != nil {
-		return nil, fmt.Errorf("genesis block encode: %w", err)
+		return fmt.Errorf("genesis block encode: %w", err)
 	}
 	_, err = s.db.BlockInsert(ctx, &tbcd.Block{
 		Hash:  s.chainParams.GenesisHash[:],
 		Block: gb,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("genesis block insert: %w", err)
+		return fmt.Errorf("genesis block insert: %w", err)
 	}
 
-	return []tbcd.BlockHeader{*genesisBlockHeader}, nil
+	return nil
 }
 
 //
@@ -1432,54 +1300,42 @@ func (s *Server) BlockHeadersByHeight(ctx context.Context, height uint64) ([]*wi
 	return wireBlockHeaders, nil
 }
 
-// RawBlockHeadersBest returns the raw headers for the best known blocks.
-func (s *Server) RawBlockHeadersBest(ctx context.Context) (uint64, []api.ByteSlice, error) {
-	log.Tracef("RawBlockHeadersBest")
-	defer log.Tracef("RawBlockHeadersBest exit")
+// RawBlockHeaderBest returns the raw header for the best known block.
+// XXX should we return cumulative difficulty, hash?
+func (s *Server) RawBlockHeaderBest(ctx context.Context) (uint64, api.ByteSlice, error) {
+	log.Tracef("RawBlockHeaderBest")
+	defer log.Tracef("RawBlockHeaderBest exit")
 
-	bhs, err := s.db.BlockHeadersBest(ctx)
+	bhb, err := s.db.BlockHeaderBest(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
-
-	var height uint64
-	if len(bhs) > 0 {
-		height = bhs[0].Height
-	}
-
-	var headers []api.ByteSlice
-	for _, bh := range bhs {
-		headers = append(headers, []byte(bh.Header))
-	}
-
-	return height, headers, nil
+	return bhb.Height, api.ByteSlice(bhb.Header[:]), nil
 }
 
-// BlockHeadersBest returns the headers for the best known blocks.
-func (s *Server) BlockHeadersBest(ctx context.Context) (uint64, []*wire.BlockHeader, error) {
+func (s *Server) DifficultyAtHash(ctx context.Context, hash *chainhash.Hash) (*big.Int, error) {
+	log.Tracef("DifficultyAtHash")
+	defer log.Tracef("DifficultyAtHash exit")
+
+	blockHeader, err := s.db.BlockHeaderByHash(ctx, hash[:])
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockHeader.Difficulty, nil
+}
+
+// BlockHeaderBest returns the headers for the best known blocks.
+func (s *Server) BlockHeaderBest(ctx context.Context) (uint64, *wire.BlockHeader, error) {
 	log.Tracef("BlockHeadersBest")
 	defer log.Tracef("BlockHeadersBest exit")
 
-	blockHeaders, err := s.db.BlockHeadersBest(ctx)
+	blockHeader, err := s.db.BlockHeaderBest(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
-
-	var height uint64
-	if len(blockHeaders) > 0 {
-		height = blockHeaders[0].Height
-	}
-
-	wireBlockHeaders := make([]*wire.BlockHeader, 0, len(blockHeaders))
-	for _, bh := range blockHeaders {
-		w, err := bh.Wire()
-		if err != nil {
-			return 0, nil, err
-		}
-		wireBlockHeaders = append(wireBlockHeaders, w)
-	}
-
-	return height, wireBlockHeaders, nil
+	wbh, err := bytes2Header(blockHeader.Header)
+	return blockHeader.Height, wbh, err
 }
 
 func (s *Server) BalanceByAddress(ctx context.Context, encodedAddress string) (uint64, error) {
@@ -1493,9 +1349,7 @@ func (s *Server) BalanceByAddress(ctx context.Context, encodedAddress string) (u
 		return 0, err
 	}
 
-	scriptHash := sha256.Sum256(script)
-
-	balance, err := s.db.BalanceByScriptHash(ctx, scriptHash)
+	balance, err := s.db.BalanceByScriptHash(ctx, sha256.Sum256(script))
 	if err != nil {
 		return 0, err
 	}
@@ -1593,7 +1447,8 @@ func (s *Server) FeesAtHeight(ctx context.Context, height, count int64) (uint64,
 			return 0, fmt.Errorf("headers by height: %w", err)
 		}
 		if len(bhs) != 1 {
-			return 0, fmt.Errorf("too many block headers: %v", len(bhs))
+			panic("fees at height: unsupported fork")
+			// return 0, fmt.Errorf("too many block headers: %v", len(bhs))
 		}
 		be, err := s.db.BlockByHash(ctx, bhs[0].Hash)
 		if err != nil {
@@ -1607,8 +1462,7 @@ func (s *Server) FeesAtHeight(ctx context.Context, height, count int64) (uint64,
 		}
 
 		// walk block tx'
-		err = feesFromTransactions(b.Transactions())
-		if err != nil {
+		if err = feesFromTransactions(b.Transactions()); err != nil {
 			return 0, fmt.Errorf("fees from transactions %v %v: %v",
 				height, b.Hash(), err)
 		}
@@ -1618,39 +1472,69 @@ func (s *Server) FeesAtHeight(ctx context.Context, height, count int64) (uint64,
 }
 
 type SyncInfo struct {
-	Synced            bool   // True when all indexing is caught up
-	BlockHeaderHeight uint64 // last block header height
-	UtxoHeight        uint64 // last indexed utxo block height
-	TxHeight          uint64 // last indexed tx block height
+	Synced      bool // True when all indexing is caught up
+	BlockHeader HashHeight
+	Utxo        HashHeight
+	Tx          HashHeight
+	// BlockHeaderHeight uint64 // last block header height
+	// UtxoHeight        uint64 // last indexed utxo block height
+	// TxHeight          uint64 // last indexed tx block height
 }
 
-func (s *Server) Synced(ctx context.Context) (si SyncInfo) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	si.BlockHeaderHeight = s.lastBlockHeader.Height
-
+func (s *Server) synced(ctx context.Context) (si SyncInfo) {
 	// These values are cached in leveldb so it is ok to call with mutex
 	// held.
 	//
 	// Note that index heights are start indexing values thus they are off
 	// by one from the last block height seen.
-	uh, err := s.db.MetadataGet(ctx, UtxoIndexHeightKey)
-	if err == nil {
-		si.UtxoHeight = binary.BigEndian.Uint64(uh) - 1
+	bhb, err := s.db.BlockHeaderBest(ctx)
+	if err != nil {
+		panic(err)
 	}
-	th, err := s.db.MetadataGet(ctx, TxIndexHeightKey)
-	if err == nil {
-		si.TxHeight = binary.BigEndian.Uint64(th) - 1
+	bhHash, err := chainhash.NewHash(bhb.Hash)
+	if err != nil {
+		panic(err)
 	}
-	if si.UtxoHeight == si.TxHeight && si.UtxoHeight == si.BlockHeaderHeight &&
+	// Ensure we have genesis or the Synced flag will be true if metadata
+	// does not exist.
+	if zeroHash.IsEqual(bhHash) {
+		panic("no genesis")
+	}
+	si.BlockHeader.Hash = *bhHash
+	si.BlockHeader.Height = bhb.Height
+
+	// utxo index
+	utxoHH, err := s.UtxoIndexHash(ctx)
+	if err != nil {
+		utxoHH = &HashHeight{}
+	}
+	si.Utxo = *utxoHH
+
+	// tx index
+	txHH, err := s.TxIndexHash(ctx)
+	if err != nil {
+		txHH = &HashHeight{}
+	}
+	si.Tx = *txHH
+
+	if utxoHH.Hash.IsEqual(bhHash) && txHH.Hash.IsEqual(bhHash) &&
 		!s.blksMissing(ctx) {
 		si.Synced = true
 	}
 	return
 }
 
+// Synced returns true if all block headers, blocks and all indexes are caught up.
+func (s *Server) Synced(ctx context.Context) SyncInfo {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
+	return s.synced(ctx)
+}
+
 // DBOpen opens the underlying server database. It has been put in its own
 // function to make it available during tests and hemictl.
+// It would be good if it can be deleted.
 func (s *Server) DBOpen(ctx context.Context) error {
 	log.Tracef("DBOpen")
 	defer log.Tracef("DBOpen exit")
@@ -1692,7 +1576,7 @@ func (s *Server) Run(pctx context.Context) error {
 
 	// We need a lot of open files and memory for the indexes. Best effort
 	// to echo to the user what the ulimits are.
-	if s.ignoreUlimit {
+	if s.ignoreUlimit || s.cfg.Network == networkLocalnet {
 		log.Warningf("ignoring ulimit requirements")
 	} else if ulimitSupported {
 		if err := verifyUlimits(); err != nil {
@@ -1718,26 +1602,22 @@ func (s *Server) Run(pctx context.Context) error {
 	}()
 
 	// Find out where IBD is at
-	bhs, err := s.db.BlockHeadersBest(ctx)
+	bhb, err := s.db.BlockHeaderBest(ctx)
 	if err != nil {
-		return fmt.Errorf("block headers best: %w", err)
-	}
-	// No entries means we are at genesis
-	if len(bhs) == 0 {
-		bhs, err = s.insertGenesis(ctx)
-		if err != nil {
+		if !errors.Is(err, database.ErrNotFound) {
+			return fmt.Errorf("block headers best: %w", err)
+		}
+
+		if err = s.insertGenesis(ctx); err != nil {
 			return fmt.Errorf("insert genesis: %w", err)
 		}
-		bhs, err = s.db.BlockHeadersBest(ctx)
+		bhb, err = s.db.BlockHeaderBest(ctx)
 		if err != nil {
 			return err
 		}
-	} else if len(bhs) > 1 {
-		return errors.New("blockheaders best: unsupported fork")
 	}
-	s.lastBlockHeader = bhs[0] // Prime last seen block header
 	log.Infof("Starting block headers sync at height: %v time %v",
-		bhs[0].Height, bhs[0].Timestamp())
+		bhb.Height, bhb.Timestamp())
 
 	// HTTP server
 	mux := http.NewServeMux()
@@ -1761,6 +1641,25 @@ func (s *Server) Run(pctx context.Context) error {
 		}
 		log.Infof("RPC server shutdown cleanly")
 	}()
+
+	// pprof
+	if s.cfg.PprofListenAddress != "" {
+		p, err := pprof.NewServer(&pprof.Config{
+			ListenAddress: s.cfg.PprofListenAddress,
+		})
+		if err != nil {
+			return fmt.Errorf("create pprof server: %w", err)
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := p.Run(ctx); !errors.Is(err, context.Canceled) {
+				log.Errorf("pprof server terminated with error: %v", err)
+				return
+			}
+			log.Infof("pprof server clean shutdown")
+		}()
+	}
 
 	// Prometheus
 	if s.cfg.PrometheusListenAddress != "" {
@@ -1793,8 +1692,7 @@ func (s *Server) Run(pctx context.Context) error {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		err := s.startPeerManager(ctx)
-		if err != nil {
+		if err := s.startPeerManager(ctx); err != nil {
 			select {
 			case errC <- err:
 			default:
