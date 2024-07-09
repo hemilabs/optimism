@@ -4,11 +4,6 @@ ARG VERSION=v0.0.0 TARGETOS TARGETARCH
 
 RUN apk add git make
 
-WORKDIR /
-RUN git clone https://github.com/hemilabs/op-geth
-WORKDIR /op-geth
-RUN git checkout 83dd8a6e0459dd0f96182bb16065411f9318ac00
-
 WORKDIR /optimism
 
 COPY . /optimism
