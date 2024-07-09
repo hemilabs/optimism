@@ -268,7 +268,4 @@ exclude (
 
 )
 
-//replace github.com/ethereum/go-ethereum v1.13.5 => github.com/ethereum-optimism/op-geth v1.101304.2-0.20231130012434-cd5316814d08
-
-//replace github.com/ethereum-optimism/superchain-registry/superchain => ../superchain-registry/superchain
-replace github.com/ethereum/go-ethereum v1.13.5 => ../op-geth
+replace github.com/ethereum/go-ethereum v1.13.5 => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20240705124236-83dd8a6e0459
