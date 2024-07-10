@@ -17,7 +17,7 @@ ARG VCS_REF
 ARG BUILD_DATE
 LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.authors="Hemi Labs" \
-      org.opencontainers.image.url="https://github.com/hemilabs/optimism/op-node" \
+      org.opencontainers.image.url="https://github.com/hemilabs/optimism/tree/hemi/op-node" \
       org.opencontainers.image.source="https://github.com/hemilabs/optimism" \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$VCS_REF \
@@ -26,7 +26,7 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.title="Optimism Op-Node" \
       org.label-schema.build-date=$BUILD_DATE \
       org.label-schema.name="Optimism Op-Node" \
-      org.label-schema.url="https://github.com/hemilabs/optimism/op-node" \
+      org.label-schema.url="https://github.com/hemilabs/optimism/tree/hemi/op-node" \
       org.label-schema.vcs-url="https://github.com/hemilabs/optimism" \
       org.label-schema.vcs-ref=$VCS_REF \
       org.label-schema.vendor="Hemi Labs" \
@@ -34,5 +34,9 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.label-schema.schema-version="1.0"
 
 COPY --from=builder /optimism/op-node/bin/op-node /bin/op-node
+
+RUN adduser -D -s /bin/sh op-node
+
+USER op-node
 
 CMD ["op-node"]
