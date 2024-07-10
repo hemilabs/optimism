@@ -6,6 +6,8 @@
 name: "Docker"
 on:
   push:
+    branches:
+      - main
 
 concurrency:
   group: "docker-${{ github.workflow }}-${{ github.event.number || github.ref }}"
@@ -15,7 +17,7 @@ jobs:
   # Build and publish Docker image
   docker:
     name: "Docker"
-    if: ${{ github.repository_owner == 'hemilabs' }}
+    if: github.repository_owner == 'hemilabs'
     runs-on: "ubuntu-latest"
     permissions:
       contents: read
