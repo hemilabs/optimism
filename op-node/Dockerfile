@@ -1,32 +1,42 @@
-FROM --platform=$BUILDPLATFORM golang:1.21.1-alpine3.18 as builder
+FROM golang:1.22.5-alpine3.20@sha256:8c9183f715b0b4eca05b8b3dbf59766aaedb41ec07477b132ee2891ac0110a07 AS builder
 
-ARG VERSION=v0.0.0
+ARG VERSION=v0.0.0 TARGETOS TARGETARCH
 
-RUN apk add --no-cache make gcc musl-dev linux-headers git jq bash
+RUN apk add git make
 
-COPY ./go.mod /app/go.mod
-COPY ./go.sum /app/go.sum
+WORKDIR /optimism
 
-WORKDIR /app
-
-# build op-node with the shared go.mod & go.sum files
-COPY ./heminetwork /app/heminetwork
-COPY ./op-node /app/op-node
-COPY ./op-chain-ops /app/op-chain-ops
-COPY ./op-service /app/op-service
-COPY ./op-bindings /app/op-bindings
-COPY ./.git /app/.git
-
-RUN go mod download
-
-WORKDIR /app/op-node
-
-ARG TARGETOS TARGETARCH
+COPY . .
 
 RUN make op-node VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH
 
-FROM alpine:3.18
+FROM alpine:3.20@sha256:b89d9c93e9ed3597455c90a0b88a8bbb5cb7188438f70953fede212a0c4394e0
 
-COPY --from=builder /usr/local/bin/op-node /usr/local/bin/op-node
+ARG VERSION
+ARG VCS_REF
+ARG BUILD_DATE
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.authors="Hemi Labs" \
+      org.opencontainers.image.url="https://github.com/hemilabs/optimism/tree/hemi/op-node" \
+      org.opencontainers.image.source="https://github.com/hemilabs/optimism" \
+      org.opencontainers.image.version=$VERSION \
+      org.opencontainers.image.revision=$VCS_REF \
+      org.opencontainers.image.vendor="Hemi Labs" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.title="Optimism Op-Node" \
+      org.label-schema.build-date=$BUILD_DATE \
+      org.label-schema.name="Optimism Op-Node" \
+      org.label-schema.url="https://github.com/hemilabs/optimism/tree/hemi/op-node" \
+      org.label-schema.vcs-url="https://github.com/hemilabs/optimism" \
+      org.label-schema.vcs-ref=$VCS_REF \
+      org.label-schema.vendor="Hemi Labs" \
+      org.label-schema.version=$VERSION \
+      org.label-schema.schema-version="1.0"
+
+COPY --from=builder /optimism/op-node/bin/op-node /bin/op-node
+
+RUN adduser -D -s /bin/sh op-node
+
+USER op-node
 
 CMD ["op-node"]
