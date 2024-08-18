@@ -3,17 +3,18 @@ package client
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
+	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/hemilabs/heminetwork/api/bssapi"
 	"github.com/hemilabs/heminetwork/api/protocol"
 	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum/log"
-	"sync"
-	"time"
 )
 
 const (
-	defaultRequestTimeout = 5 * time.Second
+	defaultRequestTimeout = 10 * time.Second
 	defaultHoldoffTimeout = 5 * time.Second
 )
 
