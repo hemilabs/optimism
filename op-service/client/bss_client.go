@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultRequestTimeout = 10 * time.Second
+	defaultRequestTimeout = 20 * time.Second
 	defaultHoldoffTimeout = 5 * time.Second
 )
 
