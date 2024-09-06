@@ -18,8 +18,8 @@ import (
 
 const (
 	HeaderVersion1       = 1
-	HeaderSize           = 73 // XXX rename
-	KeystoneHeaderPeriod = 25 // XXX debate and set
+	HeaderSize           = 73  // XXX rename
+	KeystoneHeaderPeriod = 100 // XXX debate and set
 
 	OldHeaderSize = 65
 
