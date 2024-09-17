@@ -6,8 +6,6 @@
 name: "Docker"
 on:
   push:
-    branches:
-      - max/mnprep
 
 concurrency:
   group: "docker-${{ github.workflow }}-${{ github.event.number || github.ref }}"
