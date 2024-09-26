@@ -231,6 +231,9 @@ func (eq *EngineQueue) SystemConfig() eth.SystemConfig {
 }
 
 func (eq *EngineQueue) AddUnsafePayload(envelope *eth.ExecutionPayloadEnvelope) {
+
+	eq.log.Info("adding unsafe payload")
+
 	if envelope == nil {
 		eq.log.Warn("cannot add nil unsafe payload")
 		return
