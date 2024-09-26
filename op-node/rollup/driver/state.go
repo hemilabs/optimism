@@ -269,6 +269,9 @@ func (s *Driver) eventLoop() {
 	lastUnsafeL2 := s.engineController.UnsafeL2Head()
 
 	for {
+
+		s.log.Info("will run next even loop iteration")
+
 		if s.driverCtx.Err() != nil { // don't try to schedule/handle more work when we are closing.
 			return
 		}
@@ -309,6 +312,7 @@ func (s *Driver) eventLoop() {
 
 		select {
 		case <-sequencerCh:
+			s.log.Info("will run next sequencer action")
 			// the payload publishing is handled by the async gossiper, which will begin gossiping as soon as available
 			// so, we don't need to receive the payload here
 			_, err := s.sequencer.RunNextSequencerAction(s.driverCtx, s.asyncGossiper, s.sequencerConductor)
@@ -320,6 +324,7 @@ func (s *Driver) eventLoop() {
 			}
 			planSequencerAction() // schedule the next sequencer action to keep the sequencing looping
 		case <-altSyncTicker.C:
+			s.log.Info("will run alt sync action")
 			// Check if there is a gap in the current unsafe payload queue.
 			ctx, cancel := context.WithTimeout(s.driverCtx, time.Second*2)
 			err := s.checkForGapInUnsafeQueue(ctx)
@@ -328,6 +333,7 @@ func (s *Driver) eventLoop() {
 				s.log.Warn("failed to check for unsafe L2 blocks to sync", "err", err)
 			}
 		case envelope := <-s.unsafeL2Payloads:
+			s.log.Info("will run process new unsafeL2Payload")
 			s.snapshot("New unsafe payload")
 			// If we are doing CL sync or done with engine syncing, fallback to the unsafe payload queue & CL P2P sync.
 			if s.syncCfg.SyncMode == sync.CLSync || !s.engineController.IsEngineSyncing() {
