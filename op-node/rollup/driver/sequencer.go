@@ -316,7 +316,7 @@ func (d *Sequencer) BuildingOnto() eth.L2BlockRef {
 func (d *Sequencer) RunNextSequencerAction(ctx context.Context, agossip async.AsyncGossiper, sequencerConductor conductor.SequencerConductor) (*eth.ExecutionPayloadEnvelope, error) {
 	// if the engine returns a non-empty payload, OR if the async gossiper already has a payload, we can CompleteBuildingBlock
 	if onto, buildingID, safe := d.engine.BuildingPayload(); buildingID != (eth.PayloadID{}) || agossip.Get() != nil {
-		d.log.Info("I am not building a block", "buildingID", buildingID, "agossip.Get", agossip.Gget())
+		d.log.Info("I am not building a block", "buildingID", buildingID, "agossip.Get", agossip.Get())
 		if safe {
 			d.log.Warn("avoiding sequencing to not interrupt safe-head changes", "onto", onto, "onto_time", onto.Time)
 			// approximates the worst-case time it takes to build a block, to reattempt sequencing after.
