@@ -150,6 +150,9 @@ func confirmPayload(
 	if err := sanityCheckPayload(payload); err != nil {
 		return nil, BlockInsertPayloadErr, err
 	}
+
+	log.Debug("the envelope is %v", envelope)
+
 	if err := sequencerConductor.CommitUnsafePayload(ctx, envelope); err != nil {
 		return nil, BlockInsertTemporaryErr, fmt.Errorf("failed to commit unsafe payload to conductor: %w", err)
 	}
