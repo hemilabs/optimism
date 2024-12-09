@@ -27,6 +27,30 @@
     </div>
 
     <div>
+      <input id="ParseKeyNetworkInput" value="testnet3">
+      <label for="ParseKeyNetworkInput">bitcoin network</label>
+      <br>
+      <input id="ParseKeyPrivateKeyInput" type="password">
+      <label for="ParseKeyPrivateKeyInput">secp256k1 private key (hexadecimal string, 32 bytes)</label>
+      <br>
+
+      <button id="ParseKeyButton">parse key</button>
+      <pre class="ParseKeyShow"></pre>
+    </div>
+
+    <div>
+      <input id="BitcoinAddressToScriptHashNetworkInput" value="testnet3">
+      <label for="BitcoinAddressToScriptHashNetworkInput">bitcoin network</label>
+      <br>
+      <input id="BitcoinAddressToScriptHashAddressInput">
+      <label for="BitcoinAddressToScriptHashAddressInput">bitcoin address</label>
+      <br>
+
+      <button id="BitcoinAddressToScriptHashAddressButton">bitcoin address to script hash</button>
+      <pre class="BitcoinAddressToScriptHashAddressShow"></pre>
+    </div>
+
+    <div>
       <input id="StartPopMinerLogLevelInput" value="hemiwasm=INFO:popm=INFO:protocol=INFO">
       <label for="StartPopMinerLogLevelInput">log level</label>
       <br>
@@ -49,6 +73,11 @@
     <div>
       <button id="StopPopMinerButton">Stop PoP Miner</button>
       <pre class="StopPopMinerShow"></pre>
+    </div>
+
+    <div>
+      <button id="minerStatusButton">Miner Status</button>
+      <pre class="minerStatusDisplay"></pre>
     </div>
 
     <!-- connected commands go here, run after StartPopMinerButton -->
@@ -91,6 +120,12 @@
 
       <button id="BitcoinUTXOsButton">bitcoin utxos</button>
       <pre class="BitcoinUTXOsShow"></pre>
+    </div>
+
+    <div>
+      <br><hr><br>
+      <p>Events</p>
+      <pre style="height: 50vh; text-wrap: normal; overflow-y: scroll;" class="eventsDisplay"></pre>
     </div>
 
     <script src="index.js" defer></script>

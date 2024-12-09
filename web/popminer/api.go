@@ -6,17 +6,24 @@
 
 package main
 
-import "syscall/js"
+import (
+	"syscall/js"
+
+	"github.com/hemilabs/heminetwork/service/popm"
+)
 
 // Method represents a method that can be dispatched.
 type Method string
 
 const (
 	// The following can be dispatched at any time.
-	MethodVersion       Method = "version"       // Retrieve WASM version information
-	MethodGenerateKey   Method = "generateKey"   // Generate secp256k1 key pair
-	MethodStartPoPMiner Method = "startPoPMiner" // Start PoP Miner
-	MethodStopPoPMiner  Method = "stopPoPMiner"  // Stop PoP Miner
+	MethodVersion                    Method = "version"                    // Retrieve WASM version information
+	MethodGenerateKey                Method = "generateKey"                // Generate secp256k1 key pair
+	MethodParseKey                   Method = "parseKey"                   // Parses a secp256k1 private and returns key information
+	MethodBitcoinAddressToScriptHash Method = "bitcoinAddressToScriptHash" // Bitcoin address to script hash
+	MethodStartPoPMiner              Method = "startPoPMiner"              // Start PoP Miner
+	MethodStopPoPMiner               Method = "stopPoPMiner"               // Stop PoP Miner
+	MethodMinerStatus                Method = "minerStatus"                // PoP Miner status
 
 	// The following can only be dispatched after the PoP Miner is running.
 	MethodPing           Method = "ping"           // Ping BFG
@@ -24,6 +31,10 @@ const (
 	MethodBitcoinBalance Method = "bitcoinBalance" // Retrieve bitcoin balance
 	MethodBitcoinInfo    Method = "bitcoinInfo"    // Retrieve bitcoin information
 	MethodBitcoinUTXOs   Method = "bitcoinUTXOs"   // Retrieve bitcoin UTXOs
+
+	// Events
+	MethodEventListenerAdd    Method = "addEventListener"    // Register event listener
+	MethodEventListenerRemove Method = "removeEventListener" // Unregister event listener
 )
 
 // ErrorCode is used to differentiate between error types.
@@ -90,26 +101,54 @@ type VersionResult struct {
 	GitCommit string `json:"gitCommit"`
 }
 
-// GenerateKeyResult contains the generated key information.
-// Returned by MethodGenerateKey.
-type GenerateKeyResult struct {
-	// EthereumAddress is the Ethereum address for the generated key.
-	EthereumAddress string `json:"ethereumAddress"`
+// KeyResult contains a secp256k1 key pair and its corresponding Bitcoin
+// address and public key hash, and Ethereum address.
+//
+// Returned by MethodGenerateKey and MethodParseKey.
+type KeyResult struct {
+	// HemiAddress is the Hemi Ethereum address for the key.
+	HemiAddress string `json:"hemiAddress"`
 
-	// Network is the network for which the key was generated.
+	// Network is the network the addresses were created for.
 	Network string `json:"network"`
 
-	// PrivateKey is the generated secpk256k1 private key, encoded as a
-	// hexadecimal string.
+	// PrivateKey is the secp256k1 private key, encoded as a hexadecimal string.
 	PrivateKey string `json:"privateKey"`
 
-	// PublicKey is the generated secp256k1 public key, in the 33-byte
-	// compressed format, encoded as a hexadecimal string.
+	// PublicKey is the secp256k1 public key, in the 33-byte compressed format,
+	// encoded as a hexadecimal string.
 	PublicKey string `json:"publicKey"`
 
-	// PublicKeyHash is the Bitcoin pay-to-pubkey-hash address for the generated
+	// BitcoinPubKeyHash is the Bitcoin pay-to-pubkey-hash address for the key.
+	BitcoinPubKeyHash string `json:"bitcoinPubKeyHash"`
+
+	// BitcoinScriptHash is the Bitcoin pay-to-pubkey-hash script hash for the
 	// key.
-	PublicKeyHash string `json:"publicKeyHash"`
+	BitcoinScriptHash string `json:"bitcoinScriptHash"`
+}
+
+// BitcoinAddressToScriptHashResult contains the script hash requested for an
+// address.
+type BitcoinAddressToScriptHashResult struct {
+	// Network is the network the address is for.
+	Network string `json:"network"`
+
+	// Address is the address the script hash is for.
+	Address string `json:"address"`
+
+	// ScriptHash is the script hash for the given address.
+	ScriptHash string `json:"scriptHash"`
+}
+
+// MinerStatusResult contains information about the status of the PoP miner.
+// Returned by MethodMinerStatus.
+type MinerStatusResult struct {
+	// Running is whether the PoP miner is running.
+	Running bool `json:"running"`
+
+	// Connecting is whether the PoP miner is currently connected to a BFG
+	// server.
+	Connected bool `json:"connected"`
 }
 
 // PingResult contains information when pinging the BFG server.
@@ -190,4 +229,66 @@ type BitcoinUTXO struct {
 
 	// Value is the value of the output in satoshis.
 	Value int64 `json:"value"`
+}
+
+// EventType represents a type of event.
+type EventType string
+
+const (
+	// EventTypeMinerStart is dispatched when the PoP miner has started.
+	EventTypeMinerStart EventType = "minerStart"
+
+	// EventTypeMinerStop is dispatched when the PoP miner has exited.
+	EventTypeMinerStop EventType = "minerStop"
+
+	// EventTypeMineKeystone is dispatched when the PoP miner is mining an L2
+	// keystone.
+	EventTypeMineKeystone EventType = "mineKeystone"
+
+	// EventTypeTransactionBroadcast is dispatched when the PoP miner has
+	// broadcast a Bitcoin transaction to the network.
+	EventTypeTransactionBroadcast EventType = "transactionBroadcast"
+)
+
+// popmEvents contains events dispatched by the native PoP Miner.
+// These events will be forwarded to JavaScript, however we also dispatch events
+// that are specific to the WebAssembly PoP Miner.
+var popmEvents = map[popm.EventType]EventType{
+	popm.EventTypeMineKeystone:         EventTypeMineKeystone,
+	popm.EventTypeTransactionBroadcast: EventTypeTransactionBroadcast,
+}
+
+// eventTypes is a map used to parse string event types.
+var eventTypes = map[string]EventType{
+	"*":                                    "*", // Listen for all events.
+	EventTypeMinerStart.String():           EventTypeMinerStart,
+	EventTypeMinerStop.String():            EventTypeMinerStop,
+	EventTypeMineKeystone.String():         EventTypeMineKeystone,
+	EventTypeTransactionBroadcast.String(): EventTypeTransactionBroadcast,
+}
+
+// String returns the string representation of the event type.
+func (e EventType) String() string {
+	return string(e)
+}
+
+// MarshalJS returns the JavaScript representation of the event type.
+func (e EventType) MarshalJS() (js.Value, error) {
+	return jsValueOf(e.String()), nil
+}
+
+// EventMinerStop is the data for EventTypeMinerStop.
+type EventMinerStop struct {
+	Error *Error `json:"error"`
+}
+
+// EventMineKeystone is the data for EventTypeMineKeystone.
+type EventMineKeystone struct {
+	Keystone L2Keystone `json:"keystone"`
+}
+
+// EventTransactionBroadcast is the data for EventTypeTransactionBroadcast.
+type EventTransactionBroadcast struct {
+	Keystone L2Keystone `json:"keystone"`
+	TxHash   string     `json:"txHash"`
 }
