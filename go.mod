@@ -2,6 +2,8 @@ module github.com/ethereum-optimism/optimism
 
 go 1.22.2
 
+replace github.com/hemilabs/heminetwork => ./heminetwork
+
 require (
 	github.com/BurntSushi/toml v1.3.2
 	github.com/btcsuite/btcd v0.24.0
