@@ -268,4 +268,4 @@ exclude (
 
 )
 
-replace github.com/ethereum/go-ethereum v1.13.5 => github.com/hemilabs/op-geth v1.14.1
+replace github.com/ethereum/go-ethereum v1.13.5 => github.com/hemilabs/op-geth 76454bc6a
