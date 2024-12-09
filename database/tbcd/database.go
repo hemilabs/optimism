@@ -40,6 +40,41 @@ func (it InsertType) String() string {
 	return itStrings[it]
 }
 
+type RemoveType int
+
+const (
+	RTInvalid       RemoveType = 0 // Invalid removal for generic reason (ex: no headers to remove)
+	RTUnknownBlock  RemoveType = 1 // Attempted to remove a block which is not known
+	RTChainDangling RemoveType = 2 // Attempted to remove a block not at a tip, leaving another known block disconnected
+	RTUnknownTip    RemoveType = 3 // Provided canonical tip after removal does not exist in chain
+	RTChainDescend  RemoveType = 4 // Removal walked the canonical chain backwards, but existing chain is still canonical
+	RTForkDescend   RemoveType = 5 // Removal walked a non-canonical chain backwards, no change to canonical chain remaining canonical
+	RTChainFork     RemoveType = 6 // Removal walked canonical chain backwards far enough that another chain is now canonical
+)
+
+var (
+	rtStrings = map[RemoveType]string{
+		RTInvalid:       "invalid",
+		RTUnknownBlock:  "unknown block",
+		RTChainDangling: "chain dangling",
+		RTUnknownTip:    "unknown canonical tip",
+		RTChainDescend:  "canonical chain descend",
+		RTForkDescend:   "fork chain descend",
+		RTChainFork:     "canonical descend changed canonical",
+	}
+
+	DefaultUpstreamStateId = [32]byte{
+		0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00,
+		0x44, 0x45, 0x46, 0x41, 0x55, 0x4C, 0x54, 0x55, 0x50, 0x53,
+		0x54, 0x52, 0x45, 0x41, 0x4D, 0x53, 0x54, 0x41, 0x54, 0x45,
+		0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+	}
+)
+
+func (rt RemoveType) String() string {
+	return rtStrings[rt]
+}
+
 type Database interface {
 	database.Database
 
@@ -53,9 +88,14 @@ type Database interface {
 	BlockHeaderByHash(ctx context.Context, hash []byte) (*BlockHeader, error)
 	BlockHeaderGenesisInsert(ctx context.Context, bh [80]byte) error
 
+	// Upstream state id
+	UpstreamStateId(ctx context.Context) (*[32]byte, error)
+	SetUpstreamStateId(ctx context.Context, upstreamStateId *[32]byte) error
+
 	// Block headers
 	BlockHeadersByHeight(ctx context.Context, height uint64) ([]BlockHeader, error)
-	BlockHeadersInsert(ctx context.Context, bhs [][80]byte) (InsertType, *BlockHeader, *BlockHeader, error)
+	BlockHeadersInsert(ctx context.Context, bhs [][80]byte, upstreamStateId *[32]byte) (InsertType, *BlockHeader, *BlockHeader, error)
+	BlockHeadersRemove(ctx context.Context, bhs [][80]byte, tipAfterRemoval [80]byte, upstreamStateId *[32]byte) (RemoveType, *BlockHeader, error)
 
 	// Block
 	BlocksMissing(ctx context.Context, count int) ([]BlockIdentifier, error)
@@ -65,10 +105,10 @@ type Database interface {
 	BlockByHash(ctx context.Context, hash []byte) (*Block, error)
 
 	// Transactions
-	BlockUtxoUpdate(ctx context.Context, utxos map[Outpoint]CacheOutput) error
-	BlockTxUpdate(ctx context.Context, txs map[TxKey]*TxValue) error
-	BlocksByTxId(ctx context.Context, txId TxId) ([]BlockHash, error)
-	SpendOutputsByTxId(ctx context.Context, txId TxId) ([]SpendInfo, error)
+	BlockUtxoUpdate(ctx context.Context, direction int, utxos map[Outpoint]CacheOutput) error
+	BlockTxUpdate(ctx context.Context, direction int, txs map[TxKey]*TxValue) error
+	BlocksByTxId(ctx context.Context, txId []byte) ([]BlockHash, error)
+	SpentOutputsByTxId(ctx context.Context, txId []byte) ([]SpentInfo, error)
 
 	// Peer manager
 	PeersStats(ctx context.Context) (int, int)               // good, bad count
@@ -81,6 +121,12 @@ type Database interface {
 	ScriptHashByOutpoint(ctx context.Context, op Outpoint) (*ScriptHash, error)
 	UtxosByScriptHash(ctx context.Context, sh ScriptHash, start uint64, count uint64) ([]Utxo, error)
 }
+
+// XXX there exist various types in this file that need to be reevaluated.
+// Such as BlockHash, ScriptHash etc. They exist for convenience reasons but
+// it may be worth to switch to chainhash and btcd.OutPoint etc. This does need
+// thought because we have composites that are needed for the code to function
+// properly.
 
 // BlockHeader contains the first 80 raw bytes of a bitcoin block plus its
 // location information (hash+height) and the cumulative difficulty.
@@ -142,7 +188,7 @@ type BlockIdentifier struct {
 	Hash   database.ByteArray
 }
 
-type SpendInfo struct {
+type SpentInfo struct {
 	BlockHash  BlockHash
 	TxId       TxId
 	InputIndex uint32
@@ -199,7 +245,7 @@ type CacheOutput [32 + 8 + 4]byte // script_hash + value + out_idx
 // String reutrns pretty printable CacheOutput. Hash is not reversed since it is an
 // opaque pointer. It prints satoshis@script_hash:output_index
 func (c CacheOutput) String() string {
-	return fmt.Sprintf("%d @ %v:%d", binary.BigEndian.Uint64(c[32:40]),
+	return fmt.Sprintf("%d @ %x:%d", binary.BigEndian.Uint64(c[32:40]),
 		c[0:32], binary.BigEndian.Uint32(c[40:]))
 }
 
@@ -314,6 +360,11 @@ func (t TxId) String() string {
 	return hex.EncodeToString(rev[:])
 }
 
+func (t TxId) Hash() *chainhash.Hash {
+	h, _ := chainhash.NewHash(t[:])
+	return h
+}
+
 func NewTxId(x [32]byte) (txId TxId) {
 	copy(txId[:], x[:])
 	return
@@ -338,6 +389,11 @@ func (bh BlockHash) String() string {
 		rev[32-k-1] = bh[k]
 	}
 	return hex.EncodeToString(rev[:])
+}
+
+func (bh BlockHash) Hash() *chainhash.Hash {
+	h, _ := chainhash.NewHash(bh[:])
+	return h
 }
 
 func NewBlockHash(x [32]byte) (blockHash BlockHash) {
@@ -378,7 +434,7 @@ func NewScriptHashFromBytes(x []byte) (scriptHash ScriptHash, err error) {
 
 // Spent Transaction:
 //
-//	s + txin.PrevOutPoint.Hash + txin.PrevOutPoint.Index + blockhash = txid + txin_index + blockhash | [1 + 32 + 4 + 32] = [32 + 4]
+//	s + txin.PrevOutPoint.Hash + txin.PrevOutPoint.Index + blockhash = txid + txin_index | [1 + 32 + 4 + 32] = [32 + 4]
 //
 // Transaction ID to Block mapping:
 //
@@ -412,6 +468,21 @@ func NewTxMapping(txId, blockHash *chainhash.Hash) (txKey TxKey) {
 	copy(txKey[33:], blockHash[:])
 
 	return txKey
+}
+
+func TxIdBlockHashFromTxKey(txKey TxKey) (*TxId, *BlockHash, error) {
+	if txKey[0] != 't' {
+		return nil, nil, fmt.Errorf("invalid magic 0x%02x", txKey[0])
+	}
+	txId, err := NewTxIdFromBytes(txKey[1:33])
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid tx id: %w", err)
+	}
+	blockHash, err := NewBlockHashFromBytes(txKey[33:65])
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid block hash: %w", err)
+	}
+	return &txId, &blockHash, nil
 }
 
 // Helper functions
