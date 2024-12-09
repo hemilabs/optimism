@@ -9,6 +9,7 @@ let wasm; // This stores the global object created by the WASM binary.
 // Called after the WASM binary has been loaded.
 async function init() {
   wasm = globalThis['@hemilabs/pop-miner'];
+  void registerEventListener();
 }
 
 async function dispatch(args) {
@@ -57,6 +58,46 @@ GenerateKeyButton.addEventListener('click', () => {
   GenerateKey();
 });
 
+const ParseKeyShow = document.querySelector('.ParseKeyShow');
+
+async function ParseKey() {
+  try {
+    const result = await dispatch({
+      method: 'parseKey',
+      network: ParseKeyNetworkInput.value,
+      privateKey: ParseKeyPrivateKeyInput.value,
+    });
+    ParseKeyShow.innerText = JSON.stringify(result, null, 2);
+  } catch (err) {
+    ParseKeyShow.innerText = 'Promise rejected: \n' + JSON.stringify(err, null, 2);
+    console.error('Caught exception', err);
+  }
+}
+
+ParseKeyButton.addEventListener('click', () => {
+  ParseKey();
+});
+
+const BitcoinAddressToScriptHashAddressShow = document.querySelector('.BitcoinAddressToScriptHashAddressShow');
+
+async function BitcoinAddressToScriptHashAddress() {
+  try {
+    const result = await dispatch({
+      method: 'bitcoinAddressToScriptHash',
+      network: BitcoinAddressToScriptHashNetworkInput.value,
+      address: BitcoinAddressToScriptHashAddressInput.value,
+    });
+    BitcoinAddressToScriptHashAddressShow.innerText = JSON.stringify(result, null, 2);
+  } catch (err) {
+    BitcoinAddressToScriptHashAddressShow.innerText = 'Promise rejected: \n' + JSON.stringify(err, null, 2);
+    console.error('Caught exception', err);
+  }
+}
+
+BitcoinAddressToScriptHashAddressButton.addEventListener('click', () => {
+  BitcoinAddressToScriptHashAddress();
+});
+
 // start pop miner
 const StartPopMinerShow = document.querySelector('.StartPopMinerShow');
 
@@ -97,6 +138,25 @@ async function StopPopMiner() {
 
 StopPopMinerButton.addEventListener('click', () => {
   StopPopMiner();
+});
+
+// miner status
+const minerStatusDisplay = document.querySelector('.minerStatusDisplay');
+
+async function minerStatus() {
+  try {
+    const result = await dispatch({
+      method: 'minerStatus',
+    });
+    minerStatusDisplay.innerText = JSON.stringify(result, null, 2);
+  } catch (err) {
+    minerStatusDisplay.innerText = 'Promise rejected: \n' + JSON.stringify(err, null, 2);
+    console.error('Caught exception', err);
+  }
+}
+
+minerStatusButton.addEventListener('click', () => {
+  minerStatus();
 });
 
 // ping
@@ -196,3 +256,23 @@ async function BitcoinUTXOs() {
 BitcoinUTXOsButton.addEventListener('click', () => {
   BitcoinUTXOs();
 });
+
+// Events
+const eventsDisplay = document.querySelector('.eventsDisplay');
+
+async function registerEventListener() {
+  try {
+    const result = await dispatch({
+      method: 'addEventListener',
+      eventType: '*',
+      handler: handleEvent,
+    });
+    console.debug('addEventListener: ', JSON.stringify(result, null, 2));
+  } catch (err) {
+    console.error('Caught exception', err);
+  }
+}
+
+function handleEvent(event) {
+  eventsDisplay.innerText += `\n${JSON.stringify(event, null, 2)}\n`;
+}
