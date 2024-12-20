@@ -3,13 +3,14 @@ package client
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
+	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/hemilabs/heminetwork/api/bssapi"
 	"github.com/hemilabs/heminetwork/api/protocol"
 	"github.com/hemilabs/heminetwork/hemi"
-	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum/log"
-	"sync"
-	"time"
 )
 
 const (
@@ -158,6 +159,7 @@ func (bssc *LiveBssClient) handleBSSCallCompletion(parentCtx context.Context, co
 		case bc.ch <- err:
 		default:
 		}
+		return
 	}
 
 	select {
