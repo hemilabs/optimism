@@ -217,8 +217,7 @@ func (bssc *LiveBssClient) handleBSSWebsocketReadUnauth(ctx context.Context, con
 		case bssapi.CmdBTCNewBlockNotification:
 			log.Debug("Ignoring new BTC block notification")
 		default:
-			log.Error("unknown command read from BSS", "cmd", cmd)
-			return // XXX exit for now to cause a ruckus in the logs
+			log.Debug("unknown command read from BSS, ignoring", "cmd", cmd)
 		}
 	}
 }
