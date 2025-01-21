@@ -130,6 +130,8 @@ func (hm *SequencerHealthMonitor) healthCheck() error {
 
 	now := hm.timeProviderFn()
 
+	// Clayton: log all variables that are used in the health check here
+
 	var timeDiff, blockDiff, expectedBlocks uint64
 	if hm.lastSeenUnsafeNum != 0 {
 		timeDiff = now - hm.lastSeenUnsafeTime

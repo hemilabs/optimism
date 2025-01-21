@@ -118,6 +118,11 @@ func createGethNode(l2 bool, nodeCfg *node.Config, ethCfg *ethconfig.Config, opt
 		return nil, nil, err
 	}
 
+	if eth.Config.HvmEnabled {
+		log.Warn("hvm should not be enabled for initializing a new blockchain, setting to false")
+		eth.Config.HvmEnabled = false
+	}
+
 	backend, err := eth.New(n, ethCfg)
 	if err != nil {
 		n.Close()
