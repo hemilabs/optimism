@@ -1,8 +1,8 @@
 module github.com/ethereum-optimism/optimism
 
-go 1.23
+go 1.22
 
-toolchain go1.23.5
+toolchain go1.22
 
 replace github.com/hemilabs/heminetwork => ./heminetwork
 
