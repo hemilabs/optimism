@@ -104,6 +104,8 @@ func newBackend(t e2eutils.TestingBase, genesis *core.Genesis, jwtPath string, o
 	t.Cleanup(func() {
 		_ = n.Close()
 	})
+
+	log.Info("calling geth.New from newBackend")
 	backend, err := geth.New(n, ethCfg)
 	require.NoError(t, err)
 	n.RegisterAPIs(tracers.APIs(backend.APIBackend))
