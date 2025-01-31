@@ -56,6 +56,7 @@ type L2API interface {
 	// GetProof returns a proof of the account, it may return a nil result without error if the address was not found.
 	GetProof(ctx context.Context, address common.Address, storage []common.Hash, blockTag string) (*eth.AccountResult, error)
 	OutputV0AtBlock(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error)
+	GetCreatingBitcoinAttributesForNextBlock(ctx context.Context) (bool, error)
 }
 
 type safeDB interface {

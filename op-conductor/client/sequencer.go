@@ -18,6 +18,7 @@ type SequencerControl interface {
 	SequencerActive(ctx context.Context) (bool, error)
 	LatestUnsafeBlock(ctx context.Context) (eth.BlockInfo, error)
 	PostUnsafePayload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) error
+	GetCreatingBitcoinAttributesForNextBlock(ctx context.Context) (bool, error)
 }
 
 // NewSequencerControl creates a new SequencerControl instance.
@@ -38,6 +39,10 @@ var _ SequencerControl = (*sequencerController)(nil)
 // LatestUnsafeBlock implements SequencerControl.
 func (s *sequencerController) LatestUnsafeBlock(ctx context.Context) (eth.BlockInfo, error) {
 	return s.exec.InfoByLabel(ctx, eth.Unsafe)
+}
+
+func (s *sequencerController) GetCreatingBitcoinAttributesForNextBlock(ctx context.Context) (bool, error) {
+	return s.exec.GetCreatingBitcoinAttributesForNextBlock(ctx)
 }
 
 // StartSequencer implements SequencerControl.

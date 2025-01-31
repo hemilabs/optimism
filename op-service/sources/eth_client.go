@@ -351,6 +351,17 @@ func (s *EthClient) GetProof(ctx context.Context, address common.Address, storag
 	return getProofResponse, nil
 }
 
+func (s *EthClient) GetCreatingBitcoinAttributesForNextBlock(ctx context.Context) (bool, error) {
+	var result bool
+
+	err := s.client.CallContext(ctx, &result, "eth_creatingBitcoinAttributesForNextBlock")
+	if err != nil {
+		return false, err
+	}
+
+	return result, nil
+}
+
 // GetStorageAt returns the storage value at the given address and storage slot, **without verifying the correctness of the result**.
 // This should only ever be used as alternative to GetProof when the user opts in.
 // E.g. Erigon L1 node users may have to use this, since Erigon does not support eth_getProof, see https://github.com/ledgerwatch/erigon/issues/1349

@@ -534,71 +534,78 @@ func (oc *OpConductor) action() {
 	status := NewState(oc.leader.Load(), oc.healthy.Load(), oc.seqActive.Load())
 	oc.log.Debug("entering action with status", "status", status)
 
-	// exhaust all cases below for completeness, 3 state, 8 cases.
-	switch {
-	case !status.leader && !status.healthy && !status.active:
-		// if follower is not healthy and not sequencing, just log an error
-		oc.log.Error("server (follower) is not healthy", "server", oc.cons.ServerID())
-	case !status.leader && !status.healthy && status.active:
-		// sequencer is not leader, not healthy, but it is sequencing, stop it
-		err = oc.stopSequencer()
-	case !status.leader && status.healthy && !status.active:
-		// normal follower, do nothing
-	case !status.leader && status.healthy && status.active:
-		// stop sequencer, this happens when current server steps down as leader.
-		err = oc.stopSequencer()
-	case status.leader && !status.healthy && !status.active:
-		// There are 2 scenarios we need to handle:
-		// 1. current node is follower, active sequencer became unhealthy and started the leadership transfer process.
-		//    however if leadership transfer took longer than the time for health monitor to treat the node as unhealthy,
-		//    then basically the entire network is stalled and we need to start sequencing in this case.
-		if !oc.prevState.leader && !oc.prevState.active {
-			_, _, cerr := oc.compareUnsafeHead(oc.shutdownCtx)
-			if cerr == nil && !errors.Is(oc.hcerr, health.ErrSequencerConnectionDown) {
-				// if unsafe in consensus is the same as unsafe in op-node, then it is scenario #1 and we should start sequencer.
-				err = oc.startSequencer()
+	callCtx, cancel := context.WithTimeout(oc.shutdownCtx, 5*time.Second)
+	defer cancel()
+	processingBitcoin, err := oc.ctrl.GetCreatingBitcoinAttributesForNextBlock(callCtx)
+	if err == nil {
+		log.Trace(fmt.Sprintf("are we processing bitcoin in the hvm? %x", processingBitcoin))
+
+		// exhaust all cases below for completeness, 3 state, 8 cases.
+		switch {
+		case !status.leader && !status.healthy && !status.active:
+			// if follower is not healthy and not sequencing, just log an error
+			oc.log.Error("server (follower) is not healthy", "server", oc.cons.ServerID())
+		case !status.leader && !status.healthy && status.active && !processingBitcoin:
+			// sequencer is not leader, not healthy, not processing bitcoin in the hvm, but it is sequencing, stop it
+			err = oc.stopSequencer()
+		case !status.leader && status.healthy && !status.active:
+			// normal follower, do nothing
+		case !status.leader && status.healthy && status.active:
+			// stop sequencer, this happens when current server steps down as leader.
+			err = oc.stopSequencer()
+		case status.leader && !status.healthy && !status.active:
+			// There are 2 scenarios we need to handle:
+			// 1. current node is follower, active sequencer became unhealthy and started the leadership transfer process.
+			//    however if leadership transfer took longer than the time for health monitor to treat the node as unhealthy,
+			//    then basically the entire network is stalled and we need to start sequencing in this case.
+			if !oc.prevState.leader && !oc.prevState.active {
+				_, _, cerr := oc.compareUnsafeHead(oc.shutdownCtx)
+				if cerr == nil && !errors.Is(oc.hcerr, health.ErrSequencerConnectionDown) {
+					// if unsafe in consensus is the same as unsafe in op-node, then it is scenario #1 and we should start sequencer.
+					err = oc.startSequencer()
+					break
+				}
+			}
+
+			// 2. for other cases, we should try to transfer leader to another node.
+			//    for example, if follower became a leader and unhealthy at the same time (just unhealthy itself), then we should transfer leadership.
+			err = oc.transferLeader()
+		case status.leader && !status.healthy && status.active:
+			// There are two scenarios we need to handle here:
+			// 1. we're transitioned from case status.leader && !status.healthy && !status.active, see description above
+			//    then we should continue to sequence blocks and try to bring ourselves back to healthy state.
+			//    note: we need to also make sure that the health error is not due to ErrSequencerConnectionDown
+			//    		because in this case, we should stop sequencing and transfer leadership to other nodes.
+			if oc.prevState.leader && !oc.prevState.healthy && !oc.prevState.active && !errors.Is(oc.hcerr, health.ErrSequencerConnectionDown) {
+				err = errors.New("waiting for sequencing to become healthy by itself")
 				break
 			}
-		}
 
-		// 2. for other cases, we should try to transfer leader to another node.
-		//    for example, if follower became a leader and unhealthy at the same time (just unhealthy itself), then we should transfer leadership.
-		err = oc.transferLeader()
-	case status.leader && !status.healthy && status.active:
-		// There are two scenarios we need to handle here:
-		// 1. we're transitioned from case status.leader && !status.healthy && !status.active, see description above
-		//    then we should continue to sequence blocks and try to bring ourselves back to healthy state.
-		//    note: we need to also make sure that the health error is not due to ErrSequencerConnectionDown
-		//    		because in this case, we should stop sequencing and transfer leadership to other nodes.
-		if oc.prevState.leader && !oc.prevState.healthy && !oc.prevState.active && !errors.Is(oc.hcerr, health.ErrSequencerConnectionDown) {
-			err = errors.New("waiting for sequencing to become healthy by itself")
-			break
+			// 2. we're here becasuse an healthy leader became unhealthy itself
+			//    then we should try to stop sequencing locally and transfer leadership.
+			var result *multierror.Error
+			// Try to stop sequencer first, but since sequencer is not healthy, we may not be able to stop it.
+			// In this case, it's fine to continue to try to transfer leadership to another server. This is safe because
+			// 1. if leadership transfer succeeded, then we'll retry and enter case !status.leader && status.healthy && status.active, which will try to stop sequencer.
+			// 2. even if the retry continues to fail and current server stays in active sequencing mode, it would be safe because our hook in op-node will prevent it from committing any new blocks to the network via p2p (if it's not leader any more)
+			if e := oc.stopSequencer(); e != nil {
+				result = multierror.Append(result, e)
+			}
+			// try to transfer leadership to another server despite if sequencer is stopped or not. There are 4 scenarios here:
+			// 1. [sequencer stopped, leadership transfer succeeded] which is the happy case and we handed over sequencing to another server.
+			// 2. [sequencer stopped, leadership transfer failed] we'll enter into case status.leader && !status.healthy && !status.active and retry transfer leadership.
+			// 3. [sequencer active, leadership transfer succeeded] we'll enter into case !status.leader && status.healthy && status.active and retry stop sequencer.
+			// 4. [sequencer active, leadership transfer failed] we're in the same state and will retry here again.
+			if e := oc.transferLeader(); e != nil {
+				result = multierror.Append(result, e)
+			}
+			err = result.ErrorOrNil()
+		case status.leader && status.healthy && !status.active:
+			// start sequencer
+			err = oc.startSequencer()
+		case status.leader && status.healthy && status.active:
+			// normal leader, do nothing
 		}
-
-		// 2. we're here becasuse an healthy leader became unhealthy itself
-		//    then we should try to stop sequencing locally and transfer leadership.
-		var result *multierror.Error
-		// Try to stop sequencer first, but since sequencer is not healthy, we may not be able to stop it.
-		// In this case, it's fine to continue to try to transfer leadership to another server. This is safe because
-		// 1. if leadership transfer succeeded, then we'll retry and enter case !status.leader && status.healthy && status.active, which will try to stop sequencer.
-		// 2. even if the retry continues to fail and current server stays in active sequencing mode, it would be safe because our hook in op-node will prevent it from committing any new blocks to the network via p2p (if it's not leader any more)
-		if e := oc.stopSequencer(); e != nil {
-			result = multierror.Append(result, e)
-		}
-		// try to transfer leadership to another server despite if sequencer is stopped or not. There are 4 scenarios here:
-		// 1. [sequencer stopped, leadership transfer succeeded] which is the happy case and we handed over sequencing to another server.
-		// 2. [sequencer stopped, leadership transfer failed] we'll enter into case status.leader && !status.healthy && !status.active and retry transfer leadership.
-		// 3. [sequencer active, leadership transfer succeeded] we'll enter into case !status.leader && status.healthy && status.active and retry stop sequencer.
-		// 4. [sequencer active, leadership transfer failed] we're in the same state and will retry here again.
-		if e := oc.transferLeader(); e != nil {
-			result = multierror.Append(result, e)
-		}
-		err = result.ErrorOrNil()
-	case status.leader && status.healthy && !status.active:
-		// start sequencer
-		err = oc.startSequencer()
-	case status.leader && status.healthy && status.active:
-		// normal leader, do nothing
 	}
 
 	oc.log.Debug("exiting action with status and error", "status", status, "err", err)
