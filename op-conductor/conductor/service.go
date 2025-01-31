@@ -546,7 +546,7 @@ func (oc *OpConductor) action() {
 			// if follower is not healthy and not sequencing, just log an error
 			oc.log.Error("server (follower) is not healthy", "server", oc.cons.ServerID())
 		case !status.leader && !status.healthy && status.active:
-			// sequencer is not leader, not healthy, not processing bitcoin in the hvm, but it is sequencing, stop it
+			// sequencer is not leader, not healthy, but it is sequencing, stop it
 			err = oc.stopSequencer()
 		case !status.leader && status.healthy && !status.active:
 			// normal follower, do nothing
@@ -570,7 +570,7 @@ func (oc *OpConductor) action() {
 			// 2. for other cases, we should try to transfer leader to another node.
 			//    for example, if follower became a leader and unhealthy at the same time (just unhealthy itself), then we should transfer leadership.
 			err = oc.transferLeader()
-		case status.leader && !status.healthy && status.active && !processingBitcoin:
+		case status.leader && !status.healthy && status.active:
 			// There are two scenarios we need to handle here:
 			// 1. we're transitioned from case status.leader && !status.healthy && !status.active, see description above
 			//    then we should continue to sequence blocks and try to bring ourselves back to healthy state.
@@ -578,6 +578,11 @@ func (oc *OpConductor) action() {
 			//    		because in this case, we should stop sequencing and transfer leadership to other nodes.
 			if oc.prevState.leader && !oc.prevState.healthy && !oc.prevState.active && !errors.Is(oc.hcerr, health.ErrSequencerConnectionDown) {
 				err = errors.New("waiting for sequencing to become healthy by itself")
+				break
+			}
+
+			if processingBitcoin {
+				err = errors.New("we're processing a large number of bitcoin attributes, refusing to stop sequencer at this time")
 				break
 			}
 
