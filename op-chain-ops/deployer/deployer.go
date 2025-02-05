@@ -109,6 +109,9 @@ func NewBackendWithGenesisTimestamp(chainID *big.Int, ts uint64, predeploys map[
 
 	cfg := ethconfig.Defaults
 	cfg.Preimages = true
+	if chainConfig.ChainID.Cmp(ChainID) == 0 {
+		cfg.HvmEnabled = false
+	}
 	cfg.Genesis = &core.Genesis{
 		Config:     &chainConfig,
 		Timestamp:  ts,
