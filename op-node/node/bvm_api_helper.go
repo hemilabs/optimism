@@ -30,7 +30,7 @@ func getTipHeight(ctx context.Context, driver driverClient) (uint64, error) {
 	return syncStatus.UnsafeL2.Number, nil
 }
 
-func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, stateRoot []byte, driver driverClient, bssClient client.BssClient) ([]hemi.L2BTCFinality, error) {
+func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, bssClient client.BssClient, l2Client l2EthClient) ([]hemi.L2BTCFinality, error) {
 	nextKeystoneHeight, err := getKeystoneProvidingFinality(blockNum)
 	if err != nil {
 		return nil, err
@@ -61,13 +61,20 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, stateRoot [
 		prevKeystoneHash = [32]byte(prevKeystone.Hash[:])
 	}
 
+	block, err := l2Client.InfoByHash(ctx, nextKeystone.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	stateRoot := block.Root()
+
 	l2Keystone := &hemi.L2Keystone{
 		Version:            0x01,
 		L1BlockNumber:      uint32(nextKeystone.L1Origin.Number),
 		L2BlockNumber:      uint32(nextKeystone.Number),
 		ParentEPHash:       nextKeystone.ParentHash[:],
 		PrevKeystoneEPHash: prevKeystoneHash[:],
-		StateRoot:          stateRoot,
+		StateRoot:          stateRoot[:],
 		EPHash:             nextKeystone.Hash[:],
 	}
 
@@ -97,7 +104,5 @@ func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Cl
 			"%d is %x", blockHash, blockNum, blockNum, blockHash)
 	}
 
-	stateRoot := block.Root()
-
-	return getBTCFinalityForBlockNum(ctx, blockNum, stateRoot[:], driver, bssClient)
+	return getBTCFinalityForBlockNum(ctx, blockNum, driver, bssClient, l2Client)
 }
