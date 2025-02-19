@@ -30,7 +30,7 @@ func getTipHeight(ctx context.Context, driver driverClient) (uint64, error) {
 	return syncStatus.UnsafeL2.Number, nil
 }
 
-func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, bssClient client.BssClient) ([]hemi.L2BTCFinality, error) {
+func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, bssClient client.BssClient, l2Client l2EthClient) ([]hemi.L2BTCFinality, error) {
 	nextKeystoneHeight, err := getKeystoneProvidingFinality(blockNum)
 	if err != nil {
 		return nil, err
@@ -104,5 +104,5 @@ func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Cl
 			"%d is %x", blockHash, blockNum, blockNum, blockHash)
 	}
 
-	return getBTCFinalityForBlockNum(ctx, blockNum, driver, bssClient)
+	return getBTCFinalityForBlockNum(ctx, blockNum, driver, bssClient, l2Client)
 }
