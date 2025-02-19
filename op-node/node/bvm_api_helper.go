@@ -39,7 +39,7 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 		return nil, err
 	}
 
-	log.Info("getBTCFinalityForBlockNum", "nextKeystoneHeight", nextKeystoneHeight)
+	log.Trace("getBTCFinalityForBlockNum", "nextKeystoneHeight", nextKeystoneHeight)
 
 	l2TIpHeight, err := getTipHeight(ctx, driver)
 	if err != nil {
@@ -83,7 +83,7 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 		EPHash:             nextKeystone.Hash[:],
 	}
 
-	log.Info("going to query for keystone", "keystone", spew.Sdump(l2Keystone), "nextKeystone", spew.Sdump(nextKeystone), "prevKeystoneHash", hex.EncodeToString(prevKeystoneHash[:]))
+	log.Trace("going to query for keystone", "keystone", spew.Sdump(l2Keystone), "nextKeystone", spew.Sdump(nextKeystone), "prevKeystoneHash", hex.EncodeToString(prevKeystoneHash[:]))
 
 	l2KeystonesToQuery := make([]hemi.L2Keystone, 1)
 	l2KeystonesToQuery[0] = *l2Keystone
