@@ -1,4 +1,4 @@
-FROM golang:1.23 AS builder
+FROM golang:1.23-alpine AS builder
 # pin that to a hash ^
 
 RUN apk add --update git make
