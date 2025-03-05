@@ -273,4 +273,4 @@ exclude (
 
 )
 
-replace github.com/ethereum/go-ethereum v1.14.8 => ../op-geth-pectra
+replace github.com/ethereum/go-ethereum v1.14.8 => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250305165736-f02c32b91e32
