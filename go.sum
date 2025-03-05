@@ -433,6 +433,8 @@ github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250220141022-a5a12aedf60c
 github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250220141022-a5a12aedf60c/go.mod h1:46p4921WzqEk5FdPZCRYs9tb8HG7jgfPNQjQcYFUGZc=
 github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250305165736-f02c32b91e32 h1:usPJG5MY/0b/F4LbNbV1dQZu0SdKTNzg4YaznlfF0fs=
 github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250305165736-f02c32b91e32/go.mod h1:46p4921WzqEk5FdPZCRYs9tb8HG7jgfPNQjQcYFUGZc=
+github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250305172405-f24107dffb44 h1:E8011naQZzQeQbuWbGpr86EYTh92kCG55zlsJM+L00M=
+github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250305172405-f24107dffb44/go.mod h1:46p4921WzqEk5FdPZCRYs9tb8HG7jgfPNQjQcYFUGZc=
 github.com/holiman/billy v0.0.0-20230718173358-1c7e68d277a7 h1:3JQNjnMRil1yD0IfZKHF9GxxWKDJGj8I0IqOUol//sw=
 github.com/holiman/billy v0.0.0-20230718173358-1c7e68d277a7/go.mod h1:5GuXa7vkL8u9FkFuWdVvfR5ix8hRB7DbOAaYULamFpc=
 github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4 h1:X4egAf/gcS1zATw6wn4Ej8vjuVGxeHdan+bRb2ebyv4=
