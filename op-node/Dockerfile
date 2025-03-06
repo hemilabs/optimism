@@ -20,6 +20,6 @@ COPY --from=builder /optimism/op-batcher/bin/op-batcher /bin/op-batcher
 
 COPY --from=builder /optimism/op-proposer/bin/op-proposer /bin/op-proposer
 
-COPY --from=builder /optimism/op-conductor/bin/op-conductor /bin/op-conductor
+# COPY --from=builder /optimism/op-conductor/bin/op-conductor /bin/op-conductor
 
 CMD ['op-node']
