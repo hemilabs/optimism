@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"os"
 	"strings"
 
@@ -58,6 +59,8 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		return nil, fmt.Errorf("failed to load p2p config: %w", err)
 	}
 
+	BssEndpoint := NewBSSEndpointConfig(ctx)
+
 	l1Endpoint := NewL1EndpointConfig(ctx)
 
 	l2Endpoint, err := NewL2EndpointConfig(ctx, log)
@@ -82,6 +85,7 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	}
 	conductorRPCEndpoint := ctx.String(flags.ConductorRpcFlag.Name)
 	cfg := &node.Config{
+		BSS:           *BssEndpoint,
 		L1:            l1Endpoint,
 		L2:            l2Endpoint,
 		Rollup:        *rollupConfig,
@@ -130,6 +134,12 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func NewBSSEndpointConfig(ctx *cli.Context) *client.BssEndpointConfig {
+	return &client.BssEndpointConfig{
+		BSSURL: ctx.String(flags.BSSNodeAddr.Name),
+	}
 }
 
 func NewSupervisorEndpointConfig(ctx *cli.Context) *interop.Config {
