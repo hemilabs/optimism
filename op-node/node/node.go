@@ -162,7 +162,7 @@ func (n *OpNode) init(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("failed to init the P2P stack: %w", err)
 	}
 	// Only expose the server at the end, ensuring all RPC backend components are initialized.
-	if err := n.initRPCServer(cfg); err != nil {
+	if err := n.initRPCServer(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the RPC server: %w", err)
 	}
 	if err := n.initMetricsServer(cfg); err != nil {
@@ -487,8 +487,8 @@ func (n *OpNode) initBSSConnection(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
-func (n *OpNode) initRPCServer(cfg *Config) error {
-	server, err := newRPCServer(&cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.safeDB, n.log, n.appVersion, n.metrics, n.bssClient)
+func (n *OpNode) initRPCServer(ctx context.Context, cfg *Config) error {
+	server, err := newRPCServer(ctx, &cfg.RPC, &cfg.Rollup, n.l2Source.L2Client, n.l2Driver, n.safeDB, n.log, n.appVersion, n.metrics, n.bssClient)
 	if err != nil {
 		return err
 	}

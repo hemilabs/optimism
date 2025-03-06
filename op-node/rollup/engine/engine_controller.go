@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/hemilabs/heminetwork/hemi"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -41,6 +43,7 @@ type ExecEngine interface {
 	ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error)
 	NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
+	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
 }
 
 type EngineController struct {
@@ -84,27 +87,42 @@ type EngineController struct {
 	// because engine may forgot backupUnsafeHead or backupUnsafeHead is not part
 	// of the chain.
 	needFCUCallForBackupUnsafeReorg bool
+
+	bssNotifierCh chan *bssNotification
+	bssClient     client.BssClient
+}
+
+type bssNotification struct {
+	unsafeL2             eth.ExecutionPayload
+	unsafeL2PrevKeystone eth.L2BlockRef
 }
 
 func NewEngineController(engine ExecEngine, log log.Logger, metrics derive.Metrics,
-	rollupCfg *rollup.Config, syncCfg *sync.Config, emitter event.Emitter,
+	rollupCfg *rollup.Config, syncCfg *sync.Config, emitter event.Emitter, bssClient client.BssClient,
 ) *EngineController {
 	syncStatus := syncStatusCL
 	if syncCfg.SyncMode == sync.ELSync {
 		syncStatus = syncStatusWillStartEL
 	}
 
-	return &EngineController{
-		engine:     engine,
-		log:        log,
-		metrics:    metrics,
-		chainSpec:  rollup.NewChainSpec(rollupCfg),
-		rollupCfg:  rollupCfg,
-		syncCfg:    syncCfg,
-		syncStatus: syncStatus,
-		clock:      clock.SystemClock,
-		emitter:    emitter,
+	e := &EngineController{
+		engine:        engine,
+		log:           log,
+		metrics:       metrics,
+		chainSpec:     rollup.NewChainSpec(rollupCfg),
+		rollupCfg:     rollupCfg,
+		syncCfg:       syncCfg,
+		syncStatus:    syncStatus,
+		clock:         clock.SystemClock,
+		emitter:       emitter,
+		bssNotifierCh: make(chan *bssNotification, 10),
+		bssClient:     bssClient,
 	}
+
+	// XXX see if there is a better place to start this goroutine.
+	go e.bssNotifier()
+
+	return e
 }
 
 // State Getters
@@ -464,6 +482,47 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 		"mgas", float64(envelope.ExecutionPayload.GasUsed)/1000000,
 		"mgasps", float64(envelope.ExecutionPayload.GasUsed)*1000/float64(totalTime))
 
+	prevKeystoneHeight := int64(ref.Number-(ref.Number%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
+	if ref.Number%hemi.KeystoneHeaderPeriod != 0 {
+		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
+	}
+
+	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", ref.Number, prevKeystoneHeight))
+
+	var prevKeystoneRef *eth.L2BlockRef = nil
+
+	if prevKeystoneHeight > 0 {
+		// XXX fix context
+		prevKeystone, err := e.engine.PayloadByNumber(context.Background(), uint64(prevKeystoneHeight))
+		if err != nil {
+			e.log.Warn(fmt.Sprintf("Unable to get payload for previous height %d", prevKeystoneHeight))
+			return fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight)
+		}
+
+		prevRef, err := derive.PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		if err != nil {
+			e.log.Warn(fmt.Sprintf("Unable to convert payload to block ref for block %d", prevKeystoneHeight))
+			return fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight)
+		}
+		prevKeystoneRef = &prevRef
+	}
+
+	e.log.Info("Confirmed new payload, sending notification to BSS channel", "payload number", envelope.ExecutionPayload.BlockNumber)
+
+	bn := &bssNotification{
+		unsafeL2: *envelope.ExecutionPayload,
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
+	select {
+	case e.bssNotifierCh <- bn:
+	default:
+		e.log.Warn("BSS notifier channel full, dropping event...")
+	}
+
 	return nil
 }
 
@@ -543,4 +602,70 @@ func (e *EngineController) TryBackupUnsafeReorg(ctx context.Context) (bool, erro
 	// Execution engine could not reorg back to previous unsafe head.
 	return true, derive.NewTemporaryError(fmt.Errorf("cannot restore unsafe chain using backupUnsafe: err: %w",
 		eth.ForkchoiceUpdateErr(fcRes.PayloadStatus)))
+}
+
+func (e *EngineController) bssNotifier() {
+	ctx := context.Background()
+	for {
+		bn := <-e.bssNotifierCh
+
+		var l1OriginNumber uint64
+
+		unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+		if err != nil {
+			e.log.Warn(err.Error())
+		} else {
+			l1OriginNumber = unsafeL2BlockRef.L1Origin.Number
+		}
+
+		// Keystone based on L2 block number
+		if bn.unsafeL2.BlockNumber == 0 || bn.unsafeL2.BlockNumber%hemi.KeystoneHeaderPeriod != 0 {
+			continue
+		}
+
+		e.log.Info(fmt.Sprintf("Sending BSS keystone notification for L2 block %v with L1 origin %v",
+			bn.unsafeL2.BlockNumber, l1OriginNumber))
+
+		if err := e.notifyBSSKeystone(ctx, bn); err != nil {
+			e.log.Warn("Failed to notify BSS of keystone", "err", err)
+			continue
+		}
+		e.log.Info("BSS notified of keystone")
+	}
+}
+
+func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
+	prevKeystoneHash := [common.HashLength]byte{}
+
+	if &bn.unsafeL2PrevKeystone != nil {
+		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
+	}
+
+	unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+	if err != nil {
+		return err
+	}
+
+	l2Keystone := &hemi.L2Keystone{
+		Version:            0x01,
+		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
+		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
+		ParentEPHash:       bn.unsafeL2.ParentHash[:],
+		PrevKeystoneEPHash: prevKeystoneHash[:],
+		StateRoot:          bn.unsafeL2.StateRoot[:],
+		EPHash:             unsafeL2BlockRef.Hash[:],
+	}
+
+	e.log.Info("Sending notification to BSS of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
+		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
+		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
+		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
+		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
+
+	err = e.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

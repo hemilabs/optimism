@@ -154,6 +154,7 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 		metrics:          metrics,
 		timeNow:          time.Now,
 		toBlockRef:       derive.PayloadToBlockRef,
+		l2Chain:          l2,
 		bssClient:        bssClient,
 	}
 }
