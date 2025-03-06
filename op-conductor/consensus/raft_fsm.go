@@ -16,23 +16,35 @@ var _ raft.FSM = (*unsafeHeadTracker)(nil)
 
 // unsafeHeadTracker implements raft.FSM for storing unsafe head payload into raft consensus layer.
 type unsafeHeadTracker struct {
+	log        log.Logger
 	mtx        sync.RWMutex
 	unsafeHead *eth.ExecutionPayloadEnvelope
 }
 
+func NewUnsafeHeadTracker(log log.Logger) *unsafeHeadTracker {
+	return &unsafeHeadTracker{
+		log: log,
+	}
+}
+
 // Apply implements raft.FSM, it applies the latest change (latest unsafe head payload) to FSM.
 func (t *unsafeHeadTracker) Apply(l *raft.Log) interface{} {
-	if l.Data == nil || len(l.Data) == 0 {
+	if len(l.Data) == 0 {
 		return fmt.Errorf("log data is nil or empty")
 	}
 
 	data := &eth.ExecutionPayloadEnvelope{}
-	if err := data.UnmarshalSSZ(uint32(len(l.Data)), bytes.NewReader(l.Data)); err != nil {
-		return err
+	// There is no good way to know which version, so try both. Start with the most recent version
+	if err := data.UnmarshalSSZ(eth.BlockV4, uint32(len(l.Data)), bytes.NewReader(l.Data)); err != nil {
+		// Try v3 if v4 fails and return an error if v3 fails
+		if err := data.UnmarshalSSZ(eth.BlockV3, uint32(len(l.Data)), bytes.NewReader(l.Data)); err != nil {
+			return err
+		}
 	}
 
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
+	t.log.Debug("applying new unsafe head", "number", uint64(data.ExecutionPayload.BlockNumber), "hash", data.ExecutionPayload.BlockHash.Hex())
 	if t.unsafeHead == nil || t.unsafeHead.ExecutionPayload.BlockNumber < data.ExecutionPayload.BlockNumber {
 		t.unsafeHead = data
 	}
@@ -50,8 +62,12 @@ func (t *unsafeHeadTracker) Restore(snapshot io.ReadCloser) error {
 	}
 
 	data := &eth.ExecutionPayloadEnvelope{}
-	if err := data.UnmarshalSSZ(uint32(n), bytes.NewReader(buf.Bytes())); err != nil {
-		return fmt.Errorf("error unmarshalling snapshot: %w", err)
+	// There is no good way to know which version, so try both. Start with the most recent version
+	if err := data.UnmarshalSSZ(eth.BlockV4, uint32(n), bytes.NewReader(buf.Bytes())); err != nil {
+		// Try v3 if v4 fails and return an error if v3 fails
+		if err := data.UnmarshalSSZ(eth.BlockV3, uint32(n), bytes.NewReader(buf.Bytes())); err != nil {
+			return err
+		}
 	}
 
 	t.mtx.Lock()

@@ -40,36 +40,39 @@ type OracleBackedL2Chain struct {
 
 var _ engineapi.EngineBackend = (*OracleBackedL2Chain)(nil)
 
-func NewOracleBackedL2Chain(logger log.Logger, oracle Oracle, precompileOracle engineapi.PrecompileOracle, chainCfg *params.ChainConfig, l2OutputRoot common.Hash) (*OracleBackedL2Chain, error) {
-	output := oracle.OutputByRoot(l2OutputRoot)
-	outputV0, ok := output.(*eth.OutputV0)
-	if !ok {
-		return nil, fmt.Errorf("unsupported L2 output version: %d", output.Version())
-	}
-	head := oracle.BlockByHash(outputV0.BlockHash)
-	logger.Info("Loaded L2 head", "hash", head.Hash(), "number", head.Number())
-	return &OracleBackedL2Chain{
+func NewOracleBackedL2ChainFromHead(
+	logger log.Logger,
+	oracle Oracle,
+	precompileOracle engineapi.PrecompileOracle,
+	chainCfg *params.ChainConfig,
+	head *types.Block,
+	db KeyValueStore,
+) *OracleBackedL2Chain {
+	chainID := eth.ChainIDFromBig(chainCfg.ChainID)
+	chain := &OracleBackedL2Chain{
 		log:      logger,
 		oracle:   oracle,
 		chainCfg: chainCfg,
 		engine:   beacon.New(nil),
 
-		hashByNum: map[uint64]common.Hash{
-			head.NumberU64(): head.Hash(),
-		},
-		earliestIndexedBlock: head.Header(),
-
 		// Treat the agreed starting head as finalized - nothing before it can be disputed
-		head:       head.Header(),
-		safe:       head.Header(),
-		finalized:  head.Header(),
-		oracleHead: head.Header(),
-		blocks:     make(map[common.Hash]*types.Block),
-		db:         NewOracleBackedDB(oracle),
+		safe:                head.Header(),
+		finalized:           head.Header(),
+		oracleHead:          head.Header(),
+		blocks:              make(map[common.Hash]*types.Block),
+		receiptsByBlockHash: make(map[common.Hash]types.Receipts),
+		db:                  NewOracleBackedDB(db, oracle, chainID),
 		vmCfg: vm.Config{
-			OptimismPrecompileOverrides: engineapi.CreatePrecompileOverrides(precompileOracle),
+			PrecompileOverrides: engineapi.CreatePrecompileOverrides(precompileOracle),
 		},
-	}, nil
+	}
+	// Use the chain's GetBlockByHash to ensure newly built blocks are visible to the canonical chain
+	blockByHash := func(hash common.Hash) *types.Block {
+		return chain.GetBlockByHash(hash)
+	}
+	fallback := NewCanonicalBlockHeaderOracle(head.Header(), blockByHash)
+	chain.canon = NewFastCanonicalBlockHeaderOracle(head.Header(), blockByHash, chainCfg, oracle, db, fallback)
+	return chain
 }
 
 func (o *OracleBackedL2Chain) CurrentHeader() *types.Header {

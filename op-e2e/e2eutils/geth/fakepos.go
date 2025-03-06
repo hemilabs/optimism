@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/beacon/engine"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth"
@@ -105,6 +106,7 @@ func (f *fakePoS) Start() error {
 				}
 				parentBeaconBlockRoot := f.FakeBeaconBlockRoot(head.Time) // parent beacon block root
 				isCancun := f.eth.BlockChain().Config().IsCancun(new(big.Int).SetUint64(head.Number.Uint64()+1), newBlockTime)
+				isPrague := f.eth.BlockChain().Config().IsPrague(new(big.Int).SetUint64(head.Number.Uint64()+1), newBlockTime)
 				if isCancun {
 					attrs.BeaconRoot = &parentBeaconBlockRoot
 				}
@@ -138,35 +140,46 @@ func (f *fakePoS) Start() error {
 					tim.Stop()
 					return nil
 				}
-				envelope, err := f.engineAPI.GetPayloadV3(*res.PayloadID)
+				var envelope *engine.ExecutionPayloadEnvelope
+				if isPrague {
+					envelope, err = f.engineAPI.GetPayloadV4(*res.PayloadID)
+				} else if isCancun {
+					envelope, err = f.engineAPI.GetPayloadV3(*res.PayloadID)
+				} else {
+					envelope, err = f.engineAPI.GetPayloadV2(*res.PayloadID)
+				}
 				if err != nil {
 					f.log.Error("failed to finish building L1 block", "err", err)
 					continue
 				}
 
 				blobHashes := make([]common.Hash, 0) // must be non-nil even when empty, due to geth engine API checks
-				for _, commitment := range envelope.BlobsBundle.Commitments {
-					if len(commitment) != 48 {
-						f.log.Error("got malformed kzg commitment from engine", "commitment", commitment)
-						break
+				if envelope.BlobsBundle != nil {
+					for _, commitment := range envelope.BlobsBundle.Commitments {
+						if len(commitment) != 48 {
+							f.log.Error("got malformed kzg commitment from engine", "commitment", commitment)
+							break
+						}
+						blobHashes = append(blobHashes, opeth.KZGToVersionedHash(*(*[48]byte)(commitment)))
 					}
-					blobHashes = append(blobHashes, opeth.KZGToVersionedHash(*(*[48]byte)(commitment)))
+					if len(blobHashes) != len(envelope.BlobsBundle.Commitments) {
+						f.log.Error("invalid or incomplete blob data", "collected", len(blobHashes), "engine", len(envelope.BlobsBundle.Commitments))
+						continue
+					}
 				}
-				if len(blobHashes) != len(envelope.BlobsBundle.Commitments) {
-					f.log.Error("invalid or incomplete blob data", "collected", len(blobHashes), "engine", len(envelope.BlobsBundle.Commitments))
+
+				if isPrague {
+					_, err = f.engineAPI.NewPayloadV4(*envelope.ExecutionPayload, blobHashes, &parentBeaconBlockRoot, make([]hexutil.Bytes, 0))
+				} else if isCancun {
+					_, err = f.engineAPI.NewPayloadV3(*envelope.ExecutionPayload, blobHashes, &parentBeaconBlockRoot)
+				} else {
+					_, err = f.engineAPI.NewPayloadV2(*envelope.ExecutionPayload)
+				}
+				if err != nil {
+					f.log.Error("failed to insert built L1 block", "err", err)
 					continue
 				}
-				if isCancun {
-					if _, err := f.engineAPI.NewPayloadV3(*envelope.ExecutionPayload, blobHashes, &parentBeaconBlockRoot); err != nil {
-						f.log.Error("failed to insert built L1 block", "err", err)
-						continue
-					}
-				} else {
-					if _, err := f.engineAPI.NewPayloadV2(*envelope.ExecutionPayload); err != nil {
-						f.log.Error("failed to insert built L1 block", "err", err)
-						continue
-					}
-				}
+
 				if envelope.BlobsBundle != nil {
 					slot := (envelope.ExecutionPayload.Timestamp - f.eth.BlockChain().Genesis().Time()) / f.blockTime
 					if f.beacon == nil {

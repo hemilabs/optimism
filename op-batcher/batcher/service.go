@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	_ "net/http/pprof"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,12 +12,13 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-batcher/flags"
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-batcher/rpc"
 	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
+	"github.com/ethereum-optimism/optimism/op-node/params"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	plasma "github.com/ethereum-optimism/optimism/op-plasma"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -36,12 +36,20 @@ type BatcherConfig struct {
 	PollInterval           time.Duration
 	MaxPendingTransactions uint64
 
-	// UseBlobs is true if the batcher should use blobs instead of calldata for posting blobs
-	UseBlobs bool
+	// UseAltDA is true if the rollup config has a DA challenge address so the batcher
+	// will post inputs to the DA server and post commitments to blobs or calldata.
+	UseAltDA bool
+	// maximum number of concurrent blob put requests to the DA server
+	MaxConcurrentDARequests uint64
 
-	// UsePlasma is true if the rollup config has a DA challenge address so the batcher
-	// will post inputs to the Plasma DA server and post commitments to blobs or calldata.
-	UsePlasma bool
+	WaitNodeSync        bool
+	CheckRecentTxsDepth int
+
+	// For throttling DA. See CLIConfig in config.go for details on these parameters.
+	ThrottleThreshold, ThrottleTxSize          uint64
+	ThrottleBlockSize, ThrottleAlwaysBlockSize uint64
+
+	PreferLocalSafeL2 bool
 }
 
 // BatcherService represents a full batch-submitter instance and its resources,
@@ -52,14 +60,12 @@ type BatcherService struct {
 	L1Client         *ethclient.Client
 	EndpointProvider dial.L2EndpointProvider
 	TxManager        txmgr.TxManager
-	PlasmaDA         *plasma.DAClient
+	AltDA            *altda.DAClient
 
 	BatcherConfig
 
-	RollupConfig *rollup.Config
-
-	// Channel builder parameters
-	ChannelConfig ChannelConfig
+	ChannelConfig ChannelConfigProvider
+	RollupConfig  *rollup.Config
 
 	driver *BatchSubmitter
 
@@ -75,18 +81,20 @@ type BatcherService struct {
 	NotSubmittingOnStart bool
 }
 
+type DriverSetupOption func(setup *DriverSetup)
+
 // BatcherServiceFromCLIConfig creates a new BatcherService from a CLIConfig.
 // The service components are fully started, except for the driver,
 // which will not be submitting batches (if it was configured to) until the Start part of the lifecycle.
-func BatcherServiceFromCLIConfig(ctx context.Context, version string, cfg *CLIConfig, log log.Logger) (*BatcherService, error) {
+func BatcherServiceFromCLIConfig(ctx context.Context, version string, cfg *CLIConfig, log log.Logger, opts ...DriverSetupOption) (*BatcherService, error) {
 	var bs BatcherService
-	if err := bs.initFromCLIConfig(ctx, version, cfg, log); err != nil {
+	if err := bs.initFromCLIConfig(ctx, version, cfg, log, opts...); err != nil {
 		return nil, errors.Join(err, bs.Stop(ctx)) // try to clean up our failed initialization attempt
 	}
 	return &bs, nil
 }
 
-func (bs *BatcherService) initFromCLIConfig(ctx context.Context, version string, cfg *CLIConfig, log log.Logger) error {
+func (bs *BatcherService) initFromCLIConfig(ctx context.Context, version string, cfg *CLIConfig, log log.Logger, opts ...DriverSetupOption) error {
 	bs.Version = version
 	bs.Log = log
 	bs.NotSubmittingOnStart = cfg.Stopped
@@ -95,18 +103,36 @@ func (bs *BatcherService) initFromCLIConfig(ctx context.Context, version string,
 
 	bs.PollInterval = cfg.PollInterval
 	bs.MaxPendingTransactions = cfg.MaxPendingTransactions
+	bs.MaxConcurrentDARequests = cfg.AltDA.MaxConcurrentRequests
 	bs.NetworkTimeout = cfg.TxMgrConfig.NetworkTimeout
-	if err := bs.initRPCClients(ctx, cfg); err != nil {
+	bs.CheckRecentTxsDepth = cfg.CheckRecentTxsDepth
+	bs.WaitNodeSync = cfg.WaitNodeSync
+
+	bs.ThrottleThreshold = cfg.ThrottleThreshold
+	bs.ThrottleTxSize = cfg.ThrottleTxSize
+	bs.ThrottleBlockSize = cfg.ThrottleBlockSize
+	bs.ThrottleAlwaysBlockSize = cfg.ThrottleAlwaysBlockSize
+
+	bs.PreferLocalSafeL2 = cfg.PreferLocalSafeL2
+
+	optsFromRPC, err := bs.initRPCClients(ctx, cfg)
+	if err != nil {
 		return err
 	}
+	opts = append(optsFromRPC, opts...)
+
 	if err := bs.initRollupConfig(ctx); err != nil {
 		return fmt.Errorf("failed to load rollup config: %w", err)
 	}
-	if err := bs.initChannelConfig(cfg); err != nil {
-		return fmt.Errorf("failed to init channel config: %w", err)
-	}
 	if err := bs.initTxManager(cfg); err != nil {
 		return fmt.Errorf("failed to init Tx manager: %w", err)
+	}
+	// must be init before driver and channel config
+	if err := bs.initAltDA(cfg); err != nil {
+		return fmt.Errorf("failed to init AltDA: %w", err)
+	}
+	if err := bs.initChannelConfig(cfg); err != nil {
+		return fmt.Errorf("failed to init channel config: %w", err)
 	}
 	bs.initBalanceMonitor(cfg)
 	if err := bs.initMetricsServer(cfg); err != nil {
@@ -115,11 +141,7 @@ func (bs *BatcherService) initFromCLIConfig(ctx context.Context, version string,
 	if err := bs.initPProf(cfg); err != nil {
 		return fmt.Errorf("failed to init profiling: %w", err)
 	}
-	// init before driver
-	if err := bs.initPlasmaDA(cfg); err != nil {
-		return fmt.Errorf("failed to init plasma DA: %w", err)
-	}
-	bs.initDriver()
+	bs.initDriver(opts...)
 	if err := bs.initRPCServer(cfg); err != nil {
 		return fmt.Errorf("failed to start RPC server: %w", err)
 	}
@@ -129,10 +151,10 @@ func (bs *BatcherService) initFromCLIConfig(ctx context.Context, version string,
 	return nil
 }
 
-func (bs *BatcherService) initRPCClients(ctx context.Context, cfg *CLIConfig) error {
+func (bs *BatcherService) initRPCClients(ctx context.Context, cfg *CLIConfig) (opts []DriverSetupOption, _ error) {
 	l1Client, err := dial.DialEthClientWithTimeout(ctx, dial.DefaultDialTimeout, bs.Log, cfg.L1EthRpc)
 	if err != nil {
-		return fmt.Errorf("failed to dial L1 RPC: %w", err)
+		return nil, fmt.Errorf("failed to dial L1 RPC: %w", err)
 	}
 	bs.L1Client = l1Client
 
@@ -140,16 +162,39 @@ func (bs *BatcherService) initRPCClients(ctx context.Context, cfg *CLIConfig) er
 	if strings.Contains(cfg.RollupRpc, ",") && strings.Contains(cfg.L2EthRpc, ",") {
 		rollupUrls := strings.Split(cfg.RollupRpc, ",")
 		ethUrls := strings.Split(cfg.L2EthRpc, ",")
-		endpointProvider, err = dial.NewActiveL2EndpointProvider(ctx, ethUrls, rollupUrls, cfg.ActiveSequencerCheckDuration, dial.DefaultDialTimeout, bs.Log)
+		provider, err := dial.NewActiveL2EndpointProvider(ctx, ethUrls, rollupUrls, cfg.ActiveSequencerCheckDuration, dial.DefaultDialTimeout, bs.Log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build active L2 endpoint provider: %w", err)
+		}
+		endpointProvider = provider
+
+		// If we use an active endpoint provider AND throttling is enabled,
+		// we need to set up the callback to notify the driver any time we
+		// get a new active sequencer
+		if cfg.ThrottleThreshold > 0 {
+			activeSeqChanged := make(chan struct{}, 1)
+			opts = []DriverSetupOption{func(setup *DriverSetup) {
+				setup.ActiveSeqChanged = activeSeqChanged
+			}}
+			// callback to notify the driver of a new active sequencer
+			cb := func() {
+				select {
+				case activeSeqChanged <- struct{}{}:
+				default:
+				}
+			}
+			provider.SetOnActiveProviderChanged(cb)
+
+		}
 	} else {
 		endpointProvider, err = dial.NewStaticL2EndpointProvider(ctx, bs.Log, cfg.L2EthRpc, cfg.RollupRpc)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to build L2 endpoint provider: %w", err)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build static L2 endpoint provider: %w", err)
+		}
 	}
 	bs.EndpointProvider = endpointProvider
 
-	return nil
+	return opts, nil
 }
 
 func (bs *BatcherService) initMetrics(cfg *CLIConfig) {
@@ -186,57 +231,84 @@ func (bs *BatcherService) initRollupConfig(ctx context.Context) error {
 }
 
 func (bs *BatcherService) initChannelConfig(cfg *CLIConfig) error {
+	channelTimeout := bs.RollupConfig.ChannelTimeoutBedrock
+	// Use lower channel timeout if granite is scheduled.
+	// Ensures channels are restricted to the tighter timeout even if granite hasn't activated yet
+	if bs.RollupConfig.GraniteTime != nil {
+		channelTimeout = params.ChannelTimeoutGranite
+	}
 	cc := ChannelConfig{
-		SeqWindowSize:      bs.RollupConfig.SeqWindowSize,
-		ChannelTimeout:     bs.RollupConfig.ChannelTimeout,
-		MaxChannelDuration: cfg.MaxChannelDuration,
-		MaxFrameSize:       cfg.MaxL1TxSize - 1, // account for version byte prefix; reset for blobs
-		TargetNumFrames:    cfg.TargetNumFrames,
-		SubSafetyMargin:    cfg.SubSafetyMargin,
-		BatchType:          cfg.BatchType,
+		SeqWindowSize:         bs.RollupConfig.SeqWindowSize,
+		ChannelTimeout:        channelTimeout,
+		MaxChannelDuration:    cfg.MaxChannelDuration,
+		MaxFrameSize:          cfg.MaxL1TxSize - 1, // account for version byte prefix; reset for blobs
+		MaxBlocksPerSpanBatch: cfg.MaxBlocksPerSpanBatch,
+		TargetNumFrames:       cfg.TargetNumFrames,
+		SubSafetyMargin:       cfg.SubSafetyMargin,
+		BatchType:             cfg.BatchType,
 	}
 
 	switch cfg.DataAvailabilityType {
-	case flags.BlobsType:
+	case flags.BlobsType, flags.AutoType:
 		if !cfg.TestUseMaxTxSizeForBlobs {
 			// account for version byte prefix
 			cc.MaxFrameSize = eth.MaxBlobDataSize - 1
 		}
-		cc.MultiFrameTxs = true
-		bs.UseBlobs = true
-	case flags.CalldataType:
-		bs.UseBlobs = false
+		cc.UseBlobs = true
+	case flags.CalldataType: // do nothing
 	default:
 		return fmt.Errorf("unknown data availability type: %v", cfg.DataAvailabilityType)
 	}
 
-	if bs.UsePlasma && cc.MaxFrameSize > plasma.MaxInputSize {
-		return fmt.Errorf("max frame size %d exceeds plasma max input size %d", cc.MaxFrameSize, plasma.MaxInputSize)
+	if bs.UseAltDA && cc.MaxFrameSize > altda.MaxInputSize {
+		return fmt.Errorf("max frame size %d exceeds altDA max input size %d", cc.MaxFrameSize, altda.MaxInputSize)
 	}
 
-	cc.InitCompressorConfig(cfg.ApproxComprRatio, cfg.Compressor)
+	cc.InitCompressorConfig(cfg.ApproxComprRatio, cfg.Compressor, cfg.CompressionAlgo)
 
-	if bs.UseBlobs && !bs.RollupConfig.IsEcotone(uint64(time.Now().Unix())) {
-		bs.Log.Error("Cannot use Blob data before Ecotone!") // log only, the batcher may not be actively running.
+	if cc.UseBlobs && !bs.RollupConfig.IsEcotone(uint64(time.Now().Unix())) {
+		return errors.New("cannot use Blobs before Ecotone")
 	}
-	if !bs.UseBlobs && bs.RollupConfig.IsEcotone(uint64(time.Now().Unix())) {
+	if !cc.UseBlobs && bs.RollupConfig.IsEcotone(uint64(time.Now().Unix())) {
 		bs.Log.Warn("Ecotone upgrade is active, but batcher is not configured to use Blobs!")
+	}
+
+	// Checking for brotli compression only post Fjord
+	if cc.CompressorConfig.CompressionAlgo.IsBrotli() && !bs.RollupConfig.IsFjord(uint64(time.Now().Unix())) {
+		return errors.New("cannot use brotli compression before Fjord")
 	}
 
 	if err := cc.Check(); err != nil {
 		return fmt.Errorf("invalid channel configuration: %w", err)
 	}
 	bs.Log.Info("Initialized channel-config",
-		"use_blobs", bs.UseBlobs,
-		"use_plasma", bs.UsePlasma,
+		"da_type", cfg.DataAvailabilityType,
+		"use_alt_da", bs.UseAltDA,
 		"max_frame_size", cc.MaxFrameSize,
 		"target_num_frames", cc.TargetNumFrames,
 		"compressor", cc.CompressorConfig.Kind,
+		"compression_algo", cc.CompressorConfig.CompressionAlgo,
+		"batch_type", cc.BatchType,
 		"max_channel_duration", cc.MaxChannelDuration,
 		"channel_timeout", cc.ChannelTimeout,
-		"batch_type", cc.BatchType,
 		"sub_safety_margin", cc.SubSafetyMargin)
-	bs.ChannelConfig = cc
+	if bs.UseAltDA {
+		bs.Log.Warn("Alt-DA Mode is a Beta feature of the MIT licensed OP Stack.  While it has received initial review from core contributors, it is still undergoing testing, and may have bugs or other issues.")
+	}
+
+	if cfg.DataAvailabilityType == flags.AutoType {
+		// copy blobs config and use hardcoded calldata fallback config for now
+		calldataCC := cc
+		calldataCC.TargetNumFrames = 1
+		calldataCC.MaxFrameSize = 120_000
+		calldataCC.UseBlobs = false
+		calldataCC.ReinitCompressorConfig()
+
+		bs.ChannelConfig = NewDynamicEthChannelConfig(bs.Log, 10*time.Second, bs.TxManager, cc, calldataCC)
+	} else {
+		bs.ChannelConfig = cc
+	}
+
 	return nil
 }
 
@@ -268,25 +340,25 @@ func (bs *BatcherService) initPProf(cfg *CLIConfig) error {
 
 func (bs *BatcherService) initMetricsServer(cfg *CLIConfig) error {
 	if !cfg.MetricsConfig.Enabled {
-		bs.Log.Info("metrics disabled")
+		bs.Log.Info("Metrics disabled")
 		return nil
 	}
 	m, ok := bs.Metrics.(opmetrics.RegistryMetricer)
 	if !ok {
 		return fmt.Errorf("metrics were enabled, but metricer %T does not expose registry for metrics-server", bs.Metrics)
 	}
-	bs.Log.Debug("starting metrics server", "addr", cfg.MetricsConfig.ListenAddr, "port", cfg.MetricsConfig.ListenPort)
+	bs.Log.Debug("Starting metrics server", "addr", cfg.MetricsConfig.ListenAddr, "port", cfg.MetricsConfig.ListenPort)
 	metricsSrv, err := opmetrics.StartServer(m.Registry(), cfg.MetricsConfig.ListenAddr, cfg.MetricsConfig.ListenPort)
 	if err != nil {
 		return fmt.Errorf("failed to start metrics server: %w", err)
 	}
-	bs.Log.Info("started metrics server", "addr", metricsSrv.Addr())
+	bs.Log.Info("Started metrics server", "addr", metricsSrv.Addr())
 	bs.metricsSrv = metricsSrv
 	return nil
 }
 
-func (bs *BatcherService) initDriver() {
-	bs.driver = NewBatchSubmitter(DriverSetup{
+func (bs *BatcherService) initDriver(opts ...DriverSetupOption) {
+	ds := DriverSetup{
 		Log:              bs.Log,
 		Metr:             bs.Metrics,
 		RollupConfig:     bs.RollupConfig,
@@ -295,8 +367,12 @@ func (bs *BatcherService) initDriver() {
 		L1Client:         bs.L1Client,
 		EndpointProvider: bs.EndpointProvider,
 		ChannelConfig:    bs.ChannelConfig,
-		PlasmaDA:         bs.PlasmaDA,
-	})
+		AltDA:            bs.AltDA,
+	}
+	for _, opt := range opts {
+		opt(&ds)
+	}
+	bs.driver = NewBatchSubmitter(ds)
 }
 
 func (bs *BatcherService) initRPCServer(cfg *CLIConfig) error {
@@ -309,6 +385,7 @@ func (bs *BatcherService) initRPCServer(cfg *CLIConfig) error {
 	if cfg.RPC.EnableAdmin {
 		adminAPI := rpc.NewAdminAPI(bs.driver, bs.Metrics, bs.Log)
 		server.AddAPI(rpc.GetAdminAPI(adminAPI))
+		server.AddAPI(bs.TxManager.API())
 		bs.Log.Info("Admin RPC enabled")
 	}
 	bs.Log.Info("Starting JSON-RPC server")
@@ -319,13 +396,13 @@ func (bs *BatcherService) initRPCServer(cfg *CLIConfig) error {
 	return nil
 }
 
-func (bs *BatcherService) initPlasmaDA(cfg *CLIConfig) error {
-	config := cfg.PlasmaDA
+func (bs *BatcherService) initAltDA(cfg *CLIConfig) error {
+	config := cfg.AltDA
 	if err := config.Check(); err != nil {
 		return err
 	}
-	bs.PlasmaDA = config.NewDAClient()
-	bs.UsePlasma = config.Enabled
+	bs.AltDA = config.NewDAClient()
+	bs.UseAltDA = config.Enabled
 	return nil
 }
 
@@ -413,8 +490,20 @@ func (bs *BatcherService) Stop(ctx context.Context) error {
 
 var _ cliapp.Lifecycle = (*BatcherService)(nil)
 
-// Driver returns the handler on the batch-submitter driver element,
-// to start/stop/restart the batch-submission work, for use in testing.
-func (bs *BatcherService) Driver() rpc.BatcherDriver {
-	return bs.driver
+// TestDriver returns a handler for the batch-submitter driver element, to start/stop/restart the
+// batch-submission work, for use only in testing.
+func (bs *BatcherService) TestDriver() *TestBatchSubmitter {
+	return &TestBatchSubmitter{
+		BatchSubmitter: bs.driver,
+	}
+}
+
+// ThrottlingTestDriver returns a handler for the batch-submitter driver element that is in "always throttle" mode, for
+// use only in testing.
+func (bs *BatcherService) ThrottlingTestDriver() *TestBatchSubmitter {
+	tbs := &TestBatchSubmitter{
+		BatchSubmitter: bs.driver,
+	}
+	tbs.BatchSubmitter.channelMgr.metr = new(metrics.ThrottlingMetrics)
+	return tbs
 }

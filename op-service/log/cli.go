@@ -3,11 +3,11 @@ package log
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/urfave/cli/v2"
-	"golang.org/x/exp/slog"
 	"golang.org/x/term"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -20,6 +20,7 @@ const (
 	LevelFlagName  = "log.level"
 	FormatFlagName = "log.format"
 	ColorFlagName  = "log.color"
+	PidFlagName    = "log.pid"
 )
 
 func CLIFlags(envPrefix string) []cli.Flag {
@@ -49,6 +50,12 @@ func CLIFlagsWithCategory(envPrefix string, category string) []cli.Flag {
 			Name:     ColorFlagName,
 			Usage:    "Color the log output if in terminal mode",
 			EnvVars:  opservice.PrefixEnvVar(envPrefix, "LOG_COLOR"),
+			Category: category,
+		},
+		&cli.BoolFlag{
+			Name:     PidFlagName,
+			Usage:    "Show pid in the log",
+			EnvVars:  opservice.PrefixEnvVar(envPrefix, "LOG_PID"),
 			Category: category,
 		},
 	}
@@ -128,19 +135,20 @@ func FormatHandler(ft FormatType, color bool) func(io.Writer) slog.Handler {
 	termColorHandler := func(w io.Writer) slog.Handler {
 		return log.NewTerminalHandler(w, color)
 	}
+	logfmtHandler := func(w io.Writer) slog.Handler { return log.LogfmtHandlerWithLevel(w, log.LevelTrace) }
 	switch ft {
 	case FormatJSON:
 		return log.JSONHandler
 	case FormatText:
-		if term.IsTerminal(int(os.Stdout.Fd())) {
+		if color {
 			return termColorHandler
 		} else {
-			return log.LogfmtHandler
+			return logfmtHandler
 		}
 	case FormatTerminal:
 		return termColorHandler
 	case FormatLogFmt:
-		return log.LogfmtHandler
+		return logfmtHandler
 	default:
 		panic(fmt.Errorf("failed to create slog.Handler factory for format-type=%q and color=%v", ft, color))
 	}
@@ -186,6 +194,7 @@ type CLIConfig struct {
 	Level  slog.Level
 	Color  bool
 	Format FormatType
+	Pid    bool
 }
 
 // AppOut returns an io.Writer to write app output to, like logs.
@@ -207,7 +216,11 @@ func NewLogHandler(wr io.Writer, cfg CLIConfig) slog.Handler {
 // The log handler of the logger is a LvlSetter, i.e. the log level can be changed as needed.
 func NewLogger(wr io.Writer, cfg CLIConfig) log.Logger {
 	h := NewLogHandler(wr, cfg)
-	return log.NewLogger(h)
+	l := log.NewLogger(h)
+	if cfg.Pid {
+		l = l.With("pid", os.Getpid())
+	}
+	return l
 }
 
 // SetGlobalLogHandler sets the log handles as the handler of the global default logger.
@@ -236,5 +249,6 @@ func ReadCLIConfig(ctx *cli.Context) CLIConfig {
 	if ctx.IsSet(ColorFlagName) {
 		cfg.Color = ctx.Bool(ColorFlagName)
 	}
+	cfg.Pid = ctx.Bool(PidFlagName)
 	return cfg
 }

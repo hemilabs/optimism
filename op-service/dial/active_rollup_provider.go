@@ -7,10 +7,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum/go-ethereum/log"
 )
 
-type rollupDialer func(ctx context.Context, timeout time.Duration, log log.Logger, url string) (RollupClientInterface, error)
+type rollupDialer func(ctx context.Context, log log.Logger, url string) (RollupClientInterface, error)
 
 // ActiveL2EndpointProvider is an interface for providing a RollupClient
 // It manages the lifecycle of the RollupClient for callers
@@ -27,6 +29,14 @@ type ActiveL2RollupProvider struct {
 	currentRollupClient RollupClientInterface
 	rollupIndex         int
 	clientLock          *sync.Mutex
+
+	// callback function to be called when the active provider changes
+	onActiveProviderChanged func()
+}
+
+// SetOnActiveProviderChanged sets the callback function to be called when the active provider changes
+func (a *ActiveL2RollupProvider) SetOnActiveProviderChanged(onActiveProviderChanged func()) {
+	a.onActiveProviderChanged = onActiveProviderChanged
 }
 
 // NewActiveL2RollupProvider creates a new ActiveL2RollupProvider
@@ -39,10 +49,14 @@ func NewActiveL2RollupProvider(
 	networkTimeout time.Duration,
 	logger log.Logger,
 ) (*ActiveL2RollupProvider, error) {
-	rollupDialer := func(ctx context.Context, timeout time.Duration,
-		log log.Logger, url string,
+	rollupDialer := func(ctx context.Context, log log.Logger, url string,
 	) (RollupClientInterface, error) {
-		return DialRollupClientWithTimeout(ctx, timeout, log, url)
+		rpcCl, err := dialRPCClient(ctx, log, url)
+		if err != nil {
+			return nil, err
+		}
+
+		return sources.NewRollupClient(client.NewBaseRPCClient(rpcCl)), nil
 	}
 	return newActiveL2RollupProvider(ctx, rollupUrls, checkDuration, networkTimeout, logger, rollupDialer)
 }
@@ -72,6 +86,7 @@ func newActiveL2RollupProvider(
 	if _, err := p.RollupClient(cctx); err != nil {
 		return nil, fmt.Errorf("setting provider rollup client: %w", err)
 	}
+
 	return p, nil
 }
 
@@ -108,7 +123,7 @@ func (p *ActiveL2RollupProvider) findActiveEndpoints(ctx context.Context) error 
 		if offset != 0 || p.currentRollupClient == nil {
 			if err := p.dialSequencer(ctx, idx); err != nil {
 				errs = errors.Join(errs, err)
-				p.log.Warn("Error dialing next sequencer.", "err", err, "index", p.rollupIndex)
+				p.log.Warn("Error dialing next sequencer.", "err", err, "index", idx)
 				continue
 			}
 		}
@@ -122,6 +137,9 @@ func (p *ActiveL2RollupProvider) findActiveEndpoints(ctx context.Context) error 
 				p.log.Debug("Current sequencer active.", "index", idx, "url", ep)
 			} else {
 				p.log.Info("Found new active sequencer.", "index", idx, "url", ep)
+				if p.onActiveProviderChanged != nil {
+					p.onActiveProviderChanged()
+				}
 			}
 			return nil
 		} else {
@@ -150,7 +168,7 @@ func (p *ActiveL2RollupProvider) dialSequencer(ctx context.Context, idx int) err
 
 	ep := p.rollupUrls[idx]
 	p.log.Info("Dialing next sequencer.", "index", idx, "url", ep)
-	rollupClient, err := p.rollupDialer(cctx, p.networkTimeout, p.log, ep)
+	rollupClient, err := p.rollupDialer(cctx, p.log, ep)
 	if err != nil {
 		return fmt.Errorf("dialing rollup client: %w", err)
 	}

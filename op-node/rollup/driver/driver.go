@@ -2,19 +2,32 @@ package driver
 
 import (
 	"context"
-	"time"
-
+	"github.com/ethereum-optimism/optimism/op-node/rollup/l2chain"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/async"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/attributes"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/clsync"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/confdepth"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/finality"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/sequencing"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/status"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+)
+
+// aliases to not disrupt op-conductor code
+var (
+	ErrSequencerAlreadyStarted = sequencing.ErrSequencerAlreadyStarted
+	ErrSequencerAlreadyStopped = sequencing.ErrSequencerAlreadyStopped
 )
 
 type Metrics interface {
@@ -36,12 +49,14 @@ type Metrics interface {
 	RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID)
 
 	SetDerivationIdle(idle bool)
+	SetSequencerState(active bool)
 
 	RecordL1ReorgDepth(d uint64)
 
-	EngineMetrics
+	engine.Metrics
 	L1FetcherMetrics
-	SequencerMetrics
+	event.Metrics
+	sequencing.Metrics
 }
 
 type L1Chain interface {
@@ -49,41 +64,55 @@ type L1Chain interface {
 	L1BlockRefByLabel(context.Context, eth.BlockLabel) (eth.L1BlockRef, error)
 }
 
-type L2Chain interface {
-	derive.Engine
-	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
-	L2BlockRefByHash(ctx context.Context, l2Hash common.Hash) (eth.L2BlockRef, error)
-	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
-}
-
 type DerivationPipeline interface {
 	Reset()
-	Step(ctx context.Context) error
-	AddUnsafePayload(payload *eth.ExecutionPayloadEnvelope)
-	Finalize(ref eth.L1BlockRef)
-	FinalizedL1() eth.L1BlockRef
+	Step(ctx context.Context, pendingSafeHead eth.L2BlockRef) (*derive.AttributesWithParent, error)
 	Origin() eth.L1BlockRef
-	EngineReady() bool
+	DerivationReady() bool
+	ConfirmEngineReset()
+}
+
+type EngineController interface {
+	engine.LocalEngineControl
+	IsEngineSyncing() bool
+	InsertUnsafePayload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope, ref eth.L2BlockRef) error
+	TryUpdateEngine(ctx context.Context) error
+	TryBackupUnsafeReorg(ctx context.Context) (bool, error)
+}
+
+type CLSync interface {
 	LowestQueuedUnsafeBlock() eth.L2BlockRef
 }
 
-type L1StateIface interface {
-	HandleNewL1HeadBlock(head eth.L1BlockRef)
-	HandleNewL1SafeBlock(safe eth.L1BlockRef)
-	HandleNewL1FinalizedBlock(finalized eth.L1BlockRef)
-
-	L1Head() eth.L1BlockRef
-	L1Safe() eth.L1BlockRef
-	L1Finalized() eth.L1BlockRef
+type AttributesHandler interface {
+	// HasAttributes returns if there are any block attributes to process.
+	// HasAttributes is for EngineQueue testing only, and can be removed when attribute processing is fully independent.
+	HasAttributes() bool
+	// SetAttributes overwrites the set of attributes. This may be nil, to clear what may be processed next.
+	SetAttributes(attributes *derive.AttributesWithParent)
+	// Proceed runs one attempt of processing attributes, if any.
+	// Proceed returns io.EOF if there are no attributes to process.
+	Proceed(ctx context.Context) error
 }
 
-type SequencerIface interface {
-	StartBuildingBlock(ctx context.Context) error
-	CompleteBuildingBlock(ctx context.Context, agossip async.AsyncGossiper, sequencerConductor conductor.SequencerConductor) (*eth.ExecutionPayloadEnvelope, error)
-	PlanNextSequencerAction() time.Duration
-	RunNextSequencerAction(ctx context.Context, agossip async.AsyncGossiper, sequencerConductor conductor.SequencerConductor) (*eth.ExecutionPayloadEnvelope, error)
-	BuildingOnto() eth.L2BlockRef
-	CancelBuildingBlock(ctx context.Context)
+type Finalizer interface {
+	FinalizedL1() eth.L1BlockRef
+	event.Deriver
+}
+
+type AltDAIface interface {
+	// Notify L1 finalized head so AltDA finality is always behind L1
+	Finalize(ref eth.L1BlockRef)
+	// Set the engine finalization signal callback
+	OnFinalizedHeadSignal(f altda.HeadSignalFn)
+
+	derive.AltDAInputFetcher
+}
+
+type SyncStatusTracker interface {
+	event.Deriver
+	SyncStatus() *eth.SyncStatus
+	L1Head() eth.L1BlockRef
 }
 
 type Network interface {
@@ -115,65 +144,126 @@ type SequencerStateListener interface {
 	SequencerStopped() error
 }
 
-// NewDriver composes an events handler that tracks L1 state, triggers L2 derivation, and optionally sequences new L2 blocks.
+type Drain interface {
+	Drain() error
+}
+
+// NewDriver composes an events handler that tracks L1 state, triggers L2 Derivation, and optionally sequences new L2 blocks.
 func NewDriver(
+	sys event.Registry,
+	drain Drain,
 	driverCfg *Config,
 	cfg *rollup.Config,
-	l2 L2Chain,
+	l2 l2chain.L2Chain,
 	l1 L1Chain,
 	l1Blobs derive.L1BlobsFetcher,
 	altSync AltSync,
 	network Network,
 	log log.Logger,
-	snapshotLog log.Logger,
 	metrics Metrics,
-	sequencerStateListener SequencerStateListener,
-	safeHeadListener derive.SafeHeadListener,
+	sequencerStateListener sequencing.SequencerStateListener,
+	safeHeadListener rollup.SafeHeadListener,
 	syncCfg *sync.Config,
 	sequencerConductor conductor.SequencerConductor,
-	plasma derive.PlasmaInputFetcher,
+	altDA AltDAIface,
+	managedMode bool,
 	bssClient client.BssClient,
 ) *Driver {
-	l1 = NewMeteredL1Fetcher(l1, metrics)
-	l1State := NewL1State(log, metrics)
-	sequencerConfDepth := NewConfDepth(driverCfg.SequencerConfDepth, l1State.L1Head, l1)
-	findL1Origin := NewL1OriginSelector(log, cfg, sequencerConfDepth)
-	verifConfDepth := NewConfDepth(driverCfg.VerifierConfDepth, l1State.L1Head, l1)
-	engine := derive.NewEngineController(l2, log, metrics, cfg, syncCfg.SyncMode, bssClient)
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l1Blobs, plasma, l2, engine, metrics, syncCfg, safeHeadListener, bssClient)
-	attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, l2)
-	meteredEngine := NewMeteredEngine(cfg, engine, metrics, log) // Only use the metered engine in the sequencer b/c it records sequencing metrics.
-	sequencer := NewSequencer(log, cfg, meteredEngine, attrBuilder, findL1Origin, metrics, l2, bssClient)
 	driverCtx, driverCancel := context.WithCancel(context.Background())
-	asyncGossiper := async.NewAsyncGossiper(driverCtx, network, log, metrics)
-	return &Driver{
-		l1State:            l1State,
-		derivation:         derivationPipeline,
-		engineController:   engine,
-		stateReq:           make(chan chan struct{}),
-		forceReset:         make(chan chan struct{}, 10),
-		startSequencer:     make(chan hashAndErrorChannel, 10),
-		stopSequencer:      make(chan chan hashAndError, 10),
-		sequencerActive:    make(chan chan bool, 10),
-		sequencerNotifs:    sequencerStateListener,
-		config:             cfg,
-		syncCfg:            syncCfg,
-		driverConfig:       driverCfg,
-		driverCtx:          driverCtx,
-		driverCancel:       driverCancel,
-		log:                log,
-		snapshotLog:        snapshotLog,
-		l1:                 l1,
-		l2:                 l2,
-		sequencer:          sequencer,
-		network:            network,
-		metrics:            metrics,
-		l1HeadSig:          make(chan eth.L1BlockRef, 10),
-		l1SafeSig:          make(chan eth.L1BlockRef, 10),
-		l1FinalizedSig:     make(chan eth.L1BlockRef, 10),
-		unsafeL2Payloads:   make(chan *eth.ExecutionPayloadEnvelope, 10),
-		altSync:            altSync,
-		asyncGossiper:      asyncGossiper,
-		sequencerConductor: sequencerConductor,
+
+	opts := event.DefaultRegisterOpts()
+
+	statusTracker := status.NewStatusTracker(log, metrics)
+	sys.Register("status", statusTracker, opts)
+
+	l1Tracker := status.NewL1Tracker(l1)
+	sys.Register("l1-blocks", l1Tracker, opts)
+
+	l1 = NewMeteredL1Fetcher(l1Tracker, metrics)
+	verifConfDepth := confdepth.NewConfDepth(driverCfg.VerifierConfDepth, statusTracker.L1Head, l1)
+
+	ec := engine.NewEngineController(l2, log, metrics, cfg, syncCfg,
+		sys.Register("engine-controller", nil, opts))
+
+	sys.Register("engine-reset",
+		engine.NewEngineResetDeriver(driverCtx, log, cfg, l1, l2, syncCfg), opts)
+
+	clSync := clsync.NewCLSync(log, cfg, metrics) // alt-sync still uses cl-sync state to determine what to sync to
+	sys.Register("cl-sync", clSync, opts)
+
+	var finalizer Finalizer
+	if cfg.AltDAEnabled() {
+		finalizer = finality.NewAltDAFinalizer(driverCtx, log, cfg, l1, altDA)
+	} else {
+		finalizer = finality.NewFinalizer(driverCtx, log, cfg, l1)
 	}
+	sys.Register("finalizer", finalizer, opts)
+
+	sys.Register("attributes-handler",
+		attributes.NewAttributesHandler(log, cfg, driverCtx, l2), opts)
+
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l1Blobs, altDA, l2, metrics, managedMode)
+
+	sys.Register("pipeline",
+		derive.NewPipelineDeriver(driverCtx, derivationPipeline), opts)
+
+	syncDeriver := &SyncDeriver{
+		Derivation:     derivationPipeline,
+		SafeHeadNotifs: safeHeadListener,
+		CLSync:         clSync,
+		Engine:         ec,
+		SyncCfg:        syncCfg,
+		Config:         cfg,
+		L1:             l1,
+		L2:             l2,
+		Log:            log,
+		Ctx:            driverCtx,
+		Drain:          drain.Drain,
+		ManagedMode:    managedMode,
+	}
+	sys.Register("sync", syncDeriver, opts)
+
+	sys.Register("engine", engine.NewEngDeriver(log, driverCtx, cfg, metrics, ec), opts)
+
+	schedDeriv := NewStepSchedulingDeriver(log)
+	sys.Register("step-scheduler", schedDeriv, opts)
+
+	var sequencer sequencing.SequencerIface
+	if driverCfg.SequencerEnabled {
+		asyncGossiper := async.NewAsyncGossiper(driverCtx, network, log, metrics)
+		attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, l2)
+		sequencerConfDepth := confdepth.NewConfDepth(driverCfg.SequencerConfDepth, statusTracker.L1Head, l1)
+		findL1Origin := sequencing.NewL1OriginSelector(driverCtx, log, cfg, sequencerConfDepth)
+		sys.Register("origin-selector", findL1Origin, opts)
+		sequencer = sequencing.NewSequencer(driverCtx, log, cfg, attrBuilder, findL1Origin,
+			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, l2, bssClient)
+		sys.Register("sequencer", sequencer, opts)
+	} else {
+		sequencer = sequencing.DisabledSequencer{}
+	}
+
+	driverEmitter := sys.Register("driver", nil, opts)
+	driver := &Driver{
+		statusTracker:    statusTracker,
+		SyncDeriver:      syncDeriver,
+		sched:            schedDeriv,
+		emitter:          driverEmitter,
+		drain:            drain.Drain,
+		stateReq:         make(chan chan struct{}),
+		forceReset:       make(chan chan struct{}, 10),
+		driverConfig:     driverCfg,
+		driverCtx:        driverCtx,
+		driverCancel:     driverCancel,
+		log:              log,
+		sequencer:        sequencer,
+		network:          network,
+		metrics:          metrics,
+		l1HeadSig:        make(chan eth.L1BlockRef, 10),
+		l1SafeSig:        make(chan eth.L1BlockRef, 10),
+		l1FinalizedSig:   make(chan eth.L1BlockRef, 10),
+		unsafeL2Payloads: make(chan *eth.ExecutionPayloadEnvelope, 10),
+		altSync:          altSync,
+	}
+
+	return driver
 }

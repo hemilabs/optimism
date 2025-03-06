@@ -9,7 +9,7 @@ PYTHON?=python3
 build: build-go build-ts
 .PHONY: build
 
-build-go: submodules op-node op-proposer op-batcher
+build-go: op-node op-proposer op-batcher
 .PHONY: build-go
 
 lint-go:

@@ -206,6 +206,7 @@ type PeerStats struct {
 	BlocksTopic   uint `json:"blocksTopic"`
 	BlocksTopicV2 uint `json:"blocksTopicV2"`
 	BlocksTopicV3 uint `json:"blocksTopicV3"`
+	BlocksTopicV4 uint `json:"blocksTopicV4"`
 	Banned        uint `json:"banned"`
 	Known         uint `json:"known"`
 }
@@ -223,6 +224,7 @@ func (s *APIBackend) PeerStats(_ context.Context) (*PeerStats, error) {
 		BlocksTopic:   uint(len(s.node.GossipOut().BlocksTopicV1Peers())),
 		BlocksTopicV2: uint(len(s.node.GossipOut().BlocksTopicV2Peers())),
 		BlocksTopicV3: uint(len(s.node.GossipOut().BlocksTopicV3Peers())),
+		BlocksTopicV4: uint(len(s.node.GossipOut().BlocksTopicV4Peers())),
 		Banned:        0,
 		Known:         uint(len(pstore.Peers())),
 	}
@@ -248,7 +250,7 @@ func (s *APIBackend) DiscoveryTable(_ context.Context) ([]*enode.Node, error) {
 func (s *APIBackend) BlockPeer(_ context.Context, id peer.ID) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_blockPeer")
 	if err := id.Validate(); err != nil {
-		log.Warn("invalid peer ID", "method", "BlockPeer", "peer", id, "err", err)
+		s.log.Warn("invalid peer ID", "method", "BlockPeer", "peer", id, "err", err)
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -262,7 +264,7 @@ func (s *APIBackend) BlockPeer(_ context.Context, id peer.ID) error {
 func (s *APIBackend) UnblockPeer(_ context.Context, id peer.ID) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_unblockPeer")
 	if err := id.Validate(); err != nil {
-		log.Warn("invalid peer ID", "method", "UnblockPeer", "peer", id, "err", err)
+		s.log.Warn("invalid peer ID", "method", "UnblockPeer", "peer", id, "err", err)
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -288,7 +290,7 @@ func (s *APIBackend) ListBlockedPeers(_ context.Context) ([]peer.ID, error) {
 func (s *APIBackend) BlockAddr(_ context.Context, ip net.IP) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_blockAddr")
 	if ip == nil {
-		log.Warn("invalid IP", "method", "BlockAddr")
+		s.log.Warn("invalid IP", "method", "BlockAddr")
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -302,7 +304,7 @@ func (s *APIBackend) BlockAddr(_ context.Context, ip net.IP) error {
 func (s *APIBackend) UnblockAddr(_ context.Context, ip net.IP) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_unblockAddr")
 	if ip == nil {
-		log.Warn("invalid IP", "method", "UnblockAddr")
+		s.log.Warn("invalid IP", "method", "UnblockAddr")
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -327,8 +329,8 @@ func (s *APIBackend) ListBlockedAddrs(_ context.Context) ([]net.IP, error) {
 // Note: active connections to the IP subnet are not automatically closed.
 func (s *APIBackend) BlockSubnet(_ context.Context, ipnet *net.IPNet) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_blockSubnet")
-	if ipnet == nil {
-		log.Warn("invalid IPNet", "method", "BlockSubnet")
+	if ipnet == nil || ipnet.IP == nil || ipnet.Mask == nil {
+		s.log.Warn("invalid IPNet", "method", "BlockSubnet")
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -341,8 +343,8 @@ func (s *APIBackend) BlockSubnet(_ context.Context, ipnet *net.IPNet) error {
 
 func (s *APIBackend) UnblockSubnet(_ context.Context, ipnet *net.IPNet) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_unblockSubnet")
-	if ipnet == nil {
-		log.Warn("invalid IPNet", "method", "UnblockSubnet")
+	if ipnet == nil || ipnet.IP == nil || ipnet.Mask == nil {
+		s.log.Warn("invalid IPNet", "method", "UnblockSubnet")
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -366,7 +368,7 @@ func (s *APIBackend) ListBlockedSubnets(_ context.Context) ([]*net.IPNet, error)
 func (s *APIBackend) ProtectPeer(_ context.Context, id peer.ID) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_protectPeer")
 	if err := id.Validate(); err != nil {
-		log.Warn("invalid peer ID", "method", "ProtectPeer", "peer", id, "err", err)
+		s.log.Warn("invalid peer ID", "method", "ProtectPeer", "peer", id, "err", err)
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -381,7 +383,7 @@ func (s *APIBackend) ProtectPeer(_ context.Context, id peer.ID) error {
 func (s *APIBackend) UnprotectPeer(_ context.Context, id peer.ID) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_unprotectPeer")
 	if err := id.Validate(); err != nil {
-		log.Warn("invalid peer ID", "method", "UnprotectPeer", "peer", id, "err", err)
+		s.log.Warn("invalid peer ID", "method", "UnprotectPeer", "peer", id, "err", err)
 		return ErrInvalidRequest
 	}
 	defer recordDur()
@@ -411,7 +413,7 @@ func (s *APIBackend) ConnectPeer(ctx context.Context, addr string) error {
 func (s *APIBackend) DisconnectPeer(_ context.Context, id peer.ID) error {
 	recordDur := s.m.RecordRPCServerRequest("opp2p_disconnectPeer")
 	if err := id.Validate(); err != nil {
-		log.Warn("invalid peer ID", "method", "DisconnectPeer", "peer", id, "err", err)
+		s.log.Warn("invalid peer ID", "method", "DisconnectPeer", "peer", id, "err", err)
 		return ErrInvalidRequest
 	}
 	defer recordDur()

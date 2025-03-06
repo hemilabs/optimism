@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/derive/params"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -53,8 +54,7 @@ type Compressor interface {
 type ChannelOut interface {
 	ID() ChannelID
 	Reset() error
-	AddBlock(*rollup.Config, *types.Block) error
-	AddSingularBatch(*SingularBatch, uint64) error
+	AddBlock(*rollup.Config, *types.Block) (*L1BlockInfo, error)
 	InputBytes() int
 	ReadyBytes() int
 	Flush() error
@@ -74,18 +74,21 @@ type SingularChannelOut struct {
 	compress Compressor
 
 	closed bool
+
+	chainSpec *rollup.ChainSpec
 }
 
 func (co *SingularChannelOut) ID() ChannelID {
 	return co.id
 }
 
-func NewSingularChannelOut(compress Compressor) (*SingularChannelOut, error) {
+func NewSingularChannelOut(compress Compressor, chainSpec *rollup.ChainSpec) (*SingularChannelOut, error) {
 	c := &SingularChannelOut{
 		id:        ChannelID{},
 		frame:     0,
 		rlpLength: 0,
 		compress:  compress,
+		chainSpec: chainSpec,
 	}
 	_, err := rand.Read(c.id[:])
 	if err != nil {
@@ -104,31 +107,27 @@ func (co *SingularChannelOut) Reset() error {
 	return err
 }
 
-// AddBlock adds a block to the channel. It returns the RLP encoded byte size
+// AddBlock adds a block to the channel. It returns the block's L1BlockInfo
 // and an error if there is a problem adding the block. The only sentinel error
 // that it returns is ErrTooManyRLPBytes. If this error is returned, the channel
 // should be closed and a new one should be made.
-func (co *SingularChannelOut) AddBlock(rollupCfg *rollup.Config, block *types.Block) error {
+func (co *SingularChannelOut) AddBlock(rollupCfg *rollup.Config, block *types.Block) (*L1BlockInfo, error) {
 	if co.closed {
-		return ErrChannelOutAlreadyClosed
+		return nil, ErrChannelOutAlreadyClosed
 	}
 
 	batch, l1Info, err := BlockToSingularBatch(rollupCfg, block)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("converting block to batch: %w", err)
 	}
-	return co.AddSingularBatch(batch, l1Info.SequenceNumber)
+	return l1Info, co.addSingularBatch(batch, l1Info.SequenceNumber)
 }
 
-// AddSingularBatch adds a batch to the channel. It returns the RLP encoded byte size
-// and an error if there is a problem adding the batch. The only sentinel error
+// addSingularBatch adds a batch to the channel. It returns
+// an error if there is a problem adding the batch. The only sentinel error
 // that it returns is ErrTooManyRLPBytes. If this error is returned, the channel
 // should be closed and a new one should be made.
-//
-// AddSingularBatch should be used together with BlockToBatch if you need to access the
-// BatchData before adding a block to the channel. It isn't possible to access
-// the batch data with AddBlock.
-func (co *SingularChannelOut) AddSingularBatch(batch *SingularBatch, _ uint64) error {
+func (co *SingularChannelOut) addSingularBatch(batch *SingularBatch, _ uint64) error {
 	if co.closed {
 		return ErrChannelOutAlreadyClosed
 	}
@@ -139,9 +138,15 @@ func (co *SingularChannelOut) AddSingularBatch(batch *SingularBatch, _ uint64) e
 	if err := rlp.Encode(&buf, NewBatchData(batch)); err != nil {
 		return err
 	}
-	if co.rlpLength+buf.Len() > MaxRLPBytesPerChannel {
+
+	// Fjord increases the max RLP bytes per channel. Activation of this change in the derivation pipeline
+	// is dependent on the timestamp of the L1 block that this channel got included in. So using the timestamp
+	// of the current batch guarantees that this channel will be included in an L1 block with a timestamp well after
+	// the Fjord activation.
+	maxRLPBytesPerChannel := co.chainSpec.MaxRLPBytesPerChannel(batch.Timestamp)
+	if co.rlpLength+buf.Len() > int(maxRLPBytesPerChannel) {
 		return fmt.Errorf("could not add %d bytes to channel of %d bytes, max is %d. err: %w",
-			buf.Len(), co.rlpLength, MaxRLPBytesPerChannel, ErrTooManyRLPBytes)
+			buf.Len(), co.rlpLength, maxRLPBytesPerChannel, ErrTooManyRLPBytes)
 	}
 	co.rlpLength += buf.Len()
 
@@ -271,7 +276,7 @@ func ForceCloseTxData(frames []Frame) ([]byte, error) {
 	}
 
 	var out bytes.Buffer
-	out.WriteByte(DerivationVersion0)
+	out.WriteByte(params.DerivationVersion0)
 
 	if !closed {
 		f := Frame{
