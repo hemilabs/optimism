@@ -443,6 +443,7 @@ var optionalFlags = []cli.Flag{
 	SyncModeFlag,
 	RPCListenAddr,
 	RPCListenPort,
+	BSSNodeAddr,
 	L1TrustRPC,
 	L1RPCProviderKind,
 	L1RPCRateLimit,
