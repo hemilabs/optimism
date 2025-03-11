@@ -26,7 +26,7 @@ const (
 
 var (
 	PoPPayoutFuncBytes4 = crypto.Keccak256([]byte(PoPPayoutFuncSignature))[:4]
-	PoPPayoutAddress    = predeploys.GovernanceTokenAddr
+	PoPPayoutAddress    = predeploys.PoPPointsAddr
 )
 
 // PoPPayout presents the information stored in a GovernanceToken.mintPoPRewards call
@@ -251,7 +251,7 @@ func PoPPayoutTx(regolith bool, blockRewarded uint64, popMinerAddresses []common
 	}
 	// With the regolith fork we disable the IsSystemTx functionality, and allocate real gas
 	if regolith {
-		out.Gas = RegolithSystemTxGas
+		out.Gas = 20_000_000
 	}
 	return out, nil
 }
