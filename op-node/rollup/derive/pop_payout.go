@@ -18,7 +18,7 @@ const (
 	PoPPayoutFuncSignature       = "mintPoPRewards(uint64,address[],uint256[])"
 	MaximumPoPPayoutsInTx        = 64  // TODO: Implement restriction, review quantity, and ensure it falls under gas allowance (or spare from gas budget?)
 	SmartContractArgumentByteLen = 32  // Each argument to smart contract is padded to 32 bytes
-	PoPPayoutDelay               = 200 // How long to wait after a block to payout PoP transactions which endorse it
+	PoPPayoutDelay               = 500 // How long to wait after a block to payout PoP transactions which endorse it
 
 	// MinimumSerializedPoPPayoutLen based on function sig + block # + starting Positions + 1-address array + 1-amount array
 	MinimumSerializedPoPPayoutLen = 4 + 32 + (2 * 32) + (2 * 32) + (2 * 32)
