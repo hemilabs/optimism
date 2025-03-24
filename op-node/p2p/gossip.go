@@ -608,6 +608,7 @@ func (p *publisher) publishRawSignedPayload(ctx context.Context, timestamp uint6
 	} else if p.cfg.IsCanyon(timestamp) {
 		return p.blocksV2.topic.Publish(ctx, out)
 	} else {
+		log.Info("Publishing execution payload to blocks topic v1")
 		return p.blocksV1.topic.Publish(ctx, out)
 	}
 }
