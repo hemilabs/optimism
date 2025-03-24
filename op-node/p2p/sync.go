@@ -46,19 +46,19 @@ const (
 	serverWriteChunkTimeout = time.Second * 10
 	// after the rate-limit reservation hits the max throttle delay, give up on serving a request and just close the stream
 	maxThrottleDelay = time.Second * 20
-	// Do not serve more than 20 requests per second
-	globalServerBlocksRateLimit rate.Limit = 20
+	// Do not serve more than 100 requests per second
+	globalServerBlocksRateLimit rate.Limit = 100
 	// Allows a burst of 2x our rate limit
-	globalServerBlocksBurst = 40
-	// Do not serve more than 4 requests per second to the same peer, so we can serve other peers at the same time
-	peerServerBlocksRateLimit rate.Limit = 4
-	// Allow a peer to request 30s of blocks at once
-	peerServerBlocksBurst = 15
+	globalServerBlocksBurst = 200
+	// Do not serve more than 10 requests per second to the same peer, so we can serve other peers at the same time
+	peerServerBlocksRateLimit rate.Limit = 10
+	// Allow a peer to request 30 blocks at once
+	peerServerBlocksBurst = 30
 	// If the client hits a request error, it counts as a lot of rate-limit tokens for syncing from that peer:
 	// we rather sync from other servers. We'll try again later,
 	// and eventually kick the peer based on degraded scoring if it's really not serving us well.
 	// TODO(CLI-4009): Use a backoff rather than this mechanism.
-	clientErrRateCost = peerServerBlocksBurst
+	clientErrRateCost = peerServerBlocksBurst / 10
 )
 
 func PayloadByNumberProtocolID(l2ChainID *big.Int) protocol.ID {
