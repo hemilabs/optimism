@@ -35,6 +35,9 @@ type Driver struct {
 	emitter event.Emitter
 	drain   func() error
 
+	// Record whether a snap sync has already been started
+	snapStarted bool
+
 	// Requests to block the event loop for synchronous execution to avoid reading an inconsistent state
 	stateReq chan chan struct{}
 
@@ -252,6 +255,16 @@ func (s *Driver) eventLoop() {
 				if ref.Number <= s.Engine.UnsafeL2Head().Number {
 					continue
 				}
+
+				// Only request a snap sync of a single block, do not continue advancing new snap sync requests.
+				// Once op-geth is done snap syncing to the original EL sync height, then progress with CL sync.
+				if s.snapStarted {
+					s.log.Info("Snap already started, continuing without updating EL tip")
+					continue
+				}
+
+				s.snapStarted = true
+
 				s.log.Info("Optimistically inserting unsafe L2 execution payload to drive EL sync", "id", envelope.ExecutionPayload.ID())
 				if err := s.Engine.InsertUnsafePayload(s.driverCtx, envelope, ref); err != nil {
 					s.log.Warn("Failed to insert unsafe payload for EL sync", "id", envelope.ExecutionPayload.ID(), "err", err)
