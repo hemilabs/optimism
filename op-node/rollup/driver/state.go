@@ -258,10 +258,10 @@ func (s *Driver) eventLoop() {
 
 				// Only request a snap sync of a single block, do not continue advancing new snap sync requests.
 				// Once op-geth is done snap syncing to the original EL sync height, then progress with CL sync.
-				if s.snapStarted && s.engineController.Finalized().Number == 0 {
-					s.log.Info("Snap already started, continuing without updating EL tip")
-					continue
-				}
+				//if s.snapStarted && s.engineController.Finalized().Number == 0 {
+				//	s.log.Info("Snap already started, continuing without updating EL tip")
+				//	continue
+				//}
 
 				s.log.Info("Optimistically inserting unsafe L2 execution payload to drive EL sync", "id", envelope.ExecutionPayload.ID())
 				if err := s.Engine.InsertUnsafePayload(s.driverCtx, envelope, ref); err != nil {
