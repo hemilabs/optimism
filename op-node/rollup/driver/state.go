@@ -258,7 +258,7 @@ func (s *Driver) eventLoop() {
 
 				// Only request a snap sync of a single block, do not continue advancing new snap sync requests.
 				// Once op-geth is done snap syncing to the original EL sync height, then progress with CL sync.
-				if s.snapStarted {
+				if s.snapStarted && s.engineController.Finalized().Number == 0 {
 					s.log.Info("Snap already started, continuing without updating EL tip")
 					continue
 				}
