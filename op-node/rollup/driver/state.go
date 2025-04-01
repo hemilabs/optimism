@@ -249,7 +249,7 @@ func (s *Driver) eventLoop() {
 			} else if s.SyncCfg.SyncMode == sync.ELSync {
 				ref, err := derive.PayloadToBlockRef(s.Config, envelope.ExecutionPayload)
 				if err != nil {
-					s.log.Info("Failed to turn execution payload into a block ref", "id", envelope.ExecutionPayload.ID(), "err", err)
+					s.log.Debug("Failed to turn execution payload into a block ref", "id", envelope.ExecutionPayload.ID(), "err", err)
 					continue
 				}
 				if ref.Number <= s.Engine.UnsafeL2Head().Number {
