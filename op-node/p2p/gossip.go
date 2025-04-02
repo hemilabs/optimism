@@ -548,6 +548,9 @@ func (p *publisher) PublishL2Payload(ctx context.Context, envelope *eth.Executio
 	// This also copies the data, freeing up the original buffer to go back into the pool
 	out := snappy.Encode(nil, data)
 
+	log.Trace(fmt.Sprintf("Publishing execution payload, v3 peers = %d, v2 peers = %d, v1 peers = %d, all peers = %d",
+		len(p.BlocksTopicV3Peers()), len(p.BlocksTopicV2Peers()), len(p.BlocksTopicV1Peers()), len(p.AllBlockTopicsPeers())))
+
 	if p.cfg.IsEcotone(uint64(envelope.ExecutionPayload.Timestamp)) {
 		return p.blocksV3.topic.Publish(ctx, out)
 	} else if p.cfg.IsCanyon(uint64(envelope.ExecutionPayload.Timestamp)) {

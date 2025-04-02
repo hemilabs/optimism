@@ -216,17 +216,20 @@ func (e *EngineController) ConfirmPayload(ctx context.Context, agossip async.Asy
 
 	var prevKeystoneRef *eth.L2BlockRef = nil
 
-	if prevKeystoneHeight > 0 {
-		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
-		if err != nil {
-			return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
-		}
+	if e.syncMode == sync.CLSync {
+		if prevKeystoneHeight > 0 {
+			prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+			if err != nil {
+				return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+			}
 
-		ref, err := PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
-		if err != nil {
-			return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+			ref, err := PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+			if err != nil {
+				return nil, BlockInsertPrestateErr, NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+			}
+			prevKeystoneRef = &ref
 		}
-		prevKeystoneRef = &ref
+		// 		if e.syncStatus == syncStatusWillStartEL || e.syncStatus == syncStatusStartedEL || e.syncStatus == syncStatusFinishedELButNotFinalized { }
 	}
 
 	// don't create a BlockInsertPrestateErr if we have a cached gossip payload
@@ -384,7 +387,7 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	if e.syncStatus == syncStatusWillStartEL {
 		b, err := e.engine.L2BlockRefByLabel(ctx, eth.Finalized)
 		isTransitionBlock := e.rollupCfg.Genesis.L2.Number != 0 && b.Hash == e.rollupCfg.Genesis.L2.Hash
-		if errors.Is(err, ethereum.NotFound) || isTransitionBlock {
+		if errors.Is(err, ethereum.NotFound) || isTransitionBlock || b.Number == 0 {
 			e.syncStatus = syncStatusStartedEL
 			e.log.Info("Starting EL sync")
 			e.elStart = e.clock.Now()
@@ -461,8 +464,7 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
 
 	var prevKeystoneRef *eth.L2BlockRef = nil
-
-	if prevKeystoneHeight > 0 {
+	if prevKeystoneHeight > 0 && e.syncMode == sync.CLSync {
 		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
 		if err != nil {
 			return NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))

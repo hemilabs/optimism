@@ -44,6 +44,9 @@ type Driver struct {
 	// We will also use it for EL sync in a future PR.
 	engineController *derive.EngineController
 
+	// Record whether a snap sync has already been started
+	snapStarted bool
+
 	// Requests to block the event loop for synchronous execution to avoid reading an inconsistent state
 	stateReq chan chan struct{}
 
@@ -331,22 +334,25 @@ func (s *Driver) eventLoop() {
 			s.snapshot("New unsafe payload")
 			// If we are doing CL sync or done with engine syncing, fallback to the unsafe payload queue & CL P2P sync.
 			if s.syncCfg.SyncMode == sync.CLSync || !s.engineController.IsEngineSyncing() {
-				s.log.Info("Optimistically queueing unsafe L2 execution payload", "id", envelope.ExecutionPayload.ID())
+				s.log.Debug("Optimistically queueing unsafe L2 execution payload", "id", envelope.ExecutionPayload.ID())
 				s.derivation.AddUnsafePayload(envelope)
 				s.metrics.RecordReceivedUnsafePayload(envelope)
 				reqStep()
 			} else if s.syncCfg.SyncMode == sync.ELSync {
 				ref, err := derive.PayloadToBlockRef(s.config, envelope.ExecutionPayload)
 				if err != nil {
-					s.log.Info("Failed to turn execution payload into a block ref", "id", envelope.ExecutionPayload.ID(), "err", err)
+					s.log.Debug("Failed to turn execution payload into a block ref", "id", envelope.ExecutionPayload.ID(), "err", err)
 					continue
 				}
 				if ref.Number <= s.engineController.UnsafeL2Head().Number {
 					continue
 				}
-				s.log.Info("Optimistically inserting unsafe L2 execution payload to drive EL sync", "id", envelope.ExecutionPayload.ID())
+
+				s.log.Debug("Optimistically inserting unsafe L2 execution payload to drive EL sync", "id", envelope.ExecutionPayload.ID())
 				if err := s.engineController.InsertUnsafePayload(s.driverCtx, envelope, ref); err != nil {
 					s.log.Warn("Failed to insert unsafe payload for EL sync", "id", envelope.ExecutionPayload.ID(), "err", err)
+				} else {
+					s.snapStarted = true
 				}
 				s.logSyncProgress("unsafe payload from sequencer while in EL sync")
 			}
