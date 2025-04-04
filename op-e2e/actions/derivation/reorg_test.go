@@ -1,4 +1,4 @@
-package actions
+package derivation
 
 import (
 	"math/big"
@@ -6,8 +6,10 @@ import (
 	"path"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-service/testutils"
+	"github.com/ethereum-optimism/optimism/op-e2e/config"
 
+	actionsHelpers "github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
+	upgradesHelpers "github.com/ethereum-optimism/optimism/op-e2e/actions/upgrades/helpers"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -16,35 +18,13 @@ import (
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/stretchr/testify/require"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
-	plasma "github.com/ethereum-optimism/optimism/op-plasma"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
-
-func setupReorgTest(t Testing, config *e2eutils.TestParams, deltaTimeOffset *hexutil.Uint64) (*e2eutils.SetupData, *e2eutils.DeployParams, *L1Miner, *L2Sequencer, *L2Engine, *L2Verifier, *L2Engine, *L2Batcher) {
-	dp := e2eutils.MakeDeployParams(t, config)
-	dp.DeployConfig.L2GenesisDeltaTimeOffset = deltaTimeOffset
-
-	sd := e2eutils.Setup(t, dp, defaultAlloc)
-	log := testlog.Logger(t, log.LevelDebug)
-
-	return setupReorgTestActors(t, dp, sd, log)
-}
-
-func setupReorgTestActors(t Testing, dp *e2eutils.DeployParams, sd *e2eutils.SetupData, log log.Logger) (*e2eutils.SetupData, *e2eutils.DeployParams, *L1Miner, *L2Sequencer, *L2Engine, *L2Verifier, *L2Engine, *L2Batcher) {
-	miner, seqEngine, sequencer := setupSequencerTest(t, sd, log)
-	miner.ActL1SetFeeRecipient(common.Address{'A'})
-	sequencer.ActL2PipelineFull(t)
-	verifEngine, verifier := setupVerifier(t, sd, log, miner.L1Client(t, sd.RollupCfg), miner.BlobStore(), &sync.Config{})
-	rollupSeqCl := sequencer.RollupClient()
-	batcher := NewL2Batcher(log, sd.RollupCfg, DefaultBatcherCfg(dp),
-		rollupSeqCl, miner.EthClient(), seqEngine.EthClient(), seqEngine.EngineClient(t, sd.RollupCfg))
-	return sd, dp, miner, sequencer, seqEngine, verifier, verifEngine, batcher
-}
 
 // TestReorgBatchType run each reorg-related test case in singular batch mode and span batch mode.
 func TestReorgBatchType(t *testing.T) {
@@ -76,8 +56,8 @@ func TestReorgBatchType(t *testing.T) {
 }
 
 func ReorgOrphanBlock(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
-	t := NewDefaultTesting(gt)
-	sd, _, miner, sequencer, _, verifier, verifierEng, batcher := setupReorgTest(t, defaultRollupTestParams, deltaTimeOffset)
+	t := actionsHelpers.NewDefaultTesting(gt)
+	sd, _, miner, sequencer, _, verifier, verifierEng, batcher := actionsHelpers.SetupReorgTest(t, actionsHelpers.DefaultRollupTestParams(), deltaTimeOffset)
 	verifEngClient := verifierEng.EngineClient(t, sd.RollupCfg)
 
 	sequencer.ActL2PipelineFull(t)
@@ -96,7 +76,7 @@ func ReorgOrphanBlock(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	// new L1 block with L2 batch
 	miner.ActL1StartBlock(12)(t)
 	miner.ActL1IncludeTx(sd.RollupCfg.Genesis.SystemConfig.BatcherAddr)(t)
-	batchTx := miner.l1Transactions[0]
+	batchTx := miner.L1Transactions[0]
 	miner.ActL1EndBlock(t)
 
 	// verifier picks up the L2 chain that was submitted
@@ -125,7 +105,7 @@ func ReorgOrphanBlock(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	miner.ActL1SetFeeRecipient(common.Address{'C'})
 	// note: the geth tx pool reorgLoop is too slow (responds to chain head events, but async),
 	// and there's no way to manually trigger runReorg, so we re-insert it ourselves.
-	require.NoError(t, miner.eth.TxPool().Add([]*types.Transaction{batchTx}, true, true)[0])
+	require.NoError(t, miner.Eth.TxPool().Add([]*types.Transaction{batchTx}, true)[0])
 	// need to re-insert previously included tx into the block
 	miner.ActL1IncludeTx(sd.RollupCfg.Genesis.SystemConfig.BatcherAddr)(t)
 	miner.ActL1EndBlock(t)
@@ -144,18 +124,11 @@ func ReorgOrphanBlock(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 }
 
 func ReorgFlipFlop(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
-	t := NewDefaultTesting(gt)
-	sd, _, miner, sequencer, _, verifier, verifierEng, batcher := setupReorgTest(t, defaultRollupTestParams, deltaTimeOffset)
+	t := actionsHelpers.NewDefaultTesting(gt)
+	sd, _, miner, sequencer, _, verifier, verifierEng, batcher := actionsHelpers.SetupReorgTest(t, actionsHelpers.DefaultRollupTestParams(), deltaTimeOffset)
 	minerCl := miner.L1Client(t, sd.RollupCfg)
 	verifEngClient := verifierEng.EngineClient(t, sd.RollupCfg)
 	checkVerifEngine := func() {
-		// TODO: geth preserves L2 chain with origin A1 after flip-flopping to B?
-		//ref, err := verifEngClient.L2BlockRefByLabel(t.Ctx(), eth.Unsafe)
-		//require.NoError(t, err)
-		//t.Logf("l2 unsafe head %s with origin %s", ref, ref.L1Origin)
-		//require.NotEqual(t, verifier.L2Unsafe().Hash, ref.ParentHash, "TODO off by one, engine syncs A0 after reorging back from B, while rollup node only inserts up to A0 (excl.)")
-		//require.Equal(t, verifier.L2Unsafe(), ref, "verifier safe head of engine matches rollup client")
-
 		ref, err := verifEngClient.L2BlockRefByLabel(t.Ctx(), eth.Safe)
 		require.NoError(t, err)
 		require.Equal(t, verifier.L2Safe(), ref, "verifier safe head of engine matches rollup client")
@@ -181,7 +154,7 @@ func ReorgFlipFlop(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	miner.ActL1SetFeeRecipient(common.Address{'A', 1})
 	miner.ActL1StartBlock(12)(t)
 	miner.ActL1IncludeTx(sd.RollupCfg.Genesis.SystemConfig.BatcherAddr)(t)
-	batchTxA := miner.l1Transactions[0]
+	batchTxA := miner.L1Transactions[0]
 	miner.ActL1EndBlock(t)
 
 	// verifier picks up the L2 chain that was submitted
@@ -204,7 +177,7 @@ func ReorgFlipFlop(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	// re-include the batch tx that submitted L2 chain data that pointed to A0, in the new block B1
 	miner.ActL1SetFeeRecipient(common.Address{'B', 1})
 	miner.ActL1StartBlock(12)(t)
-	require.NoError(t, miner.eth.TxPool().Add([]*types.Transaction{batchTxA}, true, true)[0])
+	require.NoError(t, miner.Eth.TxPool().Add([]*types.Transaction{batchTxA}, true)[0])
 	miner.ActL1IncludeTx(sd.RollupCfg.Genesis.SystemConfig.BatcherAddr)(t)
 	miner.ActL1EndBlock(t)
 
@@ -228,7 +201,7 @@ func ReorgFlipFlop(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 		// after delta hard fork
 		require.Zero(t, verifier.L2Safe().Number, "safe head is at genesis block because span batch referenced reorged L1 chain is not accepted")
 		require.Equal(t, verifier.L2Unsafe().ID(), sequencer.L2Unsafe().ParentID(), "head is at the highest unsafe block that references canonical L1 chain(genesis block)")
-		batcher.l2BufferedBlock = eth.L2BlockRef{} // must reset batcher to resubmit blocks included in the last batch
+		batcher.L2BufferedBlock = eth.L2BlockRef{} // must reset batcher to resubmit blocks included in the last batch
 	}
 	checkVerifEngine()
 
@@ -269,7 +242,7 @@ func ReorgFlipFlop(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 
 	miner.ActL1SetFeeRecipient(common.Address{'A', 2})
 	miner.ActL1StartBlock(12)(t)
-	require.NoError(t, miner.eth.TxPool().Add([]*types.Transaction{batchTxA}, true, true)[0]) // replay chain A batches, but now in A2 instead of A1
+	require.NoError(t, miner.Eth.TxPool().Add([]*types.Transaction{batchTxA}, true)[0]) // replay chain A batches, but now in A2 instead of A1
 	miner.ActL1IncludeTx(sd.RollupCfg.Genesis.SystemConfig.BatcherAddr)(t)
 	miner.ActL1EndBlock(t)
 
@@ -365,14 +338,15 @@ func ReorgFlipFlop(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 // - Unsafe head is 62
 // - Safe head is 42
 func DeepReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
-	t := NewDefaultTesting(gt)
+	t := actionsHelpers.NewDefaultTesting(gt)
 
 	// Create actor and verification engine client
-	sd, dp, miner, sequencer, seqEngine, verifier, verifierEng, batcher := setupReorgTest(t, &e2eutils.TestParams{
+	sd, dp, miner, sequencer, seqEngine, verifier, verifierEng, batcher := actionsHelpers.SetupReorgTest(t, &e2eutils.TestParams{
 		MaxSequencerDrift:   40,
 		SequencerWindowSize: 20,
 		ChannelTimeout:      120,
 		L1BlockTime:         4,
+		AllocType:           config.AllocTypeStandard,
 	}, deltaTimeOffset)
 	minerCl := miner.L1Client(t, sd.RollupCfg)
 	l2Client := seqEngine.EthClient()
@@ -386,13 +360,13 @@ func DeepReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	// Set up alice
 	log := testlog.Logger(t, log.LevelDebug)
 	addresses := e2eutils.CollectAddresses(sd, dp)
-	l2UserEnv := &BasicUserEnv[*L2Bindings]{
+	l2UserEnv := &actionsHelpers.BasicUserEnv[*actionsHelpers.L2Bindings]{
 		EthCl:          l2Client,
 		Signer:         types.LatestSigner(sd.L2Cfg.Config),
 		AddressCorpora: addresses,
-		Bindings:       NewL2Bindings(t, l2Client, seqEngine.GethClient()),
+		Bindings:       actionsHelpers.NewL2Bindings(t, l2Client, seqEngine.GethClient()),
 	}
-	alice := NewCrossLayerUser(log, dp.Secrets.Alice, rand.New(rand.NewSource(0xa57b)))
+	alice := actionsHelpers.NewCrossLayerUser(log, dp.Secrets.Alice, rand.New(rand.NewSource(0xa57b)), config.AllocTypeStandard)
 	alice.L2.SetUserEnv(l2UserEnv)
 
 	// Run one iteration of the L2 derivation pipeline
@@ -406,7 +380,7 @@ func DeepReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	// Create a var to store the ref for the second to last block of the second sequencing window
 	var blockA39 eth.L1BlockRef
 
-	var aliceL2TxBlock types.Block
+	var aliceL2TxBlock *types.Block
 	// Mine enough empty blocks on L1 to reach two sequence windows.
 	for i := uint64(0); i < sd.RollupCfg.SeqWindowSize*3; i++ {
 		// At block #50, send a batch to L1 containing all L2 blocks built up to this point.
@@ -457,7 +431,7 @@ func DeepReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 			b0, err := l2Client.BlockByNumber(t.Ctx(), big.NewInt(int64(sequencer.L2Unsafe().Number)))
 			require.NoError(t, err, "failed to fetch unsafe head of L2 after submitting alice's transaction")
 
-			aliceL2TxBlock = *b0
+			aliceL2TxBlock = b0
 		}
 
 		// Ask sequencer to handle new L1 head and build L2 blocks up to the L1 head
@@ -581,6 +555,8 @@ func DeepReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	require.Equal(t, verifier.L2Safe(), verifier.L2Unsafe(), "L2 safe and unsafe head should be equal")
 	checkVerifEngine()
 
+	require.NotNil(gt, aliceL2TxBlock)
+
 	// Ensure that the parent of the L2 block containing Alice's transaction still exists
 	b0, err := l2Client.BlockByHash(t.Ctx(), aliceL2TxBlock.ParentHash())
 	require.NoError(t, err, "Parent of the L2 block containing Alice's transaction should still exist on L2")
@@ -600,30 +576,34 @@ type rpcWrapper struct {
 // RestartOpGeth tests that the sequencer can restart its execution engine without rollup-node restart,
 // including recovering the finalized/safe state of L2 chain without reorging.
 func RestartOpGeth(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
-	t := NewDefaultTesting(gt)
+	t := actionsHelpers.NewDefaultTesting(gt)
 	dbPath := path.Join(t.TempDir(), "testdb")
 	dbOption := func(_ *ethconfig.Config, nodeCfg *node.Config) error {
 		nodeCfg.DataDir = dbPath
 		return nil
 	}
-	dp := e2eutils.MakeDeployParams(t, defaultRollupTestParams)
-	dp.DeployConfig.L2GenesisDeltaTimeOffset = deltaTimeOffset
-	sd := e2eutils.Setup(t, dp, defaultAlloc)
+	dp := e2eutils.MakeDeployParams(t, actionsHelpers.DefaultRollupTestParams())
+	upgradesHelpers.ApplyDeltaTimeOffset(dp, deltaTimeOffset)
+	sd := e2eutils.Setup(t, dp, actionsHelpers.DefaultAlloc)
 	log := testlog.Logger(t, log.LevelDebug)
 	jwtPath := e2eutils.WriteDefaultJWT(t)
 	// L1
-	miner := NewL1Miner(t, log, sd.L1Cfg)
+	miner := actionsHelpers.NewL1Miner(t, log, sd.L1Cfg)
 	l1F, err := sources.NewL1Client(miner.RPCClient(), log, nil, sources.L1ClientDefaultConfig(sd.RollupCfg, false, sources.RPCKindStandard))
 	require.NoError(t, err)
 	// Sequencer
-	seqEng := NewL2Engine(t, log, sd.L2Cfg, sd.RollupCfg.Genesis.L1, jwtPath, dbOption)
+	seqEng := actionsHelpers.NewL2Engine(t, log, sd.L2Cfg, jwtPath, dbOption)
 	engRpc := &rpcWrapper{seqEng.RPCClient()}
 	l2Cl, err := sources.NewEngineClient(engRpc, log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
 	require.NoError(t, err)
+<<<<<<< HEAD:op-e2e/actions/derivation/reorg_test.go
+	sequencer := actionsHelpers.NewL2Sequencer(t, log, l1F, miner.BlobStore(), altda.Disabled, l2Cl, sd.RollupCfg, 0)
+=======
 	bssc := &testutils.MockBssClient{}
 	sequencer := NewL2Sequencer(t, log, l1F, miner.BlobStore(), plasma.Disabled, l2Cl, sd.RollupCfg, 0, bssc)
+>>>>>>> 0fa17588d (Patch in heminetwork):op-e2e/actions/reorg_test.go
 
-	batcher := NewL2Batcher(log, sd.RollupCfg, DefaultBatcherCfg(dp),
+	batcher := actionsHelpers.NewL2Batcher(log, sd.RollupCfg, actionsHelpers.DefaultBatcherCfg(dp),
 		sequencer.RollupClient(), miner.EthClient(), seqEng.EthClient(), seqEng.EngineClient(t, sd.RollupCfg))
 
 	// start
@@ -672,7 +652,7 @@ func RestartOpGeth(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	// close the sequencer engine
 	require.NoError(t, seqEng.Close())
 	// and start a new one with same db path
-	seqEngNew := NewL2Engine(t, log, sd.L2Cfg, sd.RollupCfg.Genesis.L1, jwtPath, dbOption)
+	seqEngNew := actionsHelpers.NewL2Engine(t, log, sd.L2Cfg, jwtPath, dbOption)
 	// swap in the new rpc. This is as close as we can get to reconnecting to a new in-memory rpc connection
 	engRpc.RPC = seqEngNew.RPCClient()
 
@@ -694,36 +674,41 @@ func RestartOpGeth(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 // L2 block (compared to something already secured by the first sequencer):
 // the alt block is not synced by the verifier, in unsafe and safe sync modes.
 func ConflictingL2Blocks(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
-	t := NewDefaultTesting(gt)
-	dp := e2eutils.MakeDeployParams(t, defaultRollupTestParams)
-	dp.DeployConfig.L2GenesisDeltaTimeOffset = deltaTimeOffset
-	sd := e2eutils.Setup(t, dp, defaultAlloc)
+	t := actionsHelpers.NewDefaultTesting(gt)
+	dp := e2eutils.MakeDeployParams(t, actionsHelpers.DefaultRollupTestParams())
+	upgradesHelpers.ApplyDeltaTimeOffset(dp, deltaTimeOffset)
+	sd := e2eutils.Setup(t, dp, actionsHelpers.DefaultAlloc)
 	log := testlog.Logger(t, log.LevelDebug)
 
-	sd, _, miner, sequencer, seqEng, verifier, _, batcher := setupReorgTestActors(t, dp, sd, log)
+	sd, _, miner, sequencer, seqEng, verifier, _, batcher := actionsHelpers.SetupReorgTestActors(t, dp, sd, log)
 
 	// Extra setup: a full alternative sequencer, sequencer engine, and batcher
 	jwtPath := e2eutils.WriteDefaultJWT(t)
-	altSeqEng := NewL2Engine(t, log, sd.L2Cfg, sd.RollupCfg.Genesis.L1, jwtPath)
+	altSeqEng := actionsHelpers.NewL2Engine(t, log, sd.L2Cfg, jwtPath)
 	altSeqEngCl, err := sources.NewEngineClient(altSeqEng.RPCClient(), log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
 	require.NoError(t, err)
 	l1F, err := sources.NewL1Client(miner.RPCClient(), log, nil, sources.L1ClientDefaultConfig(sd.RollupCfg, false, sources.RPCKindStandard))
 	require.NoError(t, err)
+<<<<<<< HEAD:op-e2e/actions/derivation/reorg_test.go
+	altSequencer := actionsHelpers.NewL2Sequencer(t, log, l1F, miner.BlobStore(), altda.Disabled, altSeqEngCl, sd.RollupCfg, 0)
+	altBatcher := actionsHelpers.NewL2Batcher(log, sd.RollupCfg, actionsHelpers.DefaultBatcherCfg(dp),
+=======
 	bssc := &testutils.MockBssClient{}
 	altSequencer := NewL2Sequencer(t, log, l1F, miner.BlobStore(), plasma.Disabled, altSeqEngCl, sd.RollupCfg, 0, bssc)
 	altBatcher := NewL2Batcher(log, sd.RollupCfg, DefaultBatcherCfg(dp),
+>>>>>>> 0fa17588d (Patch in heminetwork):op-e2e/actions/reorg_test.go
 		altSequencer.RollupClient(), miner.EthClient(), altSeqEng.EthClient(), altSeqEng.EngineClient(t, sd.RollupCfg))
 
 	// And set up user Alice, using the alternative sequencer endpoint
 	l2Cl := altSeqEng.EthClient()
 	addresses := e2eutils.CollectAddresses(sd, dp)
-	l2UserEnv := &BasicUserEnv[*L2Bindings]{
+	l2UserEnv := &actionsHelpers.BasicUserEnv[*actionsHelpers.L2Bindings]{
 		EthCl:          l2Cl,
 		Signer:         types.LatestSigner(sd.L2Cfg.Config),
 		AddressCorpora: addresses,
-		Bindings:       NewL2Bindings(t, l2Cl, altSeqEng.GethClient()),
+		Bindings:       actionsHelpers.NewL2Bindings(t, l2Cl, altSeqEng.GethClient()),
 	}
-	alice := NewCrossLayerUser(log, dp.Secrets.Alice, rand.New(rand.NewSource(1234)))
+	alice := actionsHelpers.NewCrossLayerUser(log, dp.Secrets.Alice, rand.New(rand.NewSource(1234)), config.AllocTypeStandard)
 	alice.L2.SetUserEnv(l2UserEnv)
 
 	sequencer.ActL2PipelineFull(t)
@@ -765,13 +750,13 @@ func ConflictingL2Blocks(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	altSeqEng.ActL2IncludeTx(alice.Address())(t)
 	altSequencer.ActL2EndBlock(t)
 
-	conflictBlock := seqEng.l2Chain.GetBlockByNumber(altSequencer.L2Unsafe().Number)
+	conflictBlock := seqEng.L2Chain().GetBlockByNumber(altSequencer.L2Unsafe().Number)
 	require.NotEqual(t, conflictBlock.Hash(), altSequencer.L2Unsafe().Hash, "alt sequencer has built a conflicting block")
 
 	// give the unsafe block to the verifier, and see if it reorgs because of any unsafe inputs
 	head, err := altSeqEngCl.PayloadByLabel(t.Ctx(), eth.Unsafe)
 	require.NoError(t, err)
-	verifier.ActL2UnsafeGossipReceive(head)
+	verifier.ActL2UnsafeGossipReceive(head)(t)
 
 	// make sure verifier has processed everything
 	verifier.ActL2PipelineFull(t)
@@ -785,7 +770,7 @@ func ConflictingL2Blocks(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	miner.ActL1StartBlock(12)(t)
 	miner.ActL1IncludeTx(sd.RollupCfg.Genesis.SystemConfig.BatcherAddr)(t)
 	miner.ActL1EndBlock(t)
-	l1Number := miner.l1Chain.CurrentHeader().Number.Uint64()
+	l1Number := miner.L1Chain().CurrentHeader().Number.Uint64()
 
 	// show latest L1 block with new batch data to verifier, and make it sync.
 	verifier.ActL1HeadSignal(t)
@@ -802,24 +787,25 @@ func ConflictingL2Blocks(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 }
 
 func SyncAfterReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
-	t := NewDefaultTesting(gt)
+	t := actionsHelpers.NewDefaultTesting(gt)
 	testingParams := e2eutils.TestParams{
 		MaxSequencerDrift:   60,
 		SequencerWindowSize: 4,
 		ChannelTimeout:      2,
 		L1BlockTime:         12,
+		AllocType:           config.AllocTypeStandard,
 	}
-	sd, dp, miner, sequencer, seqEngine, verifier, _, batcher := setupReorgTest(t, &testingParams, deltaTimeOffset)
+	sd, dp, miner, sequencer, seqEngine, verifier, _, batcher := actionsHelpers.SetupReorgTest(t, &testingParams, deltaTimeOffset)
 	l2Client := seqEngine.EthClient()
 	log := testlog.Logger(t, log.LevelDebug)
 	addresses := e2eutils.CollectAddresses(sd, dp)
-	l2UserEnv := &BasicUserEnv[*L2Bindings]{
+	l2UserEnv := &actionsHelpers.BasicUserEnv[*actionsHelpers.L2Bindings]{
 		EthCl:          l2Client,
 		Signer:         types.LatestSigner(sd.L2Cfg.Config),
 		AddressCorpora: addresses,
-		Bindings:       NewL2Bindings(t, l2Client, seqEngine.GethClient()),
+		Bindings:       actionsHelpers.NewL2Bindings(t, l2Client, seqEngine.GethClient()),
 	}
-	alice := NewCrossLayerUser(log, dp.Secrets.Alice, rand.New(rand.NewSource(0xa57b)))
+	alice := actionsHelpers.NewCrossLayerUser(log, dp.Secrets.Alice, rand.New(rand.NewSource(0xa57b)), config.AllocTypeStandard)
 	alice.L2.SetUserEnv(l2UserEnv)
 
 	sequencer.ActL2PipelineFull(t)
@@ -829,11 +815,11 @@ func SyncAfterReorg(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	miner.ActL1SetFeeRecipient(common.Address{'A', 0})
 	miner.ActEmptyBlock(t)
 	sequencer.ActL1HeadSignal(t)
-	for sequencer.engine.UnsafeL2Head().L1Origin.Number < sequencer.l1State.L1Head().Number {
+	for sequencer.L2Unsafe().L1Origin.Number < sequencer.SyncStatus().HeadL1.Number {
 		// build L2 blocks until the L1 origin is the current L1 head(A0)
 		sequencer.ActL2PipelineFull(t)
 		sequencer.ActL2StartBlock(t)
-		if sequencer.engine.UnsafeL2Head().Number == 11 {
+		if sequencer.L2Unsafe().Number == 11 {
 			// include a user tx at L2 block #12 to make a state transition
 			alice.L2.ActResetTxOpts(t)
 			alice.L2.ActSetTxToAddr(&dp.Addresses.Bob)(t)
