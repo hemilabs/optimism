@@ -18,12 +18,12 @@ import (
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/stretchr/testify/require"
 
-	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
 
 // TestReorgBatchType run each reorg-related test case in singular batch mode and span batch mode.
@@ -596,12 +596,8 @@ func RestartOpGeth(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	engRpc := &rpcWrapper{seqEng.RPCClient()}
 	l2Cl, err := sources.NewEngineClient(engRpc, log, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
 	require.NoError(t, err)
-<<<<<<< HEAD:op-e2e/actions/derivation/reorg_test.go
-	sequencer := actionsHelpers.NewL2Sequencer(t, log, l1F, miner.BlobStore(), altda.Disabled, l2Cl, sd.RollupCfg, 0)
-=======
 	bssc := &testutils.MockBssClient{}
 	sequencer := NewL2Sequencer(t, log, l1F, miner.BlobStore(), plasma.Disabled, l2Cl, sd.RollupCfg, 0, bssc)
->>>>>>> 0fa17588d (Patch in heminetwork):op-e2e/actions/reorg_test.go
 
 	batcher := actionsHelpers.NewL2Batcher(log, sd.RollupCfg, actionsHelpers.DefaultBatcherCfg(dp),
 		sequencer.RollupClient(), miner.EthClient(), seqEng.EthClient(), seqEng.EngineClient(t, sd.RollupCfg))
@@ -689,14 +685,9 @@ func ConflictingL2Blocks(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 	require.NoError(t, err)
 	l1F, err := sources.NewL1Client(miner.RPCClient(), log, nil, sources.L1ClientDefaultConfig(sd.RollupCfg, false, sources.RPCKindStandard))
 	require.NoError(t, err)
-<<<<<<< HEAD:op-e2e/actions/derivation/reorg_test.go
-	altSequencer := actionsHelpers.NewL2Sequencer(t, log, l1F, miner.BlobStore(), altda.Disabled, altSeqEngCl, sd.RollupCfg, 0)
-	altBatcher := actionsHelpers.NewL2Batcher(log, sd.RollupCfg, actionsHelpers.DefaultBatcherCfg(dp),
-=======
 	bssc := &testutils.MockBssClient{}
 	altSequencer := NewL2Sequencer(t, log, l1F, miner.BlobStore(), plasma.Disabled, altSeqEngCl, sd.RollupCfg, 0, bssc)
 	altBatcher := NewL2Batcher(log, sd.RollupCfg, DefaultBatcherCfg(dp),
->>>>>>> 0fa17588d (Patch in heminetwork):op-e2e/actions/reorg_test.go
 		altSequencer.RollupClient(), miner.EthClient(), altSeqEng.EthClient(), altSeqEng.EngineClient(t, sd.RollupCfg))
 
 	// And set up user Alice, using the alternative sequencer endpoint

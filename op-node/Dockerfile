@@ -10,6 +10,15 @@ COPY . /optimism
 
 RUN VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH make op-node op-batcher op-proposer op-conductor
 
+WORKDIR /optimism/op-node
+RUN VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH just op-node
+
+WORKDIR /optimism/op-batcher
+RUN VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH just op-batcher
+
+WORKDIR /optimism/op-proposer
+RUN VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH just op-proposer
+
 WORKDIR /optimism/op-conductor
 RUN VERSION="$VERSION" GOOS=$TARGETOS GOARCH=$TARGETARCH just op-conductor
 

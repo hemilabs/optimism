@@ -18,8 +18,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
-<<<<<<< HEAD:op-e2e/actions/sequencer/l2_sequencer_test.go
-=======
 func EngineWithP2P() EngineOption {
 	return func(ethCfg *ethconfig.Config, nodeCfg *node.Config) error {
 		p2pKey, err := crypto.GenerateKey()

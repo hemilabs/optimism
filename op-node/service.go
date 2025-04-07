@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	opflags "github.com/ethereum-optimism/optimism/op-service/flags"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -84,21 +85,13 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	}
 	conductorRPCEndpoint := ctx.String(flags.ConductorRpcFlag.Name)
 	cfg := &node.Config{
-<<<<<<< HEAD
 		L1:            l1Endpoint,
 		L2:            l2Endpoint,
 		Rollup:        *rollupConfig,
 		Driver:        *driverConfig,
 		Beacon:        NewBeaconEndpointConfig(ctx),
 		InteropConfig: NewSupervisorEndpointConfig(ctx),
-=======
-		BSS:    *BssEndpoint,
-		L1:     l1Endpoint,
-		L2:     l2Endpoint,
-		Rollup: *rollupConfig,
-		Driver: *driverConfig,
-		Beacon: NewBeaconEndpointConfig(ctx),
->>>>>>> 0fa17588d (Patch in heminetwork)
+		BSS:           *BssEndpoint,
 		RPC: node.RPCConfig{
 			ListenAddr:  ctx.String(flags.RPCListenAddr.Name),
 			ListenPort:  ctx.Int(flags.RPCListenPort.Name),
