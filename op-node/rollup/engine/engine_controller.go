@@ -616,9 +616,7 @@ func (e *EngineController) bssNotifier() {
 func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
 	prevKeystoneHash := [common.HashLength]byte{}
 
-	if &bn.unsafeL2PrevKeystone != nil {
-		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
-	}
+	copy(prevKeystoneHash, bn.unsafeL2PrevKeystone.Hash)
 
 	unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
 	if err != nil {
