@@ -90,6 +90,8 @@ func (bssc *LiveBssClient) NotifyL2Keystone(ctx context.Context, keystone hemi.L
 		L2Keystone: keystone,
 	}
 
+	log.Info(fmt.Sprintf("notifying with keystone prev hash %s", l2KeystoneRequest.L2Keystone.PrevKeystoneEPHash))
+
 	_, err := bssc.callBSS(ctx, defaultRequestTimeout, &l2KeystoneRequest)
 	if err != nil {
 		return err
