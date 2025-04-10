@@ -614,21 +614,17 @@ func (e *EngineController) bssNotifier() {
 }
 
 func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
-	prevKeystoneHash := make([]byte, len(bn.unsafeL2PrevKeystone.Hash.Bytes()))
-
-	copy(prevKeystoneHash, bn.unsafeL2PrevKeystone.Hash.Bytes())
-
 	unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
 	if err != nil {
 		return err
 	}
 
-	l2Keystone := hemi.L2Keystone{
+	l2Keystone := &hemi.L2Keystone{
 		Version:            0x01,
 		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
 		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
 		ParentEPHash:       unsafeL2BlockRef.ParentHash[:],
-		PrevKeystoneEPHash: prevKeystoneHash[:],
+		PrevKeystoneEPHash: bn.unsafeL2PrevKeystone.Hash,
 		StateRoot:          bn.unsafeL2.StateRoot[:],
 		EPHash:             unsafeL2BlockRef.Hash[:],
 	}
@@ -639,7 +635,7 @@ func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotific
 		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
 		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
 
-	err = e.bssClient.NotifyL2Keystone(ctx, l2Keystone)
+	err = e.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
 	if err != nil {
 		return err
 	}
