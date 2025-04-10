@@ -614,7 +614,7 @@ func (e *EngineController) bssNotifier() {
 }
 
 func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
-	prevKeystoneHash := [common.HashLength]byte{}
+	prevKeystoneHash := make([]byte, len(bn.unsafeL2PrevKeystone.Hash.Bytes()))
 
 	copy(prevKeystoneHash, bn.unsafeL2PrevKeystone.Hash.Bytes())
 
