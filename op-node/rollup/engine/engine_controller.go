@@ -624,7 +624,7 @@ func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotific
 		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
 		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
 		ParentEPHash:       unsafeL2BlockRef.ParentHash[:],
-		PrevKeystoneEPHash: bn.unsafeL2PrevKeystone.Hash,
+		PrevKeystoneEPHash: bn.unsafeL2PrevKeystone.Hash.Bytes(),
 		StateRoot:          bn.unsafeL2.StateRoot[:],
 		EPHash:             unsafeL2BlockRef.Hash[:],
 	}
