@@ -416,7 +416,7 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
 
 	var prevKeystoneRef *eth.L2BlockRef = nil
-	if prevKeystoneHeight > 0 && e.syncCfg.syncMode == sync.CLSync {
+	if prevKeystoneHeight > 0 && e.syncCfg.SyncMode == sync.CLSync {
 		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
 		if err != nil {
 			return derive.NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
