@@ -414,6 +414,24 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 
 	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
 
+	var prevKeystoneRef *eth.L2BlockRef = nil
+	if prevKeystoneHeight > 0 && e.syncMode == sync.CLSync {
+		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+		if err != nil {
+			return NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+		}
+
+		ref, err := PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		if err != nil {
+			return NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+		}
+		prevKeystoneRef = &ref
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
 	// Insert the payload & then call FCU
 	newPayloadStart := time.Now()
 	status, err := e.engine.NewPayload(ctx, envelope.ExecutionPayload, envelope.ParentBeaconBlockRoot)
