@@ -43,6 +43,7 @@ type ExecEngine interface {
 	ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error)
 	NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
+	PayloadByNumber(ctx context.Context, number uint64) (*eth.ExecutionPayloadEnvelope, error)
 }
 
 type EngineController struct {
@@ -415,15 +416,15 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
 
 	var prevKeystoneRef *eth.L2BlockRef = nil
-	if prevKeystoneHeight > 0 && e.syncMode == sync.CLSync {
+	if prevKeystoneHeight > 0 && e.syncCfg.syncMode == sync.CLSync {
 		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
 		if err != nil {
-			return NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+			return derive.NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
 		}
 
-		ref, err := PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		ref, err := derive.PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
 		if err != nil {
-			return NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+			return derive.NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
 		}
 		prevKeystoneRef = &ref
 	}
