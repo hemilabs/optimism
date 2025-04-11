@@ -2,24 +2,137 @@ package types
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
 	"math/big"
 	"time"
 
 	preimage "github.com/ethereum-optimism/optimism/op-preimage"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
+	ethTypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
 var (
-	ErrGameDepthReached = errors.New("game depth reached")
+	ErrGameDepthReached   = errors.New("game depth reached")
+	ErrL2BlockNumberValid = errors.New("l2 block number is valid")
+	ErrNotInSync          = errors.New("local node too far behind")
 )
 
+type GameType uint32
+
 const (
-	CannonGameType       uint32 = 0
-	PermissionedGameType uint32 = 1
-	AlphabetGameType     uint32 = 255
+	CannonGameType            GameType = 0
+	PermissionedGameType      GameType = 1
+	AsteriscGameType          GameType = 2
+	AsteriscKonaGameType      GameType = 3
+	SuperCannonGameType       GameType = 4
+	SuperPermissionedGameType GameType = 5
+	OPSuccinctGameType        GameType = 6
+	FastGameType              GameType = 254
+	AlphabetGameType          GameType = 255
+	KailuaGameType            GameType = 1337
+	UnknownGameType           GameType = math.MaxUint32
 )
+
+func (t GameType) MarshalText() ([]byte, error) {
+	return []byte(t.String()), nil
+}
+
+func (t GameType) String() string {
+	switch t {
+	case CannonGameType:
+		return "cannon"
+	case PermissionedGameType:
+		return "permissioned"
+	case AsteriscGameType:
+		return "asterisc"
+	case AsteriscKonaGameType:
+		return "asterisc-kona"
+	case SuperCannonGameType:
+		return "super-cannon"
+	case SuperPermissionedGameType:
+		return "super-permissioned"
+	case OPSuccinctGameType:
+		return "op-succinct"
+	case FastGameType:
+		return "fast"
+	case AlphabetGameType:
+		return "alphabet"
+	case KailuaGameType:
+		return "kailua"
+	default:
+		return fmt.Sprintf("<invalid: %d>", t)
+	}
+}
+
+type TraceType string
+
+const (
+	TraceTypeAlphabet          TraceType = "alphabet"
+	TraceTypeFast              TraceType = "fast"
+	TraceTypeCannon            TraceType = "cannon"
+	TraceTypeAsterisc          TraceType = "asterisc"
+	TraceTypeAsteriscKona      TraceType = "asterisc-kona"
+	TraceTypePermissioned      TraceType = "permissioned"
+	TraceTypeSuperCannon       TraceType = "super-cannon"
+	TraceTypeSuperPermissioned TraceType = "super-permissioned"
+)
+
+var TraceTypes = []TraceType{TraceTypeAlphabet, TraceTypeCannon, TraceTypePermissioned, TraceTypeAsterisc, TraceTypeAsteriscKona, TraceTypeFast, TraceTypeSuperCannon, TraceTypeSuperPermissioned}
+
+func (t TraceType) String() string {
+	return string(t)
+}
+
+// Set implements the Set method required by the [cli.Generic] interface.
+func (t *TraceType) Set(value string) error {
+	if !ValidTraceType(TraceType(value)) {
+		return fmt.Errorf("unknown trace type: %q", value)
+	}
+	*t = TraceType(value)
+	return nil
+}
+
+func (t *TraceType) Clone() any {
+	cpy := *t
+	return &cpy
+}
+
+func ValidTraceType(value TraceType) bool {
+	for _, t := range TraceTypes {
+		if t == value {
+			return true
+		}
+	}
+	return false
+}
+
+func (t TraceType) GameType() GameType {
+	switch t {
+	case TraceTypeCannon:
+		return CannonGameType
+	case TraceTypePermissioned:
+		return PermissionedGameType
+	case TraceTypeAsterisc:
+		return AsteriscGameType
+	case TraceTypeAsteriscKona:
+		return AsteriscKonaGameType
+	case TraceTypeFast:
+		return FastGameType
+	case TraceTypeAlphabet:
+		return AlphabetGameType
+	case TraceTypeSuperCannon:
+		return SuperCannonGameType
+	case TraceTypeSuperPermissioned:
+		return SuperPermissionedGameType
+	default:
+		return UnknownGameType
+	}
+}
 
 type ClockReader interface {
 	Now() time.Time
@@ -58,8 +171,12 @@ func (p *PreimageOracleData) GetPrecompileAddress() common.Address {
 	return common.BytesToAddress(p.oracleData[8:28])
 }
 
+func (p *PreimageOracleData) GetPrecompileRequiredGas() uint64 {
+	return binary.BigEndian.Uint64(p.oracleData[28:36])
+}
+
 func (p *PreimageOracleData) GetPrecompileInput() []byte {
-	return p.oracleData[28:]
+	return p.oracleData[36:]
 }
 
 // NewPreimageOracleData creates a new [PreimageOracleData] instance.
@@ -102,6 +219,10 @@ type TraceAccessor interface {
 	// GetStepData returns the data required to execute the step at the specified position,
 	// evaluated in the context of the specified claim (ref).
 	GetStepData(ctx context.Context, game Game, ref Claim, pos Position) (prestate []byte, proofData []byte, preimageData *PreimageOracleData, err error)
+
+	// GetL2BlockNumberChallenge returns the data required to prove the correct L2 block number of the root claim.
+	// Returns ErrL2BlockNumberValid if the root claim is known to come from the same block as the claimed L2 block.
+	GetL2BlockNumberChallenge(ctx context.Context, game Game) (*InvalidL2BlockNumberChallenge, error)
 }
 
 // PrestateProvider defines an interface to request the absolute prestate.
@@ -123,6 +244,10 @@ type TraceProvider interface {
 	// and any pre-image data that needs to be loaded into the oracle prior to execution (may be nil)
 	// The prestate returned from GetStepData for trace 10 should be the pre-image of the claim from trace 9
 	GetStepData(ctx context.Context, i Position) (prestate []byte, proofData []byte, preimageData *PreimageOracleData, err error)
+
+	// GetL2BlockNumberChallenge returns the data required to prove the correct L2 block number of the root claim.
+	// Returns ErrL2BlockNumberValid if the root claim is known to come from the same block as the claimed L2 block.
+	GetL2BlockNumberChallenge(ctx context.Context) (*InvalidL2BlockNumberChallenge, error)
 }
 
 // ClaimData is the core of a claim. It must be unique inside a specific game.
@@ -173,17 +298,6 @@ func (c Claim) IsRoot() bool {
 	return c.Position.IsRootPosition()
 }
 
-// ChessTime returns the amount of time accumulated in the chess clock.
-// Does not assume the claim is countered and uses the specified time
-// to calculate the time since the claim was posted.
-func (c Claim) ChessTime(now time.Time) time.Duration {
-	timeSince := time.Duration(0)
-	if now.Compare(c.Clock.Timestamp) > 0 {
-		timeSince = now.Sub(c.Clock.Timestamp)
-	}
-	return c.Clock.Duration + timeSince
-}
-
 // Clock tracks the chess clock for a claim.
 type Clock struct {
 	// Duration is the time elapsed on the chess clock at the last update.
@@ -200,3 +314,26 @@ func NewClock(duration time.Duration, timestamp time.Time) Clock {
 		Timestamp: timestamp,
 	}
 }
+
+type InvalidL2BlockNumberChallenge struct {
+	Output *eth.OutputResponse
+	Header *ethTypes.Header
+}
+
+func NewInvalidL2BlockNumberProof(output *eth.OutputResponse, header *ethTypes.Header) *InvalidL2BlockNumberChallenge {
+	return &InvalidL2BlockNumberChallenge{
+		Output: output,
+		Header: header,
+	}
+}
+
+type BondDistributionMode uint8
+
+const (
+	UndecidedDistributionMode BondDistributionMode = iota
+	NormalDistributionMode
+	RefundDistributionMode
+
+	// LegacyDistributionMode is used for contract versions that do not implement bond distribution modes.
+	LegacyDistributionMode BondDistributionMode = 255
+)

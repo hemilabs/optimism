@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/transactions"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	"github.com/stretchr/testify/require"
 )
@@ -16,13 +17,23 @@ const getTraceTimeout = 10 * time.Minute
 type OutputHonestHelper struct {
 	t            *testing.T
 	require      *require.Assertions
-	game         *OutputGameHelper
-	contract     *contracts.FaultDisputeGameContract
+	game         *SplitGameHelper
+	contract     contracts.FaultDisputeGameContract
 	correctTrace types.TraceAccessor
 }
 
+func NewOutputHonestHelper(t *testing.T, require *require.Assertions, game *SplitGameHelper, contract contracts.FaultDisputeGameContract, correctTrace types.TraceAccessor) *OutputHonestHelper {
+	return &OutputHonestHelper{
+		t:            t,
+		require:      require,
+		game:         game,
+		contract:     contract,
+		correctTrace: correctTrace,
+	}
+}
+
 func (h *OutputHonestHelper) CounterClaim(ctx context.Context, claim *ClaimHelper, opts ...MoveOpt) *ClaimHelper {
-	game, target := h.loadState(ctx, claim.index)
+	game, target := h.loadState(ctx, claim.Index)
 	value, err := h.correctTrace.Get(ctx, game, target, target.Position)
 	h.require.NoErrorf(err, "Failed to determine correct claim at position %v with g index %v", target.Position, target.Position.ToGIndex())
 	if value == claim.claim {
@@ -33,12 +44,12 @@ func (h *OutputHonestHelper) CounterClaim(ctx context.Context, claim *ClaimHelpe
 }
 
 func (h *OutputHonestHelper) AttackClaim(ctx context.Context, claim *ClaimHelper, opts ...MoveOpt) *ClaimHelper {
-	h.Attack(ctx, claim.index, opts...)
+	h.Attack(ctx, claim.Index, opts...)
 	return claim.WaitForCounterClaim(ctx)
 }
 
 func (h *OutputHonestHelper) DefendClaim(ctx context.Context, claim *ClaimHelper, opts ...MoveOpt) *ClaimHelper {
-	h.Defend(ctx, claim.index, opts...)
+	h.Defend(ctx, claim.Index, opts...)
 	return claim.WaitForCounterClaim(ctx)
 }
 
@@ -68,12 +79,12 @@ func (h *OutputHonestHelper) Defend(ctx context.Context, claimIdx int64, opts ..
 	game, claim := h.loadState(ctx, claimIdx)
 	defendPos := claim.Position.Defend()
 	value, err := h.correctTrace.Get(ctx, game, claim, defendPos)
-	h.game.require.NoErrorf(err, "Get correct claim at position %v with g index %v", defendPos, defendPos.ToGIndex())
+	h.game.Require.NoErrorf(err, "Get correct claim at position %v with g index %v", defendPos, defendPos.ToGIndex())
 	h.game.Defend(ctx, claimIdx, value, opts...)
 }
 
 func (h *OutputHonestHelper) StepClaimFails(ctx context.Context, claim *ClaimHelper, isAttack bool) {
-	h.StepFails(ctx, claim.index, isAttack)
+	h.StepFails(ctx, claim.Index, isAttack)
 }
 
 func (h *OutputHonestHelper) StepFails(ctx context.Context, claimIdx int64, isAttack bool) {
@@ -89,9 +100,14 @@ func (h *OutputHonestHelper) StepFails(ctx context.Context, claimIdx int64, isAt
 		// If we're defending, then the step will be from the trace to the next one
 		pos = pos.MoveRight()
 	}
-	prestate, proofData, _, err := h.correctTrace.GetStepData(ctx, game, claim, pos)
+	prestate, proofData, preimage, err := h.correctTrace.GetStepData(ctx, game, claim, pos)
 	h.require.NoError(err, "Get step data")
-	h.game.StepFails(claimIdx, isAttack, prestate, proofData)
+	if preimage != nil {
+		tx, err := h.game.Game.UpdateOracleTx(ctx, uint64(claimIdx), preimage)
+		h.require.NoError(err)
+		transactions.RequireSendTx(h.t, ctx, h.game.Client, tx, h.game.PrivKey)
+	}
+	h.game.StepFails(ctx, claimIdx, isAttack, prestate, proofData)
 }
 
 func (h *OutputHonestHelper) loadState(ctx context.Context, claimIdx int64) (types.Game, types.Claim) {

@@ -1,6 +1,9 @@
 package flags
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 type DataAvailabilityType string
 
@@ -8,11 +11,13 @@ const (
 	// data availability types
 	CalldataType DataAvailabilityType = "calldata"
 	BlobsType    DataAvailabilityType = "blobs"
+	AutoType     DataAvailabilityType = "auto"
 )
 
 var DataAvailabilityTypes = []DataAvailabilityType{
 	CalldataType,
 	BlobsType,
+	AutoType,
 }
 
 func (kind DataAvailabilityType) String() string {
@@ -33,10 +38,5 @@ func (kind *DataAvailabilityType) Clone() any {
 }
 
 func ValidDataAvailabilityType(value DataAvailabilityType) bool {
-	for _, k := range DataAvailabilityTypes {
-		if k == value {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(DataAvailabilityTypes, value)
 }

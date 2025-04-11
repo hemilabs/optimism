@@ -9,7 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/ethereum/go-ethereum/trie/triedb/hashdb"
+	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/ethereum/go-ethereum/triedb/hashdb"
 )
 
 // ReadTrie takes a Merkle Patricia Trie (MPT) root of a "DerivableList", and a pre-image oracle getter,
@@ -18,7 +19,7 @@ func ReadTrie(root common.Hash, getPreimage func(key common.Hash) []byte) []hexu
 	odb := &DB{db: Hooks{
 		Get: func(key []byte) []byte {
 			if len(key) != 32 {
-				panic(fmt.Errorf("expected 32 byte key query, but got %d bytes: %x", len(key), key))
+				panic(fmt.Sprintf("expected 32 byte key query, but got %d bytes: %x", len(key), key))
 			}
 			return getPreimage(*(*[32]byte)(key))
 		},
@@ -47,7 +48,7 @@ func ReadTrie(root common.Hash, getPreimage func(key common.Hash) []byte) []hexu
 	//
 	// For now we just use the state DB trie approach.
 
-	tdb := trie.NewDatabase(odb, &trie.Config{HashDB: hashdb.Defaults})
+	tdb := triedb.NewDatabase(odb, &triedb.Config{HashDB: hashdb.Defaults})
 	tr, err := trie.New(trie.TrieID(root), tdb)
 	if err != nil {
 		panic(err)
@@ -77,10 +78,10 @@ func ReadTrie(root common.Hash, getPreimage func(key common.Hash) []byte) []hexu
 	out := make([]hexutil.Bytes, len(values))
 	for i, x := range keys {
 		if x >= uint64(len(values)) {
-			panic(fmt.Errorf("bad key: %d", x))
+			panic(fmt.Sprintf("bad key: %d", x))
 		}
 		if out[x] != nil {
-			panic(fmt.Errorf("duplicate key %d", x))
+			panic(fmt.Sprintf("duplicate key %d", x))
 		}
 		out[x] = values[i]
 	}
@@ -115,11 +116,11 @@ func (n noResetHasher) Reset() {}
 // if any values are less than 32 bytes and fit into branch-node slots that way.
 func WriteTrie(values []hexutil.Bytes) (common.Hash, []hexutil.Bytes) {
 	var out []hexutil.Bytes
-	st := noResetHasher{trie.NewStackTrie(
-		trie.NewStackTrieOptions().WithWriter(
-			func(path []byte, hash common.Hash, blob []byte) {
-				out = append(out, common.CopyBytes(blob)) // the stack hasher may mutate the blob bytes, so copy them.
-			}))}
+	st := noResetHasher{
+		trie.NewStackTrie(func(path []byte, hash common.Hash, blob []byte) {
+			out = append(out, common.CopyBytes(blob)) // the stack hasher may mutate the blob bytes, so copy them.
+		}),
+	}
 	root := types.DeriveSha(rawList(values), st)
 	return root, out
 }

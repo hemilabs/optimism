@@ -1,13 +1,15 @@
 package extract
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	contractMetrics "github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
+	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
+	"github.com/ethereum-optimism/optimism/packages/contracts-bedrock/snapshots"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
 	faultTypes "github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
@@ -27,31 +29,55 @@ func TestMetadataCreator_CreateContract(t *testing.T) {
 	}{
 		{
 			name: "validCannonGameType",
-			game: types.GameMetadata{GameType: faultTypes.CannonGameType, Proxy: fdgAddr},
+			game: types.GameMetadata{GameType: uint32(faultTypes.CannonGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validPermissionedGameType",
+			game: types.GameMetadata{GameType: uint32(faultTypes.PermissionedGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validAsteriscGameType",
+			game: types.GameMetadata{GameType: uint32(faultTypes.AsteriscGameType), Proxy: fdgAddr},
 		},
 		{
 			name: "validAlphabetGameType",
-			game: types.GameMetadata{GameType: faultTypes.AlphabetGameType, Proxy: fdgAddr},
+			game: types.GameMetadata{GameType: uint32(faultTypes.AlphabetGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validFastGameType",
+			game: types.GameMetadata{GameType: uint32(faultTypes.FastGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validAsteriscKonaGameType",
+			game: types.GameMetadata{GameType: uint32(faultTypes.AsteriscKonaGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validSuperCannonGameType",
+			game: types.GameMetadata{GameType: uint32(faultTypes.SuperCannonGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validSuperPermissionedGameType",
+			game: types.GameMetadata{GameType: uint32(faultTypes.SuperPermissionedGameType), Proxy: fdgAddr},
 		},
 		{
 			name:        "InvalidGameType",
-			game:        types.GameMetadata{GameType: 2, Proxy: fdgAddr},
-			expectedErr: fmt.Errorf("unsupported game type: 2"),
+			game:        types.GameMetadata{GameType: 6, Proxy: fdgAddr},
+			expectedErr: fmt.Errorf("unsupported game type: 6"),
 		},
 	}
 
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			caller, metrics := setupMetadataLoaderTest(t)
+			caller, metrics := setupMetadataLoaderTest(t, test.game.GameType)
 			creator := NewGameCallerCreator(metrics, caller)
-			_, err := creator.CreateContract(test.game)
+			_, err := creator.CreateContract(context.Background(), test.game)
 			require.Equal(t, test.expectedErr, err)
 			if test.expectedErr == nil {
 				require.Equal(t, 1, metrics.cacheAddCalls)
 				require.Equal(t, 1, metrics.cacheGetCalls)
 			}
-			_, err = creator.CreateContract(test.game)
+			_, err = creator.CreateContract(context.Background(), test.game)
 			require.Equal(t, test.expectedErr, err)
 			if test.expectedErr == nil {
 				require.Equal(t, 1, metrics.cacheAddCalls)
@@ -61,11 +87,15 @@ func TestMetadataCreator_CreateContract(t *testing.T) {
 	}
 }
 
-func setupMetadataLoaderTest(t *testing.T) (*batching.MultiCaller, *mockCacheMetrics) {
-	fdgAbi, err := bindings.FaultDisputeGameMetaData.GetAbi()
-	require.NoError(t, err)
+func setupMetadataLoaderTest(t *testing.T, gameType uint32) (*batching.MultiCaller, *mockCacheMetrics) {
+	fdgAbi := snapshots.LoadFaultDisputeGameABI()
+	if gameType == uint32(faultTypes.SuperPermissionedGameType) || gameType == uint32(faultTypes.SuperCannonGameType) {
+		fdgAbi = snapshots.LoadSuperFaultDisputeGameABI()
+	}
 	stubRpc := batchingTest.NewAbiBasedRpc(t, fdgAddr, fdgAbi)
 	caller := batching.NewMultiCaller(stubRpc, batching.DefaultBatchSize)
+	stubRpc.SetResponse(fdgAddr, "version", rpcblock.Latest, nil, []interface{}{"0.18.0"})
+	stubRpc.SetResponse(fdgAddr, "gameType", rpcblock.Latest, nil, []interface{}{gameType})
 	return caller, &mockCacheMetrics{}
 }
 

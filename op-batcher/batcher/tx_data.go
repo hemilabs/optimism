@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/derive/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -15,6 +16,7 @@ import (
 // different channels.
 type txData struct {
 	frames []frameData
+	asBlob bool // indicates whether this should be sent as blob
 }
 
 func singleFrameTxData(frame frameData) txData {
@@ -34,7 +36,7 @@ func (td *txData) ID() txID {
 // It's a version byte (0) followed by the concatenated frames for this transaction.
 func (td *txData) CallData() []byte {
 	data := make([]byte, 1, 1+td.Len())
-	data[0] = derive.DerivationVersion0
+	data[0] = params.DerivationVersion0
 	for _, f := range td.frames {
 		data = append(data, f.data...)
 	}
@@ -45,7 +47,7 @@ func (td *txData) Blobs() ([]*eth.Blob, error) {
 	blobs := make([]*eth.Blob, 0, len(td.frames))
 	for _, f := range td.frames {
 		var blob eth.Blob
-		if err := blob.FromData(append([]byte{derive.DerivationVersion0}, f.data...)); err != nil {
+		if err := blob.FromData(append([]byte{params.DerivationVersion0}, f.data...)); err != nil {
 			return nil, err
 		}
 		blobs = append(blobs, &blob)
@@ -62,7 +64,7 @@ func (td *txData) Len() (l int) {
 	return l
 }
 
-// Frame returns the single frame of this tx data.
+// Frames returns the single frame of this tx data.
 func (td *txData) Frames() []frameData {
 	return td.frames
 }

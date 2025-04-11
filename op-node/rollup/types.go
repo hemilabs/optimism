@@ -2,30 +2,31 @@ package rollup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"time"
 
+	altda "github.com/ethereum-optimism/optimism/op-alt-da"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-
-	plasma "github.com/ethereum-optimism/optimism/op-plasma"
-	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
 var (
 	ErrBlockTimeZero                 = errors.New("block time cannot be 0")
 	ErrMissingChannelTimeout         = errors.New("channel timeout must be set, this should cover at least a L1 block time")
 	ErrInvalidSeqWindowSize          = errors.New("sequencing window size must at least be 2")
+	ErrInvalidMaxSeqDrift            = errors.New("maximum sequencer drift must be greater than 0")
 	ErrMissingGenesisL1Hash          = errors.New("genesis L1 hash cannot be empty")
 	ErrMissingGenesisL2Hash          = errors.New("genesis L2 hash cannot be empty")
 	ErrGenesisHashesSame             = errors.New("achievement get! rollup inception: L1 and L2 genesis cannot be the same")
 	ErrMissingGenesisL2Time          = errors.New("missing L2 genesis time")
 	ErrMissingBatcherAddr            = errors.New("missing genesis system config batcher address")
-	ErrMissingOverhead               = errors.New("missing genesis system config overhead")
 	ErrMissingScalar                 = errors.New("missing genesis system config scalar")
 	ErrMissingGasLimit               = errors.New("missing genesis system config gas limit")
 	ErrMissingBatchInboxAddress      = errors.New("missing batch inbox address")
@@ -50,21 +51,39 @@ type Genesis struct {
 	SystemConfig eth.SystemConfig `json:"system_config"`
 }
 
+type AltDAConfig struct {
+	// L1 DataAvailabilityChallenge contract proxy address
+	DAChallengeAddress common.Address `json:"da_challenge_contract_address,omitempty"`
+	// CommitmentType specifies which commitment type can be used. Defaults to Keccak (type 0) if not present
+	CommitmentType string `json:"da_commitment_type"`
+	// DA challenge window value set on the DAC contract. Used in alt-da mode
+	// to compute when a commitment can no longer be challenged.
+	DAChallengeWindow uint64 `json:"da_challenge_window"`
+	// DA resolve window value set on the DAC contract. Used in alt-da mode
+	// to compute when a challenge expires and trigger a reorg if needed.
+	DAResolveWindow uint64 `json:"da_resolve_window"`
+}
+
 type Config struct {
 	// Genesis anchor point of the rollup
 	Genesis Genesis `json:"genesis"`
 	// Seconds per L2 block
 	BlockTime uint64 `json:"block_time"`
 	// Sequencer batches may not be more than MaxSequencerDrift seconds after
-	// the L1 timestamp of the sequencing window end.
+	// the L1 timestamp of their L1 origin time.
 	//
 	// Note: When L1 has many 1 second consecutive blocks, and L2 grows at fixed 2 seconds,
 	// the L2 time may still grow beyond this difference.
-	MaxSequencerDrift uint64 `json:"max_sequencer_drift"`
+	//
+	// With Fjord, the MaxSequencerDrift becomes a constant. Use the ChainSpec
+	// instead of reading this rollup configuration field directly to determine
+	// the max sequencer drift for a given block based on the block's L1 origin.
+	// Chains that activate Fjord at genesis may leave this field empty.
+	MaxSequencerDrift uint64 `json:"max_sequencer_drift,omitempty"`
 	// Number of epochs (L1 blocks) per sequencing window, including the epoch L1 origin block itself
 	SeqWindowSize uint64 `json:"seq_window_size"`
 	// Number of L1 blocks between when a channel can be opened and when it must be closed by.
-	ChannelTimeout uint64 `json:"channel_timeout"`
+	ChannelTimeoutBedrock uint64 `json:"channel_timeout"`
 	// Required to verify L1 signatures
 	L1ChainID *big.Int `json:"l1_chain_id"`
 	// Required to identify the L2 network and create p2p signatures unique for this chain.
@@ -92,6 +111,22 @@ type Config struct {
 	// Active if FjordTime != nil && L2 block timestamp >= *FjordTime, inactive otherwise.
 	FjordTime *uint64 `json:"fjord_time,omitempty"`
 
+	// GraniteTime sets the activation time of the Granite network upgrade.
+	// Active if GraniteTime != nil && L2 block timestamp >= *GraniteTime, inactive otherwise.
+	GraniteTime *uint64 `json:"granite_time,omitempty"`
+
+	// HoloceneTime sets the activation time of the Holocene network upgrade.
+	// Active if HoloceneTime != nil && L2 block timestamp >= *HoloceneTime, inactive otherwise.
+	HoloceneTime *uint64 `json:"holocene_time,omitempty"`
+
+	// IsthmusTime sets the activation time of the Isthmus network upgrade.
+	// Active if IsthmusTime != nil && L2 block timestamp >= *IsthmusTime, inactive otherwise.
+	IsthmusTime *uint64 `json:"isthmus_time,omitempty"`
+
+	// JovianTime sets the activation time of the Jovian network upgrade.
+	// Active if JovianTime != nil && L2 block timestamp >= *JovianTime, inactive otherwise.
+	JovianTime *uint64 `json:"jovian_time,omitempty"`
+
 	// InteropTime sets the activation time for an experimental feature-set, activated like a hardfork.
 	// Active if InteropTime != nil && L2 block timestamp >= *InteropTime, inactive otherwise.
 	InteropTime *uint64 `json:"interop_time,omitempty"`
@@ -109,19 +144,24 @@ type Config struct {
 	// L1 address that declares the protocol versions, optional (Beta feature)
 	ProtocolVersionsAddress common.Address `json:"protocol_versions_address,omitempty"`
 
-	// L1 DataAvailabilityChallenge contract proxy address
-	DAChallengeAddress common.Address `json:"da_challenge_address,omitempty"`
+	// ChainOpConfig is the OptimismConfig of the execution layer ChainConfig.
+	// It is used during safe chain consolidation to translate zero SystemConfig EIP1559
+	// parameters to the protocol values, like the execution layer does.
+	// If missing, it is loaded by the op-node from the embedded superchain config at startup.
+	ChainOpConfig *params.OptimismConfig `json:"chain_op_config,omitempty"`
 
-	// DA challenge window value set on the DAC contract. Used in plasma mode
-	// to compute when a commitment can no longer be challenged.
-	DAChallengeWindow uint64 `json:"da_challenge_window"`
+	// Optional Features
 
-	// DA resolve window value set on the DAC contract. Used in plasma mode
-	// to compute when a challenge expires and trigger a reorg if needed.
-	DAResolveWindow uint64 `json:"da_resolve_window"`
+	// AltDAConfig. We are in the process of migrating to the AltDAConfig from these legacy top level values
+	AltDAConfig *AltDAConfig `json:"alt_da,omitempty"`
 
-	// UsePlasma is activated when the chain is in plasma mode.
-	UsePlasma bool `json:"use_plasma"`
+	// PectraBlobScheduleTime sets the time until which (but not including) the blob base fee
+	// calculations for the L1 Block Info use the pre-Prague=Cancun blob parameters.
+	// This feature is optional and if not active, the L1 Block Info calculation uses the Prague
+	// blob parameters for the first L1 Prague block, as was intended.
+	// This feature (de)activates by L1 origin timestamp, to keep a consistent L1 block info per L2
+	// epoch.
+	PectraBlobScheduleTime *uint64 `json:"pectra_blob_schedule_time,omitempty"`
 }
 
 // ValidateL1Config checks L1 config variables for errors.
@@ -238,11 +278,14 @@ func (cfg *Config) Check() error {
 	if cfg.BlockTime == 0 {
 		return ErrBlockTimeZero
 	}
-	if cfg.ChannelTimeout == 0 {
+	if cfg.ChannelTimeoutBedrock == 0 {
 		return ErrMissingChannelTimeout
 	}
 	if cfg.SeqWindowSize < 2 {
 		return ErrInvalidSeqWindowSize
+	}
+	if cfg.MaxSequencerDrift == 0 {
+		return ErrInvalidMaxSeqDrift
 	}
 	if cfg.Genesis.L1.Hash == (common.Hash{}) {
 		return ErrMissingGenesisL1Hash
@@ -258,9 +301,6 @@ func (cfg *Config) Check() error {
 	}
 	if cfg.Genesis.SystemConfig.BatcherAddr == (common.Address{}) {
 		return ErrMissingBatcherAddr
-	}
-	if cfg.Genesis.SystemConfig.Overhead == (eth.Bytes32{}) {
-		return ErrMissingOverhead
 	}
 	if cfg.Genesis.SystemConfig.Scalar == (eth.Bytes32{}) {
 		return ErrMissingScalar
@@ -289,25 +329,83 @@ func (cfg *Config) Check() error {
 	if cfg.L2ChainID.Sign() < 1 {
 		return ErrL2ChainIDNotPositive
 	}
+	if err := validateAltDAConfig(cfg); err != nil {
+		return err
+	}
 
-	if err := checkFork(cfg.RegolithTime, cfg.CanyonTime, "regolith", "canyon"); err != nil {
+	if err := checkFork(cfg.RegolithTime, cfg.CanyonTime, Regolith, Canyon); err != nil {
 		return err
 	}
-	if err := checkFork(cfg.CanyonTime, cfg.DeltaTime, "canyon", "delta"); err != nil {
+	if err := checkFork(cfg.CanyonTime, cfg.DeltaTime, Canyon, Delta); err != nil {
 		return err
 	}
-	if err := checkFork(cfg.DeltaTime, cfg.EcotoneTime, "delta", "ecotone"); err != nil {
+	if err := checkFork(cfg.DeltaTime, cfg.EcotoneTime, Delta, Ecotone); err != nil {
 		return err
 	}
-	if err := checkFork(cfg.EcotoneTime, cfg.FjordTime, "ecotone", "fjord"); err != nil {
+	if err := checkFork(cfg.EcotoneTime, cfg.FjordTime, Ecotone, Fjord); err != nil {
+		return err
+	}
+	if err := checkFork(cfg.FjordTime, cfg.GraniteTime, Fjord, Granite); err != nil {
+		return err
+	}
+	if err := checkFork(cfg.GraniteTime, cfg.HoloceneTime, Granite, Holocene); err != nil {
+		return err
+	}
+	if err := checkFork(cfg.HoloceneTime, cfg.IsthmusTime, Holocene, Isthmus); err != nil {
 		return err
 	}
 
 	return nil
 }
 
+func (cfg *Config) HasOptimismWithdrawalsRoot(timestamp uint64) bool {
+	return cfg.IsIsthmus(timestamp)
+}
+
+// ProbablyMissingPectraBlobSchedule returns whether the chain is likely missing the Pectra blob
+// schedule fix.
+// A chain probably needs the Pectra blob schedule fix if:
+// - its L1 in Holesky or Sepolia, and
+// - its genesis is before the L1's Prague activation.
+func (cfg *Config) ProbablyMissingPectraBlobSchedule() bool {
+	if cfg.PectraBlobScheduleTime != nil {
+		return false
+	}
+
+	var pragueTime uint64
+	if cfg.L1ChainID.Cmp(params.HoleskyChainConfig.ChainID) == 0 {
+		pragueTime = *params.HoleskyChainConfig.PragueTime
+	} else if cfg.L1ChainID.Cmp(params.SepoliaChainConfig.ChainID) == 0 {
+		pragueTime = *params.SepoliaChainConfig.PragueTime
+	} else {
+		// Only Holesky and Sepolia chains may have run into the
+		// Pectra blob schedule bug.
+		return false
+	}
+
+	// Only chains whose genesis was before the L1's prague activation need
+	// the Pectra blob schedule fix.
+	return pragueTime >= cfg.Genesis.L2Time
+}
+
+// validateAltDAConfig checks the two approaches to configuring alt-da mode.
+// If the legacy values are set, they are copied to the new location. If both are set, they are check for consistency.
+func validateAltDAConfig(cfg *Config) error {
+	if cfg.AltDAConfig != nil {
+		if !(cfg.AltDAConfig.CommitmentType == altda.KeccakCommitmentString || cfg.AltDAConfig.CommitmentType == altda.GenericCommitmentString) {
+			return fmt.Errorf("invalid commitment type: %v", cfg.AltDAConfig.CommitmentType)
+		}
+		if cfg.AltDAConfig.CommitmentType == altda.KeccakCommitmentString && cfg.AltDAConfig.DAChallengeAddress == (common.Address{}) {
+			return errors.New("Must set da_challenge_contract_address for keccak commitments")
+		} else if cfg.AltDAConfig.CommitmentType == altda.GenericCommitmentString && cfg.AltDAConfig.DAChallengeAddress != (common.Address{}) {
+			return errors.New("Must set empty da_challenge_contract_address for generic commitments")
+		}
+	}
+	return nil
+}
+
 // checkFork checks that fork A is before or at the same time as fork B
-func checkFork(a, b *uint64, aName, bName string) error {
+func checkFork(a, b *uint64, aName, bName ForkName) error {
 	if a == nil && b == nil {
 		return nil
 	}
@@ -347,6 +445,54 @@ func (c *Config) IsEcotone(timestamp uint64) bool {
 	return c.EcotoneTime != nil && timestamp >= *c.EcotoneTime
 }
 
+// IsFjord returns true if the Fjord hardfork is active at or past the given timestamp.
+func (c *Config) IsFjord(timestamp uint64) bool {
+	return c.FjordTime != nil && timestamp >= *c.FjordTime
+}
+
+// IsGranite returns true if the Granite hardfork is active at or past the given timestamp.
+func (c *Config) IsGranite(timestamp uint64) bool {
+	return c.GraniteTime != nil && timestamp >= *c.GraniteTime
+}
+
+// IsHolocene returns true if the Holocene hardfork is active at or past the given timestamp.
+func (c *Config) IsHolocene(timestamp uint64) bool {
+	return c.HoloceneTime != nil && timestamp >= *c.HoloceneTime
+}
+
+// IsIsthmus returns true if the Isthmus hardfork is active at or past the given timestamp.
+func (c *Config) IsIsthmus(timestamp uint64) bool {
+	return c.IsthmusTime != nil && timestamp >= *c.IsthmusTime
+}
+
+// IsJovian returns true if the Jovian hardfork is active at or past the given timestamp.
+func (c *Config) IsJovian(timestamp uint64) bool {
+	return c.JovianTime != nil && timestamp >= *c.JovianTime
+}
+
+// IsInterop returns true if the Interop hardfork is active at or past the given timestamp.
+func (c *Config) IsInterop(timestamp uint64) bool {
+	return c.InteropTime != nil && timestamp >= *c.InteropTime
+}
+
+func (c *Config) IsRegolithActivationBlock(l2BlockTime uint64) bool {
+	return c.IsRegolith(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsRegolith(l2BlockTime-c.BlockTime)
+}
+
+func (c *Config) IsCanyonActivationBlock(l2BlockTime uint64) bool {
+	return c.IsCanyon(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsCanyon(l2BlockTime-c.BlockTime)
+}
+
+func (c *Config) IsDeltaActivationBlock(l2BlockTime uint64) bool {
+	return c.IsDelta(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsDelta(l2BlockTime-c.BlockTime)
+}
+
 // IsEcotoneActivationBlock returns whether the specified block is the first block subject to the
 // Ecotone upgrade. Ecotone activation at genesis does not count.
 func (c *Config) IsEcotoneActivationBlock(l2BlockTime uint64) bool {
@@ -355,14 +501,101 @@ func (c *Config) IsEcotoneActivationBlock(l2BlockTime uint64) bool {
 		!c.IsEcotone(l2BlockTime-c.BlockTime)
 }
 
-// IsFjord returns true if the Fjord hardfork is active at or past the given timestamp.
-func (c *Config) IsFjord(timestamp uint64) bool {
-	return c.FjordTime != nil && timestamp >= *c.FjordTime
+// IsFjordActivationBlock returns whether the specified block is the first block subject to the
+// Fjord upgrade.
+func (c *Config) IsFjordActivationBlock(l2BlockTime uint64) bool {
+	return c.IsFjord(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsFjord(l2BlockTime-c.BlockTime)
 }
 
-// IsInterop returns true if the Interop hardfork is active at or past the given timestamp.
-func (c *Config) IsInterop(timestamp uint64) bool {
-	return c.InteropTime != nil && timestamp >= *c.InteropTime
+// IsGraniteActivationBlock returns whether the specified block is the first block subject to the
+// Granite upgrade.
+func (c *Config) IsGraniteActivationBlock(l2BlockTime uint64) bool {
+	return c.IsGranite(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsGranite(l2BlockTime-c.BlockTime)
+}
+
+// IsHoloceneActivationBlock returns whether the specified block is the first block subject to the
+// Holocene upgrade.
+func (c *Config) IsHoloceneActivationBlock(l2BlockTime uint64) bool {
+	return c.IsHolocene(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsHolocene(l2BlockTime-c.BlockTime)
+}
+
+// IsIsthmusActivationBlock returns whether the specified block is the first block subject to the
+// Isthmus upgrade.
+func (c *Config) IsIsthmusActivationBlock(l2BlockTime uint64) bool {
+	return c.IsIsthmus(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsIsthmus(l2BlockTime-c.BlockTime)
+}
+
+// IsJovianActivationBlock returns whether the specified block is the first block subject to the
+// Jovian upgrade.
+func (c *Config) IsJovianActivationBlock(l2BlockTime uint64) bool {
+	return c.IsJovian(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsJovian(l2BlockTime-c.BlockTime)
+}
+
+func (c *Config) IsInteropActivationBlock(l2BlockTime uint64) bool {
+	return c.IsInterop(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsInterop(l2BlockTime-c.BlockTime)
+}
+
+// IsActivationBlock returns the fork which activates at the block with time newTime if the previous
+// block's time is oldTime. It return an empty ForkName if no fork activation takes place between
+// those timestamps. It can be used for both, L1 and L2 blocks.
+// TODO(12490): Currently only supports Holocene. Will be modularized in a follow-up.
+func (c *Config) IsActivationBlock(oldTime, newTime uint64) ForkName {
+	if c.IsHolocene(newTime) && !c.IsHolocene(oldTime) {
+		return Holocene
+	}
+	return ""
+}
+
+func (c *Config) ActivateAtGenesis(hardfork ForkName) {
+	// IMPORTANT! ordered from newest to oldest
+	switch hardfork {
+	case Interop:
+		c.InteropTime = new(uint64)
+		fallthrough
+	case Jovian:
+		c.JovianTime = new(uint64)
+		fallthrough
+	case Isthmus:
+		c.IsthmusTime = new(uint64)
+		fallthrough
+	case Holocene:
+		c.HoloceneTime = new(uint64)
+		fallthrough
+	case Granite:
+		c.GraniteTime = new(uint64)
+		fallthrough
+	case Fjord:
+		c.FjordTime = new(uint64)
+		fallthrough
+	case Ecotone:
+		c.EcotoneTime = new(uint64)
+		fallthrough
+	case Delta:
+		c.DeltaTime = new(uint64)
+		fallthrough
+	case Canyon:
+		c.CanyonTime = new(uint64)
+		fallthrough
+	case Regolith:
+		c.RegolithTime = new(uint64)
+		fallthrough
+	case Bedrock:
+		// default
+	case None:
+		break
+	}
 }
 
 // ForkchoiceUpdatedVersion returns the EngineAPIMethod suitable for the chain hard fork version.
@@ -387,7 +620,9 @@ func (c *Config) ForkchoiceUpdatedVersion(attr *eth.PayloadAttributes) eth.Engin
 
 // NewPayloadVersion returns the EngineAPIMethod suitable for the chain hard fork version.
 func (c *Config) NewPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
-	if c.IsEcotone(timestamp) {
+	if c.IsIsthmus(timestamp) {
+		return eth.NewPayloadV4
+	} else if c.IsEcotone(timestamp) {
 		// Cancun
 		return eth.NewPayloadV3
 	} else {
@@ -397,7 +632,9 @@ func (c *Config) NewPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
 
 // GetPayloadVersion returns the EngineAPIMethod suitable for the chain hard fork version.
 func (c *Config) GetPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
-	if c.IsEcotone(timestamp) {
+	if c.IsIsthmus(timestamp) {
+		return eth.GetPayloadV4
+	} else if c.IsEcotone(timestamp) {
 		// Cancun
 		return eth.GetPayloadV3
 	} else {
@@ -405,29 +642,38 @@ func (c *Config) GetPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
 	}
 }
 
-// PlasmaConfig validates and returns the plasma config from the rollup config.
-func (c *Config) PlasmaConfig() (plasma.Config, error) {
-	if c.DAChallengeAddress == (common.Address{}) {
-		return plasma.Config{}, fmt.Errorf("missing DAChallengeAddress")
+// GetOPAltDAConfig validates and returns the altDA config from the rollup config.
+func (c *Config) GetOPAltDAConfig() (altda.Config, error) {
+	if c.AltDAConfig == nil {
+		return altda.Config{}, errors.New("no altDA config")
 	}
-	if c.DAChallengeWindow == uint64(0) {
-		return plasma.Config{}, fmt.Errorf("missing DAChallengeWindow")
+	if c.AltDAConfig.DAChallengeWindow == uint64(0) {
+		return altda.Config{}, errors.New("missing DAChallengeWindow")
 	}
-	if c.DAResolveWindow == uint64(0) {
-		return plasma.Config{}, fmt.Errorf("missing DAResolveWindow")
+	if c.AltDAConfig.DAResolveWindow == uint64(0) {
+		return altda.Config{}, errors.New("missing DAResolveWindow")
 	}
-	return plasma.Config{
-		DAChallengeContractAddress: c.DAChallengeAddress,
-		ChallengeWindow:            c.DAChallengeWindow,
-		ResolveWindow:              c.DAResolveWindow,
+	t, err := altda.CommitmentTypeFromString(c.AltDAConfig.CommitmentType)
+	if err != nil {
+		return altda.Config{}, err
+	}
+	return altda.Config{
+		DAChallengeContractAddress: c.AltDAConfig.DAChallengeAddress,
+		ChallengeWindow:            c.AltDAConfig.DAChallengeWindow,
+		ResolveWindow:              c.AltDAConfig.DAResolveWindow,
+		CommitmentType:             t,
 	}, nil
 }
 
+func (c *Config) AltDAEnabled() bool {
+	return c.AltDAConfig != nil
+}
+
 // SyncLookback computes the number of blocks to walk back in order to find the correct L1 origin.
-// In plasma mode longest possible window is challenge + resolve windows.
+// In alt-da mode longest possible window is challenge + resolve windows.
 func (c *Config) SyncLookback() uint64 {
-	if c.UsePlasma {
-		if win := (c.DAChallengeWindow + c.DAResolveWindow); win > c.SeqWindowSize {
+	if c.AltDAEnabled() {
+		if win := (c.AltDAConfig.DAChallengeWindow + c.AltDAConfig.DAResolveWindow); win > c.SeqWindowSize {
 			return win
 		}
 	}
@@ -460,14 +706,14 @@ func (c *Config) Description(l2Chains map[string]string) string {
 	banner += fmt.Sprintf("  L1 block: %s %d\n", c.Genesis.L1.Hash, c.Genesis.L1.Number)
 	// Report the upgrade configuration
 	banner += "Post-Bedrock Network Upgrades (timestamp based):\n"
-	banner += fmt.Sprintf("  - Regolith: %s\n", fmtForkTimeOrUnset(c.RegolithTime))
-	banner += fmt.Sprintf("  - Canyon: %s\n", fmtForkTimeOrUnset(c.CanyonTime))
-	banner += fmt.Sprintf("  - Delta: %s\n", fmtForkTimeOrUnset(c.DeltaTime))
-	banner += fmt.Sprintf("  - Ecotone: %s\n", fmtForkTimeOrUnset(c.EcotoneTime))
-	banner += fmt.Sprintf("  - Fjord: %s\n", fmtForkTimeOrUnset(c.FjordTime))
-	banner += fmt.Sprintf("  - Interop: %s\n", fmtForkTimeOrUnset(c.InteropTime))
+	c.forEachFork(func(name string, _ string, time *uint64) {
+		banner += fmt.Sprintf("  - %v: %s\n", name, fmtForkTimeOrUnset(time))
+	})
 	// Report the protocol version
 	banner += fmt.Sprintf("Node supports up to OP-Stack Protocol Version: %s\n", OPStackSupport)
+	if c.AltDAConfig != nil {
+		banner += fmt.Sprintf("Node supports Alt-DA Mode with CommitmentType %v\n", c.AltDAConfig.CommitmentType)
+	}
 	return banner
 }
 
@@ -487,16 +733,55 @@ func (c *Config) LogDescription(log log.Logger, l2Chains map[string]string) {
 	if networkL1 == "" {
 		networkL1 = "unknown L1"
 	}
-	log.Info("Rollup Config", "l2_chain_id", c.L2ChainID, "l2_network", networkL2, "l1_chain_id", c.L1ChainID,
-		"l1_network", networkL1, "l2_start_time", c.Genesis.L2Time, "l2_block_hash", c.Genesis.L2.Hash.String(),
-		"l2_block_number", c.Genesis.L2.Number, "l1_block_hash", c.Genesis.L1.Hash.String(),
-		"l1_block_number", c.Genesis.L1.Number, "regolith_time", fmtForkTimeOrUnset(c.RegolithTime),
-		"canyon_time", fmtForkTimeOrUnset(c.CanyonTime),
-		"delta_time", fmtForkTimeOrUnset(c.DeltaTime),
-		"ecotone_time", fmtForkTimeOrUnset(c.EcotoneTime),
-		"fjord_time", fmtForkTimeOrUnset(c.FjordTime),
-		"interop_time", fmtForkTimeOrUnset(c.InteropTime),
-	)
+
+	ctx := []any{
+		"l2_chain_id", c.L2ChainID,
+		"l2_network", networkL2,
+		"l1_chain_id", c.L1ChainID,
+		"l1_network", networkL1,
+		"l2_start_time", c.Genesis.L2Time,
+		"l2_block_hash", c.Genesis.L2.Hash.String(),
+		"l2_block_number", c.Genesis.L2.Number,
+		"l1_block_hash", c.Genesis.L1.Hash.String(),
+		"l1_block_number", c.Genesis.L1.Number,
+	}
+	c.forEachFork(func(_ string, logName string, time *uint64) {
+		ctx = append(ctx, logName, fmtForkTimeOrUnset(time))
+	})
+	if c.AltDAConfig != nil {
+		ctx = append(ctx, "alt_da", *c.AltDAConfig)
+	}
+	if c.PectraBlobScheduleTime != nil {
+		// only print in config if set at all
+		ctx = append(ctx, "pectra_blob_schedule_time", fmtForkTimeOrUnset(c.PectraBlobScheduleTime))
+	}
+	log.Info("Rollup Config", ctx...)
+}
+
+func (c *Config) forEachFork(callback func(name string, logName string, time *uint64)) {
+	callback("Regolith", "regolith_time", c.RegolithTime)
+	callback("Canyon", "canyon_time", c.CanyonTime)
+	callback("Delta", "delta_time", c.DeltaTime)
+	callback("Ecotone", "ecotone_time", c.EcotoneTime)
+	callback("Fjord", "fjord_time", c.FjordTime)
+	callback("Granite", "granite_time", c.GraniteTime)
+	callback("Holocene", "holocene_time", c.HoloceneTime)
+	if c.PectraBlobScheduleTime != nil {
+		// only report if config is set
+		callback("Pectra Blob Schedule", "pectra_blob_schedule_time", c.PectraBlobScheduleTime)
+	}
+	callback("Isthmus", "isthmus_time", c.IsthmusTime)
+	callback("Jovian", "jovian_time", c.JovianTime)
+	callback("Interop", "interop_time", c.InteropTime)
+}
+
+func (c *Config) ParseRollupConfig(in io.Reader) error {
+	dec := json.NewDecoder(in)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(c); err != nil {
+		return fmt.Errorf("failed to decode rollup config: %w", err)
+	}
+	return nil
 }
 
 func fmtForkTimeOrUnset(v *uint64) string {

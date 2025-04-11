@@ -3,6 +3,7 @@ package preimage
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"io"
 	"math/big"
@@ -11,17 +12,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/preimages"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/keccak/matrix"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/keccak/types"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/transactions"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
-	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/stretchr/testify/require"
 )
@@ -29,29 +30,21 @@ import (
 const MinPreimageSize = 10000
 
 type Helper struct {
-	t              *testing.T
-	require        *require.Assertions
-	client         *ethclient.Client
-	opts           *bind.TransactOpts
-	oracleBindings *bindings.PreimageOracle
-	oracle         *contracts.PreimageOracleContract
-	uuidProvider   atomic.Int64
+	t            *testing.T
+	require      *require.Assertions
+	client       *ethclient.Client
+	privKey      *ecdsa.PrivateKey
+	oracle       contracts.PreimageOracleContract
+	uuidProvider atomic.Int64
 }
 
-func NewHelper(t *testing.T, opts *bind.TransactOpts, client *ethclient.Client, addr common.Address) *Helper {
-	require := require.New(t)
-	oracleBindings, err := bindings.NewPreimageOracle(addr, client)
-	require.NoError(err)
-
-	oracle, err := contracts.NewPreimageOracleContract(addr, batching.NewMultiCaller(client.Client(), batching.DefaultBatchSize))
-	require.NoError(err)
+func NewHelper(t *testing.T, privKey *ecdsa.PrivateKey, client *ethclient.Client, oracle contracts.PreimageOracleContract) *Helper {
 	return &Helper{
-		t:              t,
-		require:        require,
-		client:         client,
-		opts:           opts,
-		oracleBindings: oracleBindings,
-		oracle:         oracle,
+		t:       t,
+		require: require.New(t),
+		client:  client,
+		privKey: privKey,
+		oracle:  oracle,
 	}
 }
 
@@ -83,18 +76,14 @@ func (h *Helper) UploadLargePreimage(ctx context.Context, dataSize int, modifier
 	data := testutils.RandomData(rand.New(rand.NewSource(1234)), dataSize)
 	s := matrix.NewStateMatrix()
 	uuid := big.NewInt(h.uuidProvider.Add(1))
-	bondValue, err := h.oracleBindings.MINBONDSIZE(&bind.CallOpts{})
+	candidate, err := h.oracle.InitLargePreimage(uuid, 32, uint32(len(data)))
 	h.require.NoError(err)
-	h.opts.Value = bondValue
-	tx, err := h.oracleBindings.InitLPP(h.opts, uuid, 32, uint32(len(data)))
-	h.require.NoError(err)
-	_, err = wait.ForReceiptOK(ctx, h.client, tx.Hash())
-	h.require.NoError(err)
-	h.opts.Value = big.NewInt(0)
+	transactions.RequireSendTx(h.t, ctx, h.client, candidate, h.privKey)
 
 	startBlock := big.NewInt(0)
 	totalBlocks := len(data) / types.BlockSize
 	in := bytes.NewReader(data)
+	var txs []txmgr.TxCandidate
 	for {
 		inputData, err := s.AbsorbUpTo(in, preimages.MaxChunkSize)
 		if !errors.Is(err, io.EOF) {
@@ -103,23 +92,23 @@ func (h *Helper) UploadLargePreimage(ctx context.Context, dataSize int, modifier
 		for _, modifier := range modifiers {
 			modifier(startBlock.Uint64(), &inputData)
 		}
-		commitments := make([][32]byte, len(inputData.Commitments))
-		for i, commitment := range inputData.Commitments {
-			commitments[i] = commitment
-		}
-		h.t.Logf("Uploading %v parts of preimage %v starting at block %v of about %v Finalize: %v", len(commitments), uuid.Uint64(), startBlock.Uint64(), totalBlocks, inputData.Finalize)
-		tx, err := h.oracleBindings.AddLeavesLPP(h.opts, uuid, startBlock, inputData.Input, commitments, inputData.Finalize)
+		h.t.Logf("Uploading %v parts of preimage %v starting at block %v of about %v Finalize: %v", len(inputData.Commitments), uuid.Uint64(), startBlock.Uint64(), totalBlocks, inputData.Finalize)
+		tx, err := h.oracle.AddLeaves(uuid, startBlock, inputData.Input, inputData.Commitments, inputData.Finalize)
 		h.require.NoError(err)
-		_, err = wait.ForReceiptOK(ctx, h.client, tx.Hash())
-		h.require.NoError(err)
+		// Can't use EstimateGas because all the transactions will be sent in a batch, and the contract checks the
+		// start block, which won't match subsequent transactions until the first one is processed. So set the gas limit
+		// to what EstimateGas was returning when this was written plus a bunch of headroom.
+		tx.GasLimit = 2000000 // 826536
+		txs = append(txs, tx)
 		startBlock = new(big.Int).Add(startBlock, big.NewInt(int64(len(inputData.Commitments))))
 		if inputData.Finalize {
 			break
 		}
 	}
+	transactions.RequireSendTxs(h.t, ctx, h.client, txs, h.privKey)
 
 	return types.LargePreimageIdent{
-		Claimant: h.opts.From,
+		Claimant: crypto.PubkeyToAddress(h.privKey.PublicKey),
 		UUID:     uuid,
 	}
 }

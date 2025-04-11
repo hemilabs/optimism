@@ -6,6 +6,32 @@
   },
   {
     "inputs": [],
+    "name": "ENCODING_OVERHEAD",
+    "outputs": [
+      {
+        "internalType": "uint64",
+        "name": "",
+        "type": "uint64"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLOOR_CALLDATA_OVERHEAD",
+    "outputs": [
+      {
+        "internalType": "uint64",
+        "name": "",
+        "type": "uint64"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "MESSAGE_VERSION",
     "outputs": [
       {
@@ -74,7 +100,7 @@
     "name": "PORTAL",
     "outputs": [
       {
-        "internalType": "contract OptimismPortal",
+        "internalType": "contract IOptimismPortal2",
         "name": "",
         "type": "address"
       }
@@ -135,6 +161,19 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "TX_BASE_GAS",
+    "outputs": [
+      {
+        "internalType": "uint64",
+        "name": "",
+        "type": "uint64"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "bytes",
@@ -180,12 +219,12 @@
   {
     "inputs": [
       {
-        "internalType": "contract SuperchainConfig",
+        "internalType": "contract ISuperchainConfig",
         "name": "_superchainConfig",
         "type": "address"
       },
       {
-        "internalType": "contract OptimismPortal",
+        "internalType": "contract IOptimismPortal2",
         "name": "_portal",
         "type": "address"
       }
@@ -239,7 +278,7 @@
     "name": "portal",
     "outputs": [
       {
-        "internalType": "contract OptimismPortal",
+        "internalType": "contract IOptimismPortal2",
         "name": "",
         "type": "address"
       }
@@ -332,7 +371,7 @@
     "name": "superchainConfig",
     "outputs": [
       {
-        "internalType": "contract SuperchainConfig",
+        "internalType": "contract ISuperchainConfig",
         "name": "",
         "type": "address"
       }

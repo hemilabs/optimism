@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/game/keccak"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/keccak/fetcher"
 	"github.com/ethereum-optimism/optimism/op-challenger/sender"
-	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
@@ -55,7 +54,6 @@ type Service struct {
 	factoryContract *contracts.DisputeGameFactoryContract
 	registry        *registry.GameTypeRegistry
 	oracles         *registry.OracleRegistry
-	rollupClient    *sources.RollupClient
 
 	l1Client   *ethclient.Client
 	pollClient client.RPC
@@ -69,12 +67,12 @@ type Service struct {
 }
 
 // NewService creates a new Service.
-func NewService(ctx context.Context, logger log.Logger, cfg *config.Config) (*Service, error) {
+func NewService(ctx context.Context, logger log.Logger, cfg *config.Config, m metrics.Metricer) (*Service, error) {
 	s := &Service{
 		systemClock: clock.SystemClock,
 		l1Clock:     clock.NewSimpleClock(),
 		logger:      logger,
-		metrics:     metrics.NewMetrics(),
+		metrics:     m,
 	}
 
 	if err := s.initFromConfig(ctx, cfg); err != nil {
@@ -92,9 +90,6 @@ func (s *Service) initFromConfig(ctx context.Context, cfg *config.Config) error 
 	s.initClaimants(cfg)
 	if err := s.initL1Client(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init l1 client: %w", err)
-	}
-	if err := s.initRollupClient(ctx, cfg); err != nil {
-		return fmt.Errorf("failed to init rollup client: %w", err)
 	}
 	if err := s.initPollClient(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init poll client: %w", err)
@@ -198,11 +193,8 @@ func (s *Service) initMetricsServer(cfg *opmetrics.CLIConfig) error {
 }
 
 func (s *Service) initFactoryContract(cfg *config.Config) error {
-	factoryContract, err := contracts.NewDisputeGameFactoryContract(s.metrics, cfg.GameFactoryAddress,
+	factoryContract := contracts.NewDisputeGameFactoryContract(s.metrics, cfg.GameFactoryAddress,
 		batching.NewMultiCaller(s.l1Client.Client(), batching.DefaultBatchSize))
-	if err != nil {
-		return fmt.Errorf("failed to bind the fault dispute game factory contract: %w", err)
-	}
 	s.factoryContract = factoryContract
 	return nil
 }
@@ -213,27 +205,15 @@ func (s *Service) initBondClaims() error {
 	return nil
 }
 
-func (s *Service) initRollupClient(ctx context.Context, cfg *config.Config) error {
-	if cfg.RollupRpc == "" {
-		return nil
-	}
-	rollupClient, err := dial.DialRollupClientWithTimeout(ctx, dial.DefaultDialTimeout, s.logger, cfg.RollupRpc)
-	if err != nil {
-		return err
-	}
-	s.rollupClient = rollupClient
-	return nil
-}
-
 func (s *Service) registerGameTypes(ctx context.Context, cfg *config.Config) error {
 	gameTypeRegistry := registry.NewGameTypeRegistry()
 	oracles := registry.NewOracleRegistry()
 	caller := batching.NewMultiCaller(s.l1Client.Client(), batching.DefaultBatchSize)
-	closer, err := fault.RegisterGameTypes(ctx, s.systemClock, s.l1Clock, s.logger, s.metrics, cfg, gameTypeRegistry, oracles, s.rollupClient, s.txSender, s.factoryContract, caller, s.l1Client, cfg.SelectiveClaimResolution, s.claimants)
+	closer, err := fault.RegisterGameTypes(ctx, s.systemClock, s.l1Clock, s.logger, s.metrics, cfg, gameTypeRegistry, oracles, s.txSender, s.factoryContract, caller, s.l1Client, cfg.SelectiveClaimResolution, s.claimants)
+	s.faultGamesCloser = closer
 	if err != nil {
 		return err
 	}
-	s.faultGamesCloser = closer
 	s.registry = gameTypeRegistry
 	s.oracles = oracles
 	return nil
@@ -249,12 +229,12 @@ func (s *Service) initLargePreimages() error {
 	fetcher := fetcher.NewPreimageFetcher(s.logger, s.l1Client)
 	verifier := keccak.NewPreimageVerifier(s.logger, fetcher)
 	challenger := keccak.NewPreimageChallenger(s.logger, s.metrics, verifier, s.txSender)
-	s.preimages = keccak.NewLargePreimageScheduler(s.logger, s.l1Clock, s.oracles, challenger)
+	s.preimages = keccak.NewLargePreimageScheduler(s.logger, s.metrics, s.l1Clock, s.oracles, challenger)
 	return nil
 }
 
 func (s *Service) initMonitor(cfg *config.Config) {
-	s.monitor = newGameMonitor(s.logger, s.l1Clock, s.factoryContract, s.sched, s.preimages, cfg.GameWindow, s.claimer, s.l1Client.BlockNumber, cfg.GameAllowlist, s.pollClient)
+	s.monitor = newGameMonitor(s.logger, s.l1Clock, s.factoryContract, s.sched, s.preimages, cfg.GameWindow, s.claimer, cfg.GameAllowlist, s.pollClient)
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -284,6 +264,11 @@ func (s *Service) Stop(ctx context.Context) error {
 	if s.monitor != nil {
 		s.monitor.StopMonitoring()
 	}
+	if s.claimer != nil {
+		if err := s.claimer.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("failed to close claimer: %w", err))
+		}
+	}
 	if s.faultGamesCloser != nil {
 		s.faultGamesCloser()
 	}
@@ -302,9 +287,6 @@ func (s *Service) Stop(ctx context.Context) error {
 		s.txMgr.Close()
 	}
 
-	if s.rollupClient != nil {
-		s.rollupClient.Close()
-	}
 	if s.pollClient != nil {
 		s.pollClient.Close()
 	}

@@ -2,7 +2,6 @@ package dial
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-service/client"
@@ -35,39 +34,42 @@ func DialEthClientWithTimeout(ctx context.Context, timeout time.Duration, log lo
 
 // DialRollupClientWithTimeout attempts to dial the RPC provider using the provided URL.
 // If the dial doesn't complete within timeout seconds, this method will return an error.
-func DialRollupClientWithTimeout(ctx context.Context, timeout time.Duration, log log.Logger, url string) (*sources.RollupClient, error) {
+func DialRollupClientWithTimeout(ctx context.Context, timeout time.Duration, log log.Logger, url string, callerOpts ...client.RPCOption) (*sources.RollupClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	rpcCl, err := dialRPCClientWithBackoff(ctx, log, url)
+	opts := []client.RPCOption{
+		client.WithFixedDialBackoff(defaultRetryTime),
+		client.WithDialAttempts(defaultRetryCount),
+	}
+	opts = append(opts, callerOpts...)
+
+	rpcCl, err := client.NewRPC(ctx, log, url, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return sources.NewRollupClient(client.NewBaseRPCClient(rpcCl)), nil
+	return sources.NewRollupClient(rpcCl), nil
 }
 
 // DialRPCClientWithTimeout attempts to dial the RPC provider using the provided URL.
 // If the dial doesn't complete within timeout seconds, this method will return an error.
-func DialRPCClientWithTimeout(ctx context.Context, timeout time.Duration, log log.Logger, url string) (*rpc.Client, error) {
+func DialRPCClientWithTimeout(ctx context.Context, timeout time.Duration, log log.Logger, url string, opts ...rpc.ClientOption) (*rpc.Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return dialRPCClientWithBackoff(ctx, log, url)
+	return dialRPCClientWithBackoff(ctx, log, url, opts...)
 }
 
 // Dials a JSON-RPC endpoint repeatedly, with a backoff, until a client connection is established. Auth is optional.
-func dialRPCClientWithBackoff(ctx context.Context, log log.Logger, addr string) (*rpc.Client, error) {
+func dialRPCClientWithBackoff(ctx context.Context, log log.Logger, addr string, opts ...rpc.ClientOption) (*rpc.Client, error) {
 	bOff := retry.Fixed(defaultRetryTime)
 	return retry.Do(ctx, defaultRetryCount, bOff, func() (*rpc.Client, error) {
-		if !client.IsURLAvailable(addr) {
-			log.Warn("failed to dial address, but may connect later", "addr", addr)
-			return nil, fmt.Errorf("address unavailable (%s)", addr)
-		}
-		client, err := rpc.DialOptions(ctx, addr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to dial address (%s): %w", addr, err)
-		}
-		return client, nil
+		return dialRPCClient(ctx, log, addr, opts...)
 	})
+}
+
+// Dials a JSON-RPC endpoint once.
+func dialRPCClient(ctx context.Context, log log.Logger, addr string, opts ...rpc.ClientOption) (*rpc.Client, error) {
+	return client.CheckAndDial(ctx, log, addr, opts...)
 }

@@ -1,6 +1,8 @@
 package testutils
 
 import (
+	"time"
+
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -12,6 +14,16 @@ type TestDerivationMetrics struct {
 	FnRecordL2Ref             func(name string, ref eth.L2BlockRef)
 	FnRecordUnsafePayloads    func(length uint64, memSize uint64, next eth.BlockID)
 	FnRecordChannelInputBytes func(inputCompressedBytes int)
+	FnRecordChannelTimedOut   func()
+}
+
+func (t *TestDerivationMetrics) CountSequencedTxsInBlock(txns int, deposits int) {
+}
+
+func (t *TestDerivationMetrics) RecordSequencerBuildingDiffTime(duration time.Duration) {
+}
+
+func (t *TestDerivationMetrics) RecordSequencerSealingTime(duration time.Duration) {
 }
 
 func (t *TestDerivationMetrics) RecordL1ReorgDepth(d uint64) {
@@ -48,6 +60,9 @@ func (t *TestDerivationMetrics) RecordHeadChannelOpened() {
 }
 
 func (t *TestDerivationMetrics) RecordChannelTimedOut() {
+	if t.FnRecordChannelTimedOut != nil {
+		t.FnRecordChannelTimedOut()
+	}
 }
 
 func (t *TestDerivationMetrics) RecordFrame() {
@@ -56,14 +71,7 @@ func (t *TestDerivationMetrics) RecordFrame() {
 func (n *TestDerivationMetrics) RecordDerivedBatches(batchType string) {
 }
 
-type TestRPCMetrics struct{}
+func (t *TestDerivationMetrics) SetDerivationIdle(idle bool) {}
 
-func (n *TestRPCMetrics) RecordRPCServerRequest(method string) func() {
-	return func() {}
+func (t *TestDerivationMetrics) RecordPipelineReset() {
 }
-
-func (n *TestRPCMetrics) RecordRPCClientRequest(method string) func(err error) {
-	return func(err error) {}
-}
-
-func (n *TestRPCMetrics) RecordRPCClientResponse(method string, err error) {}

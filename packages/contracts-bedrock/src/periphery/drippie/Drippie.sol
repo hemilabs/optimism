@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { AssetReceiver } from "../AssetReceiver.sol";
-import { IDripCheck } from "./IDripCheck.sol";
+// Contracts
+import { AssetReceiver } from "src/periphery/AssetReceiver.sol";
+
+// Interfaces
+import { IDripCheck } from "src/periphery/drippie/IDripCheck.sol";
 
 /// @title Drippie
 /// @notice Drippie is a system for managing automated contract interactions. A specific interaction
@@ -76,6 +79,11 @@ contract Drippie is AssetReceiver {
     /// @notice Maps from drip names to drip states.
     mapping(string => DripState) public drips;
 
+    /// @notice Array of created drips. Used so offchain services can easily iterate over all drips
+    ///         without resorting to event queries. Convenience feature and shouldn't really be
+    ///         used onchain because the array will grow indefinitely.
+    string[] public created;
+
     //// @param _owner Initial contract owner.
     constructor(address _owner) AssetReceiver(_owner) { }
 
@@ -111,6 +119,9 @@ contract Drippie is AssetReceiver {
         for (uint256 i = 0; i < _config.actions.length; i++) {
             state.config.actions.push(_config.actions[i]);
         }
+
+        // Add the name of the drip to the array of created drips.
+        created.push(_name);
 
         // Tell the world!
         emit DripCreated(_name, _name, _config);
@@ -250,5 +261,18 @@ contract Drippie is AssetReceiver {
     /// @return DripStatus of the given drip.
     function getDripStatus(string calldata _name) public view returns (DripStatus) {
         return drips[_name].status;
+    }
+
+    /// @notice Returns the interval of a given drip.
+    /// @param _name Drip to check.
+    /// @return Interval of the given drip.
+    function getDripInterval(string calldata _name) public view returns (uint256) {
+        return drips[_name].config.interval;
+    }
+
+    /// @notice Returns the number of created drips.
+    /// @return Number of created drips.
+    function getDripCount() public view returns (uint256) {
+        return created.length;
     }
 }

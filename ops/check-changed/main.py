@@ -3,7 +3,6 @@ import os
 import re
 import subprocess
 import sys
-import json
 
 from github import Github
 
@@ -12,10 +11,8 @@ REBUILD_ALL_PATTERNS = [
     r'^\.github/\.*',
     r'^package\.json',
     r'ops/check-changed/.*',
+    r'^mise.toml',
 ]
-with open("../../nx.json") as file:
-    nx_json_data = json.load(file)
-REBUILD_ALL_PATTERNS += nx_json_data["implicitDependencies"].keys()
 
 GO_PATTERNS = [
     r'^go\.mod',

@@ -14,7 +14,7 @@ type Mode int
 //     It will consolidate the chain as usual. This allows execution clients to snap sync if they are capable of it.
 const (
 	CLSync Mode = iota
-	ELSync Mode = iota
+	ELSync
 )
 
 const (
@@ -70,4 +70,6 @@ type Config struct {
 	// Note: We probably need to detect the condition that snap sync has not complete when we do a restart prior to running sync-start if we are doing
 	// snap sync with a genesis finalization data.
 	SkipSyncStartCheck bool `json:"skip_sync_start_check"`
+
+	SupportsPostFinalizationELSync bool `json:"supports_post_finalization_elsync"`
 }

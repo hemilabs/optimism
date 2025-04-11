@@ -63,6 +63,7 @@ func TestShadowCompressor(t *testing.T) {
 
 			sc, err := NewShadowCompressor(Config{
 				TargetOutputSize: test.targetOutputSize,
+				CompressionAlgo:  derive.Zlib,
 			})
 			require.NoError(t, err)
 
@@ -108,13 +109,14 @@ func TestShadowCompressor(t *testing.T) {
 	}
 }
 
-// TestBoundInaccruateForLargeRandomData documents where our bounding heuristic starts to fail
+// TestBoundInaccurateForLargeRandomData documents where our bounding heuristic starts to fail
 // (writing at least 128k of random data)
 func TestBoundInaccurateForLargeRandomData(t *testing.T) {
 	const sizeLimit = 1 << 17
 
 	sc, err := NewShadowCompressor(Config{
 		TargetOutputSize: sizeLimit + 100,
+		CompressionAlgo:  derive.Zlib,
 	})
 	require.NoError(t, err)
 

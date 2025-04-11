@@ -47,6 +47,9 @@ func (btx *spanBatchTxs) encodeContractCreationBits(w io.Writer) error {
 }
 
 func (btx *spanBatchTxs) decodeContractCreationBits(r *bytes.Reader) error {
+	if btx.totalBlockTxCount > MaxSpanBatchElementCount {
+		return ErrTooBigSpanBatchSize
+	}
 	bits, err := decodeSpanBatchBits(r, btx.totalBlockTxCount)
 	if err != nil {
 		return fmt.Errorf("failed to decode contract creation bits: %w", err)
@@ -63,6 +66,9 @@ func (btx *spanBatchTxs) encodeProtectedBits(w io.Writer) error {
 }
 
 func (btx *spanBatchTxs) decodeProtectedBits(r *bytes.Reader) error {
+	if btx.totalLegacyTxCount > MaxSpanBatchElementCount {
+		return ErrTooBigSpanBatchSize
+	}
 	bits, err := decodeSpanBatchBits(r, btx.totalLegacyTxCount)
 	if err != nil {
 		return fmt.Errorf("failed to decode protected bits: %w", err)
@@ -265,6 +271,8 @@ func (btx *spanBatchTxs) recoverV(chainID *big.Int) error {
 			v = bit
 		case types.DynamicFeeTxType:
 			v = bit
+		case types.SetCodeTxType:
+			v = bit
 		default:
 			return fmt.Errorf("invalid tx type: %d", txType)
 		}
@@ -380,6 +388,8 @@ func convertVToYParity(v uint64, txType int) (uint, error) {
 		yParityBit = uint(v)
 	case types.DynamicFeeTxType:
 		yParityBit = uint(v)
+	case types.SetCodeTxType:
+		yParityBit = uint(v)
 	default:
 		return 0, fmt.Errorf("invalid tx type: %d", txType)
 	}
@@ -418,7 +428,7 @@ func (sbtx *spanBatchTxs) AddTxs(txs [][]byte, chainID *big.Int) error {
 	totalBlockTxCount := uint64(len(txs))
 	offset := sbtx.totalBlockTxCount
 	for idx := 0; idx < int(totalBlockTxCount); idx++ {
-		var tx types.Transaction
+		tx := &types.Transaction{}
 		if err := tx.UnmarshalBinary(txs[idx]); err != nil {
 			return errors.New("failed to decode tx")
 		}

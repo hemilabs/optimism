@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -16,10 +17,13 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-var (
-	// errTimeout represents a timeout
-	errTimeout = errors.New("timeout")
+const (
+	errStrTxIdxingInProgress = "transaction indexing is in progress"
+	waitForBlockMaxRetries   = 3
 )
+
+// errTimeout represents a timeout
+var errTimeout = errors.New("timeout")
 
 func WaitForL1OriginOnL2(rollupCfg *rollup.Config, l1BlockNum uint64, client *ethclient.Client, timeout time.Duration) (*types.Block, error) {
 	timeoutCh := time.After(timeout)
@@ -65,7 +69,8 @@ func WaitForTransaction(hash common.Hash, client *ethclient.Client, timeout time
 		receipt, err := client.TransactionReceipt(ctx, hash)
 		if receipt != nil && err == nil {
 			return receipt, nil
-		} else if err != nil && !errors.Is(err, ethereum.NotFound) {
+		} else if err != nil &&
+			!(errors.Is(err, ethereum.NotFound) || strings.Contains(err.Error(), errStrTxIdxingInProgress)) {
 			return nil, err
 		}
 
@@ -81,25 +86,80 @@ func WaitForTransaction(hash common.Hash, client *ethclient.Client, timeout time
 	}
 }
 
-func WaitForBlock(number *big.Int, client *ethclient.Client, timeout time.Duration) (*types.Block, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+type waitForBlockOptions struct {
+	noChangeTimeout time.Duration
+	absoluteTimeout time.Duration
+}
+
+func WithNoChangeTimeout(timeout time.Duration) WaitForBlockOption {
+	return func(o *waitForBlockOptions) {
+		o.noChangeTimeout = timeout
+	}
+}
+
+func WithAbsoluteTimeout(timeout time.Duration) WaitForBlockOption {
+	return func(o *waitForBlockOptions) {
+		o.absoluteTimeout = timeout
+	}
+}
+
+type WaitForBlockOption func(*waitForBlockOptions)
+
+// WaitForBlock waits for the chain to advance to the provided block number. It can be configured with
+// two different timeout: an absolute timeout, and a no change timeout. The absolute timeout caps
+// the maximum amount of time this method will run. The no change timeout will return an error if the
+// block number does not change within that time window. This is useful to bail out early in the event
+// of a stuck chain, but allow things to continue if the chain is still advancing.
+//
+// This function will also retry fetch errors up to three times before returning an error in order to
+// protect against transient network problems. This function uses polling rather than websockets.
+func WaitForBlock(number *big.Int, client *ethclient.Client, opts ...WaitForBlockOption) (*types.Block, error) {
+	defaultOpts := &waitForBlockOptions{
+		noChangeTimeout: 30 * time.Second,
+		absoluteTimeout: 3 * time.Minute,
+	}
+	for _, opt := range opts {
+		opt(defaultOpts)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultOpts.absoluteTimeout)
 	defer cancel()
 
-	headChan := make(chan *types.Header, 100)
-	headSub, err := client.SubscribeNewHead(ctx, headChan)
-	if err != nil {
-		return nil, err
-	}
-	defer headSub.Unsubscribe()
+	lastAdvancement := time.Now()
+	lastBlockNumber := big.NewInt(0)
+
+	pollTicker := time.NewTicker(500 * time.Millisecond)
+	defer pollTicker.Stop()
+	var errCount int
 
 	for {
-		select {
-		case head := <-headChan:
-			if head.Number.Cmp(number) >= 0 {
-				return client.BlockByNumber(ctx, number)
+		head, err := client.BlockByNumber(ctx, nil)
+		if err != nil {
+			errCount++
+			if errCount >= waitForBlockMaxRetries {
+				return nil, fmt.Errorf("head fetching exceeded max retries. last error: %w", err)
 			}
-		case err := <-headSub.Err():
-			return nil, fmt.Errorf("error in head subscription: %w", err)
+			continue
+		}
+
+		errCount = 0
+
+		if head.Number().Cmp(number) >= 0 {
+			return client.BlockByNumber(ctx, number)
+		}
+
+		if head.Number().Cmp(lastBlockNumber) != 0 {
+			lastBlockNumber = head.Number()
+			lastAdvancement = time.Now()
+		}
+
+		if time.Since(lastAdvancement) > defaultOpts.noChangeTimeout {
+			return nil, fmt.Errorf("block number %d has not changed in %s", lastBlockNumber, defaultOpts.noChangeTimeout)
+		}
+
+		select {
+		case <-pollTicker.C:
+			continue
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -130,6 +190,11 @@ func waitForBlockTag(number *big.Int, client *ethclient.Client, timeout time.Dur
 		case <-ticker.C:
 			block, err := client.BlockByNumber(ctx, tagBigInt)
 			if err != nil {
+				// If block is not found (e.g. upon startup of chain, when there is no "finalized block" yet)
+				// then it may be found later. Keep wait loop running.
+				if strings.Contains(err.Error(), "block not found") {
+					continue
+				}
 				return nil, err
 			}
 			if block != nil && block.NumberU64() >= number.Uint64() {

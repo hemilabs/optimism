@@ -3,29 +3,29 @@ package mon
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-dispute-mon/mon/types"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 )
 
-type Forecast func(ctx context.Context, games []*types.EnrichedGameData)
-type Bonds func(games []*types.EnrichedGameData)
-type Resolutions func(games []*types.EnrichedGameData)
-type MonitorClaims func(games []*types.EnrichedGameData)
-type MonitorWithdrawals func(games []*types.EnrichedGameData)
-type BlockHashFetcher func(ctx context.Context, number *big.Int) (common.Hash, error)
-type BlockNumberFetcher func(ctx context.Context) (uint64, error)
-type Extract func(ctx context.Context, blockHash common.Hash, minTimestamp uint64) ([]*types.EnrichedGameData, error)
-type RecordClaimResolutionDelayMax func([]*types.EnrichedGameData)
+type ForecastResolution func(games []*types.EnrichedGameData, ignoredCount, failedCount int)
+type Monitor func(games []*types.EnrichedGameData)
+type HeadBlockFetcher func(ctx context.Context) (eth.L1BlockRef, error)
+type Extract func(ctx context.Context, blockHash common.Hash, minTimestamp uint64) ([]*types.EnrichedGameData, int, int, error)
+
+type MonitorMetrics interface {
+	RecordMonitorDuration(dur time.Duration)
+}
 
 type gameMonitor struct {
-	logger log.Logger
-	clock  clock.Clock
+	logger  log.Logger
+	clock   clock.Clock
+	metrics MonitorMetrics
 
 	done   chan struct{}
 	ctx    context.Context
@@ -34,73 +34,63 @@ type gameMonitor struct {
 	gameWindow      time.Duration
 	monitorInterval time.Duration
 
-	delays           RecordClaimResolutionDelayMax
-	forecast         Forecast
-	bonds            Bonds
-	resolutions      Resolutions
-	claims           MonitorClaims
-	withdrawals      MonitorWithdrawals
-	extract          Extract
-	fetchBlockHash   BlockHashFetcher
-	fetchBlockNumber BlockNumberFetcher
+	forecast       ForecastResolution
+	monitors       []Monitor
+	extract        Extract
+	fetchHeadBlock HeadBlockFetcher
 }
 
 func newGameMonitor(
 	ctx context.Context,
 	logger log.Logger,
 	cl clock.Clock,
+	metrics MonitorMetrics,
 	monitorInterval time.Duration,
 	gameWindow time.Duration,
-	delays RecordClaimResolutionDelayMax,
-	forecast Forecast,
-	bonds Bonds,
-	resolutions Resolutions,
-	claims MonitorClaims,
-	withdrawals MonitorWithdrawals,
+	fetchHeadBlock HeadBlockFetcher,
 	extract Extract,
-	fetchBlockNumber BlockNumberFetcher,
-	fetchBlockHash BlockHashFetcher,
-) *gameMonitor {
+	forecast ForecastResolution,
+	monitors ...Monitor) *gameMonitor {
 	return &gameMonitor{
-		logger:           logger,
-		clock:            cl,
-		ctx:              ctx,
-		done:             make(chan struct{}),
-		monitorInterval:  monitorInterval,
-		gameWindow:       gameWindow,
-		delays:           delays,
-		forecast:         forecast,
-		bonds:            bonds,
-		resolutions:      resolutions,
-		claims:           claims,
-		withdrawals:      withdrawals,
-		extract:          extract,
-		fetchBlockNumber: fetchBlockNumber,
-		fetchBlockHash:   fetchBlockHash,
+		logger:          logger,
+		clock:           cl,
+		ctx:             ctx,
+		done:            make(chan struct{}),
+		metrics:         metrics,
+		monitorInterval: monitorInterval,
+		gameWindow:      gameWindow,
+		forecast:        forecast,
+		monitors:        monitors,
+		extract:         extract,
+		fetchHeadBlock:  fetchHeadBlock,
 	}
 }
 
 func (m *gameMonitor) monitorGames() error {
-	blockNumber, err := m.fetchBlockNumber(m.ctx)
+	start := m.clock.Now()
+	headBlock, err := m.fetchHeadBlock(m.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch block number: %w", err)
 	}
-	m.logger.Debug("Fetched block number", "blockNumber", blockNumber)
-	blockHash, err := m.fetchBlockHash(context.Background(), new(big.Int).SetUint64(blockNumber))
-	if err != nil {
-		return fmt.Errorf("failed to fetch block hash: %w", err)
-	}
+	m.logger.Debug("Fetched current head block", "block", headBlock)
 	minGameTimestamp := clock.MinCheckedTimestamp(m.clock, m.gameWindow)
-	enrichedGames, err := m.extract(m.ctx, blockHash, minGameTimestamp)
+	enrichedGames, ignored, failed, err := m.extract(m.ctx, headBlock.Hash, minGameTimestamp)
 	if err != nil {
 		return fmt.Errorf("failed to load games: %w", err)
 	}
-	m.resolutions(enrichedGames)
-	m.delays(enrichedGames)
-	m.forecast(m.ctx, enrichedGames)
-	m.bonds(enrichedGames)
-	m.claims(enrichedGames)
-	m.withdrawals(enrichedGames)
+	m.forecast(enrichedGames, ignored, failed)
+	for _, monitor := range m.monitors {
+		monitor(enrichedGames)
+	}
+	timeTaken := m.clock.Since(start)
+	m.metrics.RecordMonitorDuration(timeTaken)
+	m.logger.Info("Completed monitoring update",
+		"blockNumber", headBlock.Number,
+		"blockHash", headBlock.Hash,
+		"duration", timeTaken,
+		"games", len(enrichedGames),
+		"ignored", ignored,
+		"failed", failed)
 	return nil
 }
 

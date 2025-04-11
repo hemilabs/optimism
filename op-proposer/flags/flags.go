@@ -32,6 +32,11 @@ var (
 		Usage:   "HTTP provider URL for the rollup node. A comma-separated list enables the active rollup provider.",
 		EnvVars: prefixEnvVars("ROLLUP_RPC"),
 	}
+	SupervisorRpcsFlag = &cli.StringSliceFlag{
+		Name:    "supervisor-rpcs",
+		Usage:   "HTTP provider URLs for the supervisor nodes. Multiple URLs can be provided to automatically fail over.",
+		EnvVars: prefixEnvVars("SUPERVISOR_RPCS"),
+	}
 
 	// Optional flags
 	L2OOAddressFlag = &cli.StringFlag{
@@ -41,8 +46,8 @@ var (
 	}
 	PollIntervalFlag = &cli.DurationFlag{
 		Name:    "poll-interval",
-		Usage:   "How frequently to poll L2 for new blocks",
-		Value:   6 * time.Second,
+		Usage:   "How frequently to poll L2 for new blocks (legacy L2OO)",
+		Value:   12 * time.Second,
 		EnvVars: prefixEnvVars("POLL_INTERVAL"),
 	}
 	AllowNonFinalizedFlag = &cli.BoolFlag{
@@ -72,16 +77,24 @@ var (
 		Value:   2 * time.Minute,
 		EnvVars: prefixEnvVars("ACTIVE_SEQUENCER_CHECK_DURATION"),
 	}
+	WaitNodeSyncFlag = &cli.BoolFlag{
+		Name: "wait-node-sync",
+		Usage: "Indicates if, during startup, the proposer should wait for the rollup node to sync to " +
+			"the current L1 tip before proceeding with its driver loop.",
+		Value:   false,
+		EnvVars: prefixEnvVars("WAIT_NODE_SYNC"),
+	}
 	// Legacy Flags
 	L2OutputHDPathFlag = txmgr.L2OutputHDPathFlag
 )
 
 var requiredFlags = []cli.Flag{
 	L1EthRpcFlag,
-	RollupRpcFlag,
 }
 
 var optionalFlags = []cli.Flag{
+	RollupRpcFlag,
+	SupervisorRpcsFlag,
 	L2OOAddressFlag,
 	PollIntervalFlag,
 	AllowNonFinalizedFlag,
@@ -90,6 +103,7 @@ var optionalFlags = []cli.Flag{
 	ProposalIntervalFlag,
 	DisputeGameTypeFlag,
 	ActiveSequencerCheckDurationFlag,
+	WaitNodeSyncFlag,
 }
 
 func init() {

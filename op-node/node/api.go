@@ -5,16 +5,16 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ethereum-optimism/optimism/op-service/client"
-	"github.com/hemilabs/heminetwork/hemi"
-
-	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/hemi"
 
+	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/version"
+	"github.com/ethereum-optimism/optimism/op-service/apis"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -36,6 +36,9 @@ type driverClient interface {
 	StopSequencer(context.Context) (common.Hash, error)
 	SequencerActive(context.Context) (bool, error)
 	OnUnsafeL2Payload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) error
+	OverrideLeader(ctx context.Context) error
+	ConductorEnabled(ctx context.Context) (bool, error)
+	SetRecoverMode(ctx context.Context, mode bool) error
 }
 
 type SafeDBReader interface {
@@ -47,44 +50,34 @@ type adminAPI struct {
 	dr driverClient
 }
 
-func NewAdminAPI(dr driverClient, m metrics.RPCMetricer, log log.Logger) *adminAPI {
+var _ apis.OpnodeAdminServer = (*adminAPI)(nil)
+
+func NewAdminAPI(dr driverClient, log log.Logger) *adminAPI {
 	return &adminAPI{
-		CommonAdminAPI: rpc.NewCommonAdminAPI(m, log),
+		CommonAdminAPI: rpc.NewCommonAdminAPI(log),
 		dr:             dr,
 	}
 }
 
 func (n *adminAPI) ResetDerivationPipeline(ctx context.Context) error {
-	recordDur := n.M.RecordRPCServerRequest("admin_resetDerivationPipeline")
-	defer recordDur()
 	return n.dr.ResetDerivationPipeline(ctx)
 }
 
 func (n *adminAPI) StartSequencer(ctx context.Context, blockHash common.Hash) error {
-	recordDur := n.M.RecordRPCServerRequest("admin_startSequencer")
-	defer recordDur()
 	return n.dr.StartSequencer(ctx, blockHash)
 }
 
 func (n *adminAPI) StopSequencer(ctx context.Context) (common.Hash, error) {
-	recordDur := n.M.RecordRPCServerRequest("admin_stopSequencer")
-	defer recordDur()
 	return n.dr.StopSequencer(ctx)
 }
 
 func (n *adminAPI) SequencerActive(ctx context.Context) (bool, error) {
-	recordDur := n.M.RecordRPCServerRequest("admin_sequencerActive")
-	defer recordDur()
 	return n.dr.SequencerActive(ctx)
 }
 
-// PostUnsafePayload is a special API that allow posting an unsafe payload to the L2 derivation pipeline.
+// PostUnsafePayload is a special API that allows posting an unsafe payload to the L2 derivation pipeline.
 // It should only be used by op-conductor for sequencer failover scenarios.
-// TODO(ethereum-optimism/optimism#9064): op-conductor Dencun changes.
 func (n *adminAPI) PostUnsafePayload(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
-	recordDur := n.M.RecordRPCServerRequest("admin_postUnsafePayload")
-	defer recordDur()
-
 	payload := envelope.ExecutionPayload
 	if actual, ok := envelope.CheckBlockHash(); !ok {
 		log.Error("payload has bad block hash", "bad_hash", payload.BlockHash.String(), "actual", actual.String())
@@ -92,6 +85,20 @@ func (n *adminAPI) PostUnsafePayload(ctx context.Context, envelope *eth.Executio
 	}
 
 	return n.dr.OnUnsafeL2Payload(ctx, envelope)
+}
+
+// OverrideLeader disables sequencer conductor interactions and allow sequencer to run in non-HA mode during disaster recovery scenarios.
+func (n *adminAPI) OverrideLeader(ctx context.Context) error {
+	return n.dr.OverrideLeader(ctx)
+}
+
+// ConductorEnabled returns true if the sequencer conductor is enabled.
+func (n *adminAPI) ConductorEnabled(ctx context.Context) (bool, error) {
+	return n.dr.ConductorEnabled(ctx)
+}
+
+func (n *adminAPI) SetRecoverMode(ctx context.Context, mode bool) error {
+	return n.dr.SetRecoverMode(ctx, mode)
 }
 
 type nodeAPI struct {
@@ -117,14 +124,13 @@ func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, sa
 }
 
 func (n *nodeAPI) OutputAtBlock(ctx context.Context, number hexutil.Uint64) (*eth.OutputResponse, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_outputAtBlock")
-	defer recordDur()
-
 	ref, status, err := n.dr.BlockRefWithStatus(ctx, uint64(number))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get L2 block ref with sync status: %w", err)
 	}
 
+	// OutputV0AtBlock uses the WithdrawalsRoot in the block header as the value for the
+	// output MessagePasserStorageRoot, if Isthmus hard fork has activated.
 	output, err := n.client.OutputV0AtBlock(ctx, ref.Hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get L2 output at block %s: %w", ref, err)
@@ -140,8 +146,6 @@ func (n *nodeAPI) OutputAtBlock(ctx context.Context, number hexutil.Uint64) (*et
 }
 
 func (n *nodeAPI) SafeHeadAtL1Block(ctx context.Context, number hexutil.Uint64) (*eth.SafeHeadResponse, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_safeHeadAtL1Block")
-	defer recordDur()
 	l1Block, safeHead, err := n.safeDB.SafeHeadAtL1(ctx, uint64(number))
 	if errors.Is(err, safedb.ErrNotFound) {
 		return nil, err
@@ -155,37 +159,25 @@ func (n *nodeAPI) SafeHeadAtL1Block(ctx context.Context, number hexutil.Uint64) 
 }
 
 func (n *nodeAPI) SyncStatus(ctx context.Context) (*eth.SyncStatus, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_syncStatus")
-	defer recordDur()
 	return n.dr.SyncStatus(ctx)
 }
 
 func (n *nodeAPI) RollupConfig(_ context.Context) (*rollup.Config, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_rollupConfig")
-	defer recordDur()
 	return n.config, nil
 }
 
 func (n *nodeAPI) Version(ctx context.Context) (string, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_version")
-	defer recordDur()
 	return version.Version + "-" + version.Meta, nil
 }
 
 func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) ([]hemi.L2BTCFinality, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_btcFinalityByRecentKeystones")
-	defer recordDur()
 	return n.bsc.BtcFinalityByRecentKeystones(ctx, uint32(numRecentKeystones))
 }
 
 func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) ([]hemi.L2BTCFinality, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_btcFinalityByKeystones")
-	defer recordDur()
 	return n.bsc.BtcFinalityByKeystones(ctx, l2Keystones)
 }
 
 func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) ([]hemi.L2BTCFinality, error) {
-	recordDur := n.m.RecordRPCServerRequest("optimism_btcFinalityByBlockHash")
-	defer recordDur()
 	return getBTCFinalityForBlockHash(ctx, blockHash, n.client, n.dr, n.bsc)
 }

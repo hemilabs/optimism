@@ -22,6 +22,7 @@ const (
 	defaultListenPort   = 6060
 )
 
+var ErrInvalidPort = errors.New("invalid pprof port")
 var allowedProfileTypes = []profileType{"cpu", "heap", "goroutine", "threadcreate", "block", "mutex", "allocs"}
 
 type profileType string
@@ -75,7 +76,7 @@ func CLIFlagsWithCategory(envPrefix string, category string) []cli.Flag {
 		&cli.StringFlag{
 			Name:     ListenAddrFlagName,
 			Usage:    "pprof listening address",
-			Value:    defaultListenAddr, // TODO(CLI-4159): Switch to 127.0.0.1
+			Value:    defaultListenAddr, // TODO: Switch to 127.0.0.1
 			EnvVars:  opservice.PrefixEnvVar(envPrefix, "PPROF_ADDR"),
 			Category: category,
 		},
@@ -122,7 +123,7 @@ func (m CLIConfig) Check() error {
 	}
 
 	if m.ListenPort < 0 || m.ListenPort > math.MaxUint16 {
-		return errors.New("invalid pprof port")
+		return ErrInvalidPort
 	}
 
 	return nil

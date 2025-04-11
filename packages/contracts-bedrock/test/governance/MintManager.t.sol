@@ -1,30 +1,39 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-// Testing utilities
+// Testing
 import { CommonTest } from "test/setup/CommonTest.sol";
 
-// Target contract dependencies
-import { GovernanceToken } from "src/governance/GovernanceToken.sol";
-
-// Target contract
-import { MintManager } from "src/governance/MintManager.sol";
+// Interfaces
+import { IGovernanceToken } from "interfaces/governance/IGovernanceToken.sol";
+import { IMintManager } from "interfaces/governance/IMintManager.sol";
+import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 
 contract MintManager_Initializer is CommonTest {
     address constant owner = address(0x1234);
     address constant rando = address(0x5678);
-    GovernanceToken internal gov;
-    MintManager internal manager;
+    IGovernanceToken internal gov;
+    IMintManager internal manager;
 
     /// @dev Sets up the test suite.
     function setUp() public virtual override {
         super.setUp();
 
         vm.prank(owner);
-        gov = new GovernanceToken();
+        gov = IGovernanceToken(
+            DeployUtils.create1({
+                _name: "GovernanceToken",
+                _args: DeployUtils.encodeConstructor(abi.encodeCall(IGovernanceToken.__constructor__, ()))
+            })
+        );
 
         vm.prank(owner);
-        manager = new MintManager(owner, address(gov));
+        manager = IMintManager(
+            DeployUtils.create1({
+                _name: "MintManager",
+                _args: DeployUtils.encodeConstructor(abi.encodeCall(IMintManager.__constructor__, (owner, address(gov))))
+            })
+        );
 
         vm.prank(owner);
         gov.transferOwnership(address(manager));
@@ -33,7 +42,7 @@ contract MintManager_Initializer is CommonTest {
 
 contract MintManager_constructor_Test is MintManager_Initializer {
     /// @dev Tests that the constructor properly configures the contract.
-    function test_constructor_succeeds() external {
+    function test_constructor_succeeds() external view {
         assertEq(manager.owner(), owner);
         assertEq(address(manager.governanceToken()), address(gov));
     }

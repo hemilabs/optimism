@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { IDripCheck } from "../IDripCheck.sol";
+// Interfaces
+import { IDripCheck } from "src/periphery/drippie/IDripCheck.sol";
 
 /// @title CheckBalanceLow
 /// @notice DripCheck for checking if an account's balance is below a given threshold.
@@ -14,6 +15,9 @@ contract CheckBalanceLow is IDripCheck {
     /// @notice External event used to help client-side tooling encode parameters.
     /// @param params Parameters to encode.
     event _EventToExposeStructInABI__Params(Params params);
+
+    /// @inheritdoc IDripCheck
+    string public name = "CheckBalanceLow";
 
     /// @inheritdoc IDripCheck
     function check(bytes memory _params) external view returns (bool execute_) {

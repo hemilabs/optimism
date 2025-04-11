@@ -7,9 +7,17 @@ import { Test } from "forge-std/Test.sol";
 // Target contract
 import { Bytes } from "src/libraries/Bytes.sol";
 
+contract Bytes_Harness {
+    function exposed_slice(bytes memory _input, uint256 _start, uint256 _length) public pure returns (bytes memory) {
+        return Bytes.slice(_input, _start, _length);
+    }
+}
+
 contract Bytes_slice_Test is Test {
+    Bytes_Harness harness;
+
     /// @notice Tests that the `slice` function works as expected when starting from index 0.
-    function test_slice_fromZeroIdx_works() public {
+    function test_slice_fromZeroIdx_works() public pure {
         bytes memory input = hex"11223344556677889900";
 
         // Exhaustively check if all possible slices starting from index 0 are correct.
@@ -28,7 +36,7 @@ contract Bytes_slice_Test is Test {
 
     /// @notice Tests that the `slice` function works as expected when starting from indices [1, 9]
     ///         with lengths [1, 9], in reverse order.
-    function test_slice_fromNonZeroIdx_works() public {
+    function test_slice_fromNonZeroIdx_works() public pure {
         bytes memory input = hex"11223344556677889900";
 
         // Exhaustively check correctness of slices starting from indexes [1, 9]
@@ -47,7 +55,7 @@ contract Bytes_slice_Test is Test {
     /// @notice Tests that the `slice` function works as expected when slicing between multiple words
     ///         in memory. In this case, we test that a 2 byte slice between the 32nd byte of the
     ///         first word and the 1st byte of the second word is correct.
-    function test_slice_acrossWords_works() public {
+    function test_slice_acrossWords_works() public pure {
         bytes memory input =
             hex"00000000000000000000000000000000000000000000000000000000000000112200000000000000000000000000000000000000000000000000000000000000";
 
@@ -57,7 +65,7 @@ contract Bytes_slice_Test is Test {
     /// @notice Tests that the `slice` function works as expected when slicing between multiple
     ///         words in memory. In this case, we test that a 34 byte slice between 3 separate words
     ///        returns the correct result.
-    function test_slice_acrossMultipleWords_works() public {
+    function test_slice_acrossMultipleWords_works() public pure {
         bytes memory input =
             hex"000000000000000000000000000000000000000000000000000000000000001122FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF1100000000000000000000000000000000000000000000000000000000000000";
         bytes memory expected = hex"1122FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF11";
@@ -67,25 +75,31 @@ contract Bytes_slice_Test is Test {
 
     /// @notice Tests that the `slice` function correctly updates the free memory pointer depending
     ///         on the length of the slice.
+    ///         The calls to `bound` are to reduce the number of times that `assume` is triggered.
     function testFuzz_slice_memorySafety_succeeds(bytes memory _input, uint256 _start, uint256 _length) public {
+        vm.assume(_input.length > 0);
+
         // The start should never be more than the length of the input bytes array - 1
-        vm.assume(_start < _input.length);
+        _start = bound(_start, 0, _input.length - 1);
+
         // The length should never be more than the length of the input bytes array - the starting
         // slice index.
-        vm.assume(_length <= _input.length - _start);
+        _length = bound(_length, 0, _input.length - _start);
 
         // Grab the free memory pointer before the slice operation
         uint64 initPtr;
         assembly {
             initPtr := mload(0x40)
         }
-        uint64 expectedPtr = uint64(initPtr + 0x20 + ((_length + 0x1f) & ~uint256(0x1f)));
+        uint64 expectedPtr = uint64((initPtr + 0x20 + _length + 0x1f) & ~uint256(0x1f));
 
         // Ensure that all memory outside of the expected range is safe.
         vm.expectSafeMemory(initPtr, expectedPtr);
 
         // Slice the input bytes array from `_start` to `_start + _length`
         bytes memory slice = Bytes.slice(_input, _start, _length);
+
+        vm.stopExpectSafeMemory();
 
         // Grab the free memory pointer after the slice operation
         uint64 finalPtr;
@@ -105,7 +119,7 @@ contract Bytes_slice_Test is Test {
             // Note that we use a slightly less efficient, but equivalent method of rounding
             // up `_length` to the next multiple of 32 than is used in the `slice` function.
             // This is to diff test the method used in `slice`.
-            uint64 _expectedPtr = uint64(initPtr + 0x20 + (((_length + 0x1F) >> 5) << 5));
+            uint64 _expectedPtr = uint64(((initPtr + 0x20 + _length + 0x1F) >> 5) << 5);
             assertEq(finalPtr, _expectedPtr);
 
             // Sanity check for equivalence of the rounding methods.
@@ -118,46 +132,65 @@ contract Bytes_slice_Test is Test {
 }
 
 contract Bytes_slice_TestFail is Test {
+    Bytes_Harness harness;
+
+    function setUp() public {
+        harness = new Bytes_Harness();
+    }
+
     /// @notice Tests that, when given an input bytes array of length `n`, the `slice` function will
     ///         always revert if `_start + _length > n`.
     function testFuzz_slice_outOfBounds_reverts(bytes memory _input, uint256 _start, uint256 _length) public {
-        // We want a valid start index and a length that will not overflow.
-        vm.assume(_start < _input.length && _length < type(uint256).max - 31);
+        // We want a valid start index that will not overflow.
+        if (_input.length == 0) {
+            _start = 0;
+        } else {
+            _start = bound(_start, 0, _input.length - 1);
+        }
+        // And a length that will not overflow.
         // But, we want an invalid slice length.
-        vm.assume(_start + _length > _input.length);
+        if (_start > 31) {
+            _length = bound(_length, (_input.length - _start) + 1, type(uint256).max - _start);
+        } else {
+            _length = bound(_length, (_input.length - _start) + 1, type(uint256).max - 31);
+        }
 
         vm.expectRevert("slice_outOfBounds");
-        Bytes.slice(_input, _start, _length);
+        harness.exposed_slice(_input, _start, _length);
     }
 
     /// @notice Tests that, when given a length `n` that is greater than `type(uint256).max - 31`,
     ///         the `slice` function reverts.
     function testFuzz_slice_lengthOverflows_reverts(bytes memory _input, uint256 _start, uint256 _length) public {
         // Ensure that the `_length` will overflow if a number >= 31 is added to it.
-        vm.assume(_length > type(uint256).max - 31);
+        _length = uint256(bound(_length, type(uint256).max - 30, type(uint256).max));
 
         vm.expectRevert("slice_overflow");
-        Bytes.slice(_input, _start, _length);
+        harness.exposed_slice(_input, _start, _length);
     }
 
     /// @notice Tests that, when given a start index `n` that is greater than
     ///         `type(uint256).max - n`, the `slice` function reverts.
+    ///         The calls to `bound` are to reduce the number of times that `assume` is triggered.
     function testFuzz_slice_rangeOverflows_reverts(bytes memory _input, uint256 _start, uint256 _length) public {
         // Ensure that `_length` is a realistic length of a slice. This is to make sure
         // we revert on the correct require statement.
+        _length = bound(_length, 0, _input.length == 0 ? 0 : _input.length - 1);
         vm.assume(_length < _input.length);
+
         // Ensure that `_start` will overflow if `_length` is added to it.
+        _start = bound(_start, type(uint256).max - _length, type(uint256).max);
         vm.assume(_start > type(uint256).max - _length);
 
         vm.expectRevert("slice_overflow");
-        Bytes.slice(_input, _start, _length);
+        harness.exposed_slice(_input, _start, _length);
     }
 }
 
 contract Bytes_toNibbles_Test is Test {
     /// @notice Tests that, given an input of 5 bytes, the `toNibbles` function returns an array of
     ///         10 nibbles corresponding to the input data.
-    function test_toNibbles_expectedResult5Bytes_works() public {
+    function test_toNibbles_expectedResult5Bytes_works() public pure {
         bytes memory input = hex"1234567890";
         bytes memory expected = hex"01020304050607080900";
         bytes memory actual = Bytes.toNibbles(input);
@@ -170,7 +203,7 @@ contract Bytes_toNibbles_Test is Test {
     /// @notice Tests that, given an input of 128 bytes, the `toNibbles` function returns an array
     ///         of 256 nibbles corresponding to the input data. This test exists to ensure that,
     ///         given a large input, the `toNibbles` function works as expected.
-    function test_toNibbles_expectedResult128Bytes_works() public {
+    function test_toNibbles_expectedResult128Bytes_works() public pure {
         bytes memory input =
             hex"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f";
         bytes memory expected =
@@ -184,7 +217,7 @@ contract Bytes_toNibbles_Test is Test {
 
     /// @notice Tests that, given an input of 0 bytes, the `toNibbles` function returns a zero
     ///         length array.
-    function test_toNibbles_zeroLengthInput_works() public {
+    function test_toNibbles_zeroLengthInput_works() public pure {
         bytes memory input = hex"";
         bytes memory expected = hex"";
         bytes memory actual = Bytes.toNibbles(input);
@@ -210,6 +243,8 @@ contract Bytes_toNibbles_Test is Test {
 
         // Pull out each individual nibble from the input bytes array
         bytes memory nibbles = Bytes.toNibbles(_input);
+
+        vm.stopExpectSafeMemory();
 
         // Grab the free memory pointer after the `toNibbles` operation
         uint64 finalPtr;
@@ -262,14 +297,14 @@ contract Bytes_equal_Test is Test {
 
     /// @notice Tests that the `equal` function in the `Bytes` library returns `false` if given two
     ///         non-equal byte arrays.
-    function testFuzz_equal_notEqual_works(bytes memory _a, bytes memory _b) public {
+    function testFuzz_equal_notEqual_works(bytes memory _a, bytes memory _b) public pure {
         vm.assume(!manualEq(_a, _b));
         assertFalse(Bytes.equal(_a, _b));
     }
 
     /// @notice Test whether or not the `equal` function in the `Bytes` library is equivalent to
     ///         manually checking equality of the two dynamic `bytes` arrays in memory.
-    function testDiff_equal_works(bytes memory _a, bytes memory _b) public {
+    function testDiff_equal_works(bytes memory _a, bytes memory _b) public pure {
         assertEq(Bytes.equal(_a, _b), manualEq(_a, _b));
     }
 }

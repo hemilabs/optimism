@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { CrossDomainMessenger } from "src/universal/CrossDomainMessenger.sol";
-import { StandardBridge } from "src/universal/StandardBridge.sol";
-import { SuperchainConfig } from "src/L1/SuperchainConfig.sol";
-import { Address } from "@openzeppelin/contracts/utils/Address.sol";
+// Contracts
 import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+
+// Libraries
+import { EOA } from "src/libraries/EOA.sol";
+
+// Interfaces
+import { ICrossDomainMessenger } from "interfaces/universal/ICrossDomainMessenger.sol";
 
 /// @title ERC721Bridge
 /// @notice ERC721Bridge is a base contract for the L1 and L2 ERC721 bridges.
@@ -16,11 +19,11 @@ abstract contract ERC721Bridge is Initializable {
 
     /// @notice Messenger contract on this domain.
     /// @custom:network-specific
-    CrossDomainMessenger public messenger;
+    ICrossDomainMessenger public messenger;
 
     /// @notice Contract of the bridge on the other network.
     /// @custom:network-specific
-    StandardBridge public otherBridge;
+    ERC721Bridge public otherBridge;
 
     /// @notice Reserve extra slots (to a total of 50) in the storage layout for future upgrades.
     uint256[46] private __gap;
@@ -70,8 +73,8 @@ abstract contract ERC721Bridge is Initializable {
     /// @param _messenger   Contract of the CrossDomainMessenger on this network.
     /// @param _otherBridge Contract of the ERC721 bridge on the other network.
     function __ERC721Bridge_init(
-        CrossDomainMessenger _messenger,
-        StandardBridge _otherBridge
+        ICrossDomainMessenger _messenger,
+        ERC721Bridge _otherBridge
     )
         internal
         onlyInitializing
@@ -84,7 +87,7 @@ abstract contract ERC721Bridge is Initializable {
     ///         Public getter is legacy and will be removed in the future. Use `messenger` instead.
     /// @return Messenger contract on this domain.
     /// @custom:legacy
-    function MESSENGER() external view returns (CrossDomainMessenger) {
+    function MESSENGER() external view returns (ICrossDomainMessenger) {
         return messenger;
     }
 
@@ -92,7 +95,7 @@ abstract contract ERC721Bridge is Initializable {
     ///         Public getter is legacy and will be removed in the future. Use `otherBridge` instead.
     /// @return Contract of the bridge on the other network.
     /// @custom:legacy
-    function OTHER_BRIDGE() external view returns (StandardBridge) {
+    function OTHER_BRIDGE() external view returns (ERC721Bridge) {
         return otherBridge;
     }
 
@@ -135,7 +138,7 @@ abstract contract ERC721Bridge is Initializable {
         // the NFT if they use this function because it sends the NFT to the same address as the
         // caller. This check could be bypassed by a malicious contract via initcode, but it takes
         // care of the user error we want to avoid.
-        require(!Address.isContract(msg.sender), "ERC721Bridge: account is not externally owned");
+        require(EOA.isSenderEOA(), "ERC721Bridge: account is not externally owned");
 
         _initiateBridgeERC721(_localToken, _remoteToken, msg.sender, msg.sender, _tokenId, _minGasLimit, _extraData);
     }

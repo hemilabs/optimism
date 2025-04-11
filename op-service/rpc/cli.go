@@ -14,12 +14,14 @@ const (
 	EnableAdminFlagName = "rpc.enable-admin"
 )
 
+var ErrInvalidPort = errors.New("invalid RPC port")
+
 func CLIFlags(envPrefix string) []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
 			Name:    ListenAddrFlagName,
 			Usage:   "rpc listening address",
-			Value:   "0.0.0.0", // TODO(CLI-4159): Switch to 127.0.0.1
+			Value:   "0.0.0.0", // TODO: Switch to 127.0.0.1
 			EnvVars: opservice.PrefixEnvVar(envPrefix, "RPC_ADDR"),
 		},
 		&cli.IntFlag{
@@ -52,7 +54,7 @@ func DefaultCLIConfig() CLIConfig {
 
 func (c CLIConfig) Check() error {
 	if c.ListenPort < 0 || c.ListenPort > math.MaxUint16 {
-		return errors.New("invalid RPC port")
+		return ErrInvalidPort
 	}
 
 	return nil

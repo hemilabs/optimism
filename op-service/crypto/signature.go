@@ -35,6 +35,12 @@ func PrivateKeySignerFn(key *ecdsa.PrivateKey, chainID *big.Int) bind.SignerFn {
 	}
 }
 
+func SignerFnFromBind(fn bind.SignerFn) SignerFn {
+	return func(_ context.Context, address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+		return fn(address, tx)
+	}
+}
+
 // SignerFn is a generic transaction signing function. It may be a remote signer so it takes a context.
 // It also takes the address that should be used to sign the transaction with.
 type SignerFn func(context.Context, common.Address, *types.Transaction) (*types.Transaction, error)
@@ -91,6 +97,9 @@ func SignerFactoryFromConfig(l log.Logger, privateKey, mnemonic, hdPath string, 
 				return nil, common.Address{}, fmt.Errorf("failed to parse the private key: %w", err)
 			}
 		}
+		// we force the curve to Geth's instance, because Geth does an equality check in the nocgo version:
+		// https://github.com/ethereum/go-ethereum/blob/723b1e36ad6a9e998f06f74cc8b11d51635c6402/crypto/signature_nocgo.go#L82
+		privKey.PublicKey.Curve = crypto.S256()
 		fromAddress = crypto.PubkeyToAddress(privKey.PublicKey)
 		signer = func(chainID *big.Int) SignerFn {
 			s := PrivateKeySignerFn(privKey, chainID)

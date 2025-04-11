@@ -2,13 +2,13 @@ package sources
 
 import (
 	"context"
-
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
@@ -16,6 +16,8 @@ import (
 type RollupClient struct {
 	rpc client.RPC
 }
+
+var _ apis.RollupNodeClient = (*RollupClient)(nil)
 
 func NewRollupClient(rpc client.RPC) *RollupClient {
 	return &RollupClient{rpc}
@@ -69,6 +71,16 @@ func (r *RollupClient) SequencerActive(ctx context.Context) (bool, error) {
 
 func (r *RollupClient) PostUnsafePayload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) error {
 	return r.rpc.CallContext(ctx, nil, "admin_postUnsafePayload", payload)
+}
+
+func (r *RollupClient) OverrideLeader(ctx context.Context) error {
+	return r.rpc.CallContext(ctx, nil, "admin_overrideLeader")
+}
+
+func (r *RollupClient) ConductorEnabled(ctx context.Context) (bool, error) {
+	var result bool
+	err := r.rpc.CallContext(ctx, &result, "admin_conductorEnabled")
+	return result, err
 }
 
 func (r *RollupClient) SetLogLevel(ctx context.Context, lvl slog.Level) error {

@@ -1,52 +1,81 @@
-# op-chain-ops
+# `op-chain-ops`
 
-This package contains utilities for working with chain state.
+Issues: [monorepo](https://github.com/ethereum-optimism/optimism/issues?q=is%3Aissue%20state%3Aopen%20label%3AA-op-chain-ops)
 
-## op-version-check
+Pull requests: [monorepo](https://github.com/ethereum-optimism/optimism/pulls?q=is%3Aopen+is%3Apr+label%3AA-op-chain-ops)
 
-A CLI tool for determining which contract versions are deployed for
-chains in a superchain. It will output a JSON file that contains a
-list of each chain's versions. It is assumed that the implementations
-that are being checked have already been deployed and their contract
-addresses exist inside of the `superchain-registry` repository. It is
-also assumed that the semantic version file in the `superchain-registry`
-has been updated. The tool will output the semantic versioning to
-determine which contract versions are deployed.
+This is an OP Stack utils package for chain operations,
+ranging from EVM tooling to chain generation.
 
-### Configuration
+Packages:
+- `clients`: utils for chain checker tools.
+- `cmd`: upgrade validation tools, debug tools, attributes formatting tools.
+- `crossdomain`: utils to interact with L1 <> L2 cross-domain messages.
+- `devkeys`: generate OP-Stack development keys from a common source.
+- `foundry`: utils to read foundry artifacts.
+- `genesis`: OP Stack genesis-configs generation, pre OPCM.
+- `interopgen`: interop test-chain genesis config generation.
+- `script`: foundry-like solidity scripting environment in Go.
+- `solc`: utils to read solidity compiler artifacts data.
+- `srcmap`: utils for solidity source-maps loaded from foundry-artifacts.
 
-#### L1 RPC URL
+## Usage
 
-The L1 RPC URL is used to determine which superchain to target. All
-L2s that are not based on top of the L1 chain that corresponds to the
-L1 RPC URL are filtered out from being checked. It also is used to
-double check that the data in the `superchain-registry` is correct.
+Upgrade checks and chain utilities can be found in `./cmd`:
+these are not officially published in OP-Stack monorepo releases,
+but can be built from source.
 
-#### Chain IDs
-
-A list of L2 chain IDs can be passed that will be used to filter which
-L2 chains will have their versions checked. Omitting this argument will
-result in all chains in the superchain being considered.
-
-#### Deploy Config
-
-The path to the `deploy-config` directory in the contracts package.
-Since multiple L2 networks may be considered in the check, the `deploy-config`
-directory must be passed and then the particular deploy config files will
-be read out of the directory as needed.
-
-#### Outfile
-
-The file that the versions should be written to. If omitted, the file
-will be written to stdout
-
-#### Usage
-
-It can be built and run using the [Makefile](./Makefile) `op-version-check`
-target. Run `make op-version-check` to create a binary in [./bin/op-version-check](./bin/op-version-check)
-that can be executed, optionally providing the `--l1-rpc-url`, `--chain-ids`,
-`--superchain-target`, and `--outfile` flags.
-
-```sh
-./bin/op-version-check
+Utils:
+```text
+cmd/
+├── check-canyon                  - Checks for Canyon network upgrade
+├── check-delta                   - Checks for Delta network upgrade
+├── check-deploy-config           - Checks of the (legacy) Deploy Config
+├── check-derivation              - Check that transactions can be confirmed and safety can be consolidated
+├── check-ecotone                 - Checks for Ecotone network upgrade
+├── check-fjord                   - Checks for Fjord network upgrade
+├── check-prestate                - Checks a fault proof absolute prestate's chain compatibility. e.g: go run cmd/check-prestate --prestate-hash <HASH>
+├── deposit-hash                  - Determine the L2 deposit tx hash, based on log event(s) emitted by a L1 tx.
+├── ecotone-scalar                - Translate between serialized and human-readable L1 fee scalars (introduced in Ecotone upgrade).
+├── op-simulate                   - Simulate a remote transaction in a local Geth EVM for block-processing debugging.
+├── protocol-version              - Translate between serialized and human-readable protocol versions.
+├── receipt-reference-builder     - Receipt data collector for pre-Canyon deposit-nonce metadata.
+└── unclaimed-credits             - Utility to inspect credits of resolved fault-proof games.
 ```
+
+## Product
+
+### Optimization target
+
+Provide tools for chain-setup and inspection tools for deployment, upgrades, and testing.
+This includes `op-deployer`, OP-Contracts-Manager (OPCM), upgrade-check scripts, and `op-e2e` testing.
+
+### Vision
+
+- Upgrade checking scripts should become more extensible, and maybe be bundled in a single check-script CLI tool.
+- Serve chain inspection/processing building-blocks for test setups and tooling like op-deployer.
+- `interopgen` is meant to be temporary, and consolidate with `op-deployer`.
+  This change depends largely on the future of `op-e2e`,
+  where system tests may be replaced in favor of tests set up by `op-e2e`.
+- `script` is a Go version of `forge` script, with hooks and customization options,
+  for better integration into tooling such as `op-deployer`.
+  This package should evolve to serve testing and `op-deployer` as best as possible,
+  it is not a full `forge` replacement.
+- `genesis` will shrink over time, as more of the genesis responsibilities are automated away into
+  the protocol through system-transactions, and tooling such as `op-deployer` and OPCM.
+
+## Design principles
+
+- Provide high-quality bindings to accelerate testing and tooling development.
+- Minimal introspection into fragile solidity details.
+
+There is a trade-off here in how minimal the tooling is:
+generally we aim to provide dedicated functionality in Go for better integration,
+if the target tool is significant Go service of its own.
+If not, then `op-chain-ops` should not be extended, and the design of the target tool should be adjusted instead.
+
+## Testing
+
+- Upgrade checks are tested against live devnet/testnet upgrades, before testing against mainnet.
+  Testing here is aimed to expand to end-to-end testing, for better integrated test feedback of these tools.
+- Utils have unit-test coverage of their own, and are used widely in end-to-end testing itself.

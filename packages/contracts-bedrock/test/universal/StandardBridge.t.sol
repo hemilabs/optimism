@@ -25,7 +25,7 @@ contract StandardBridgeTester is StandardBridge {
 
 /// @title LegacyMintable
 /// @notice Simple implementation of the legacy OptimismMintableERC20.
-contract LegacyMintable is ERC20, ILegacyMintableERC20 {
+contract LegacyMintable is ERC20 {
     constructor(string memory _name, string memory _ticker) ERC20(_name, _ticker) { }
 
     function l1Token() external pure returns (address) {
@@ -78,7 +78,7 @@ contract StandardBridge_Stateless_Test is CommonTest {
     ///         This function should return true for both modern and legacy
     ///         OptimismMintableERC20 tokens and false for any accounts that
     ///         do not implement the interface.
-    function test_isOptimismMintableERC20_succeeds() external {
+    function test_isOptimismMintableERC20_succeeds() external view {
         // Both the modern and legacy mintable tokens should return true
         assertTrue(bridge.isOptimismMintableERC20(address(mintable)));
         assertTrue(bridge.isOptimismMintableERC20(address(legacy)));
@@ -111,7 +111,7 @@ contract StandardBridge_Stateless_Test is CommonTest {
     }
 
     /// @notice The bridge by default should be unpaused.
-    function test_paused_succeeds() external {
+    function test_paused_succeeds() external view {
         assertFalse(bridge.paused());
     }
 }
