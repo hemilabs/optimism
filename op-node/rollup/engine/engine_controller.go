@@ -119,6 +119,7 @@ func NewEngineController(engine ExecEngine, log log.Logger, metrics derive.Metri
 		bssNotifierCh: make(chan *bssNotification, 10),
 		bssClient:     bssClient,
 		emitter:       emitter,
+		chainSpec:     rollup.NewChainSpec(rollupCfg),
 	}
 
 	// XXX see if there is a better place to start this goroutine.
