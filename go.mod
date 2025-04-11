@@ -281,6 +281,7 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
+// This release keeps breaking Go builds. Stop that.
 // Excludes to work around genproto conflicts between op-geth and heminetwork dependencies
 exclude (
 	google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8
