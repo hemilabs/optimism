@@ -120,6 +120,7 @@ func NewEngineController(engine ExecEngine, log log.Logger, metrics derive.Metri
 		bssClient:     bssClient,
 		emitter:       emitter,
 		chainSpec:     rollup.NewChainSpec(rollupCfg),
+		syncCfg:       syncCfg,
 	}
 
 	// XXX see if there is a better place to start this goroutine.
