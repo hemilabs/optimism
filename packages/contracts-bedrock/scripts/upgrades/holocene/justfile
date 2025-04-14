@@ -14,6 +14,8 @@ run deploy-config-path output-folder-path="$(pwd)/output/" *args='':
 
   mkdir -p {{output-folder-path}}
 
+  cat {{deploy-config-path}}
+
   # Run the deployment.
   docker run \
     --rm \
