@@ -43,6 +43,7 @@ reqenv() {
 #   - The user does not respond with 'y'
 #   - The process is interrupted
 prompt() {
+  echo "skipping prompt"
   # read -p "$1 [Y/n] " -n 1 -r
   # echo
   # if [[ ! $REPLY =~ ^[Yy]$ ]]; then
