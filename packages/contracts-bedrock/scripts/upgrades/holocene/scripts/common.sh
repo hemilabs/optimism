@@ -43,12 +43,12 @@ reqenv() {
 #   - The user does not respond with 'y'
 #   - The process is interrupted
 prompt() {
-  read -p "$1 [Y/n] " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    [[ "$0" = "${BASH_SOURCE[0]}" ]] && exit 1 || return 1
-    exit 1
-  fi
+  # read -p "$1 [Y/n] " -n 1 -r
+  # echo
+  # if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  #   [[ "$0" = "${BASH_SOURCE[0]}" ]] && exit 1 || return 1
+  #   exit 1
+  # fi
 }
 
 # fetch_standard_address
