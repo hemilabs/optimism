@@ -32,6 +32,10 @@ RUN git clone --depth 1 https://github.com/clabby/msup.git && \
 RUN curl --proto '=https' --tlsv1.2 -sSf -L https://foundry.paradigm.xyz | bash
 ENV PATH="/root/.foundry/bin:${PATH}"
 
+RUN foundryup
+
+RUN forge --version
+
 # Set the working directory
 WORKDIR /app
 
