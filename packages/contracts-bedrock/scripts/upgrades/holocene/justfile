@@ -15,7 +15,7 @@ run deploy-config-path output-folder-path="$(pwd)/output/" *args='':
   mkdir -p {{output-folder-path}}
 
   # Run the deployment.
-  docker run -it \
+  docker run \
     --rm \
     -v {{output-folder-path}}:/output \
     -v {{deploy-config-path}}:/app/packages/contracts-bedrock/deploy-config/deploy-config.json \
