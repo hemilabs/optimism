@@ -14,13 +14,11 @@ run deploy-config-path output-folder-path="$(pwd)/output/" *args='':
 
   mkdir -p {{output-folder-path}}
 
-  cat {{deploy-config-path}} > /tmp/deploy-config-blah.json
-
   # Run the deployment.
   docker run \
     --rm \
     -v {{output-folder-path}}:/output \
-    -v /tmp/deploy-config-blah.json:/app/packages/contracts-bedrock/deploy-config/deploy-config.json \
+    -v {{deploy-config-path}}:/app/packages/contracts-bedrock/deploy-config/deploy-config.json \
     --env-file=.env \
     --network=e2e_e2e \
     op-holocene-upgrade:local {{args}}
