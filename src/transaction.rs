@@ -1,4 +1,3 @@
-//! Contains the `[OpTransaction]` type and its implementation.
 pub mod abstraction;
 pub mod deposit;
 pub mod error;
