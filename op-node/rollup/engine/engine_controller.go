@@ -43,6 +43,7 @@ type ExecEngine interface {
 	NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
+	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
 }
 
 type bssNotification struct {
@@ -160,9 +161,7 @@ func (e *EngineController) BackupUnsafeL2Head() eth.L2BlockRef {
 }
 
 func (e *EngineController) IsEngineSyncing() bool {
-	result := e.syncStatus == syncStatusWillStartEL || e.syncStatus == syncStatusStartedEL || e.syncStatus == syncStatusFinishedELButNotFinalized
-	e.log.Debug("sync status is %s, result is %t", e.syncStatus, result)
-	return result
+	return e.syncStatus == syncStatusWillStartEL || e.syncStatus == syncStatusStartedEL || e.syncStatus == syncStatusFinishedELButNotFinalized
 }
 
 // Setters
@@ -394,6 +393,16 @@ func (e *EngineController) TryUpdateEngine(ctx context.Context) error {
 		e.SetBackupUnsafeL2Head(eth.L2BlockRef{}, false)
 	}
 	e.needFCUCall = false
+
+	envelope, err := e.engine.PayloadByHash(ctx, e.unsafeHead.Hash)
+	if err != nil {
+		return derive.NewTemporaryError(fmt.Errorf("could not get envelope for hash %s", e.unsafeHead.Hash))
+	}
+
+	if err := e.parseAndNotifyBSS(envelope); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -479,6 +488,33 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	}
 
 	e.log.Info("checking whether to notify bss from InsertUnsafePayload")
+
+	if err := e.parseAndNotifyBSS(bn); err != nil {
+		return err
+	}
+
+	if fcRes.PayloadStatus.Status == eth.ExecutionValid {
+		e.emitter.Emit(ForkchoiceUpdateEvent{
+			UnsafeL2Head:    e.unsafeHead,
+			SafeL2Head:      e.safeHead,
+			FinalizedL2Head: e.finalizedHead,
+		})
+	}
+
+	totalTime := fcu2Finish.Sub(newPayloadStart)
+	e.log.Info("Inserted new L2 unsafe block (synchronous)",
+		"hash", envelope.ExecutionPayload.BlockHash,
+		"number", uint64(envelope.ExecutionPayload.BlockNumber),
+		"newpayload_time", common.PrettyDuration(newPayloadFinish.Sub(newPayloadStart)),
+		"fcu2_time", common.PrettyDuration(fcu2Finish.Sub(fcu2Start)),
+		"total_time", common.PrettyDuration(totalTime),
+		"mgas", float64(envelope.ExecutionPayload.GasUsed)/1000000,
+		"mgasps", float64(envelope.ExecutionPayload.GasUsed)*1000/float64(totalTime))
+
+	return nil
+}
+
+func (e *EngineController) parseAndNotifyBSS(envelope *eth.ExecutionPayloadEnvelope) error {
 	bn := &bssNotification{
 		unsafeL2: *envelope.ExecutionPayload,
 	}
@@ -515,25 +551,6 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	default:
 		e.log.Warn("BSS notifier channel full, dropping event...")
 	}
-	if fcRes.PayloadStatus.Status == eth.ExecutionValid {
-		e.emitter.Emit(ForkchoiceUpdateEvent{
-			UnsafeL2Head:    e.unsafeHead,
-			SafeL2Head:      e.safeHead,
-			FinalizedL2Head: e.finalizedHead,
-		})
-	}
-
-	totalTime := fcu2Finish.Sub(newPayloadStart)
-	e.log.Info("Inserted new L2 unsafe block (synchronous)",
-		"hash", envelope.ExecutionPayload.BlockHash,
-		"number", uint64(envelope.ExecutionPayload.BlockNumber),
-		"newpayload_time", common.PrettyDuration(newPayloadFinish.Sub(newPayloadStart)),
-		"fcu2_time", common.PrettyDuration(fcu2Finish.Sub(fcu2Start)),
-		"total_time", common.PrettyDuration(totalTime),
-		"mgas", float64(envelope.ExecutionPayload.GasUsed)/1000000,
-		"mgasps", float64(envelope.ExecutionPayload.GasUsed)*1000/float64(totalTime))
-
-	return nil
 }
 
 // shouldTryBackupUnsafeReorg checks reorging(restoring) unsafe head to backupUnsafeHead is needed.
