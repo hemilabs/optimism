@@ -399,7 +399,7 @@ func (e *EngineController) TryUpdateEngine(ctx context.Context) error {
 		return derive.NewTemporaryError(fmt.Errorf("could not get envelope for hash %s", e.unsafeHead.Hash))
 	}
 
-	if err := e.parseAndNotifyBSS(envelope); err != nil {
+	if err := e.parseAndNotifyBSS(ctx, envelope); err != nil {
 		return err
 	}
 
@@ -489,7 +489,7 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 
 	e.log.Info("checking whether to notify bss from InsertUnsafePayload")
 
-	if err := e.parseAndNotifyBSS(bn); err != nil {
+	if err := e.parseAndNotifyBSS(ctx, envelope); err != nil {
 		return err
 	}
 
@@ -514,7 +514,7 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	return nil
 }
 
-func (e *EngineController) parseAndNotifyBSS(envelope *eth.ExecutionPayloadEnvelope) error {
+func (e *EngineController) parseAndNotifyBSS(ctx context.Context, *eth.ExecutionPayloadEnvelope) error {
 	bn := &bssNotification{
 		unsafeL2: *envelope.ExecutionPayload,
 	}
@@ -551,6 +551,8 @@ func (e *EngineController) parseAndNotifyBSS(envelope *eth.ExecutionPayloadEnvel
 	default:
 		e.log.Warn("BSS notifier channel full, dropping event...")
 	}
+
+	return nil
 }
 
 // shouldTryBackupUnsafeReorg checks reorging(restoring) unsafe head to backupUnsafeHead is needed.
