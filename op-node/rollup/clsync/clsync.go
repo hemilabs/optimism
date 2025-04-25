@@ -134,6 +134,7 @@ func (eq *CLSync) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {
 // If not abort or pop, the tip is ready to process.
 func (eq *CLSync) fromQueue(x engine.ForkchoiceUpdateEvent) (pop bool, abort bool) {
 	if eq.unsafePayloads.Len() == 0 {
+		eq.log.Debug("unsafePayloads len is 0")
 		return false, true
 	}
 	firstEnvelope := eq.unsafePayloads.Peek()
@@ -159,6 +160,7 @@ func (eq *CLSync) fromQueue(x engine.ForkchoiceUpdateEvent) (pop bool, abort boo
 			eq.log.Info("skipping unsafe payload, since it does not build onto the existing unsafe chain", "safe", x.SafeL2Head.ID(), "unsafe", x.UnsafeL2Head.ID(), "unsafe_payload", first.ID())
 			return true, false
 		}
+		eq.log.Debug("ParentHash UnsafeL2Head mismatch")
 		return false, true // rollup-node should try something different if it cannot process the first unsafe payload
 	}
 
