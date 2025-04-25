@@ -109,12 +109,14 @@ func (eq *CLSync) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {
 
 	for {
 		pop, abort := eq.fromQueue(x)
+		eq.log.Debug("received abort from queue, exiting")
 		if abort {
 			return
 		}
 		if pop {
 			eq.unsafePayloads.Pop()
 		} else {
+			eq.log.Debug("could not pop, breaking loop")
 			break
 		}
 	}
