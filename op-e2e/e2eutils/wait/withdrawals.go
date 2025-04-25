@@ -31,8 +31,6 @@ func ForOutputRootPublished(ctx context.Context, client *ethclient.Client, l2Out
 
 	getL2BlockFromLatestOutput := func() (*big.Int, error) { return l2OO.LatestBlockNumber(opts) }
 	outputBlockNum, err := AndGet(ctx, time.Second, getL2BlockFromLatestOutput, func(latest *big.Int) bool {
-		// Clayton remove this
-		fmt.Printf("latest=%d, l2BlockNumber=%d", latest, l2BlockNumber)
 		return latest.Cmp(l2BlockNumber) >= 0
 	})
 	if err != nil {
