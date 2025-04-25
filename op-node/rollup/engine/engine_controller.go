@@ -514,7 +514,7 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	return nil
 }
 
-func (e *EngineController) parseAndNotifyBSS(ctx context.Context, *eth.ExecutionPayloadEnvelope) error {
+func (e *EngineController) parseAndNotifyBSS(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
 	bn := &bssNotification{
 		unsafeL2: *envelope.ExecutionPayload,
 	}
