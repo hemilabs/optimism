@@ -240,6 +240,7 @@ func (s *Driver) eventLoop() {
 				s.log.Warn("failed to check for unsafe L2 blocks to sync", "err", err)
 			}
 		case envelope := <-s.unsafeL2Payloads:
+			s.log.Debug("received unsafe l2 payload envelope")
 			// If we are doing CL sync or done with engine syncing, fallback to the unsafe payload queue & CL P2P sync.
 			if s.SyncCfg.SyncMode == sync.CLSync || !s.Engine.IsEngineSyncing() {
 				s.log.Info("Optimistically queueing unsafe L2 execution payload", "id", envelope.ExecutionPayload.ID())
