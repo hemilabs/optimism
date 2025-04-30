@@ -1,8 +1,6 @@
 module github.com/ethereum-optimism/optimism
 
-go 1.24
-
-toolchain go1.24.2
+go 1.24.2
 
 require (
 	github.com/BurntSushi/toml v1.4.0
