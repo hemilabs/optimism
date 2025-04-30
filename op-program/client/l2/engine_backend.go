@@ -1,7 +1,6 @@
 package l2
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -21,7 +20,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/hemilabs/heminetwork/hemi"
 )
 
 var (
@@ -256,8 +254,4 @@ func (o *OracleBackedL2Chain) SetFinalized(header *types.Header) {
 
 func (o *OracleBackedL2Chain) SetSafe(header *types.Header) {
 	o.safe = header
-}
-
-func (o *OracleBackedL2Chain) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
-	return nil, errors.New("unsupported")
 }
