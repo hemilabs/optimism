@@ -2,7 +2,7 @@ module github.com/ethereum-optimism/optimism
 
 go 1.24
 
-toolchain go1.23.8
+toolchain go1.24.2
 
 require (
 	github.com/BurntSushi/toml v1.4.0
@@ -289,7 +289,7 @@ exclude (
 	google.golang.org/genproto v0.0.0-20181202183823-bd91e49a0898
 	google.golang.org/genproto v0.0.0-20190306203927-b5d61aea6440
 	google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
-
+	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 )
 
 replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250506143223-73c4e4de3b53
