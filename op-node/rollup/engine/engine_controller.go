@@ -44,6 +44,7 @@ type ExecEngine interface {
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
 	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
+	NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error)
 }
 
 type bssNotification struct {
@@ -680,7 +681,7 @@ func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotific
 		return err
 	}
 
-	l2Keystone := &hemi.L2Keystone{
+	l2Keystone := hemi.L2Keystone{
 		Version:            0x01,
 		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
 		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
@@ -696,8 +697,14 @@ func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotific
 		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
 		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
 
-	err = e.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
+	// err = e.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
+	// if err != nil {
+	// 	return err
+	// }
+
+	_, err = e.engine.NewKeystone(ctx, l2Keystone)
 	if err != nil {
+		e.log.Warn("Failed to insert keystone in opgeth", "err", err)
 		return err
 	}
 

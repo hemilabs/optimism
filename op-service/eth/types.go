@@ -694,6 +694,22 @@ func (v *Uint64String) UnmarshalText(b []byte) error {
 	return nil
 }
 
+type InserteystoneStatus string
+
+const (
+	// given keystone is valid
+	KeystoneValid ExecutePayloadStatus = "VALID"
+	// given keystone is invalid
+	KeystoneInvalid ExecutePayloadStatus = "INVALID"
+)
+
+type KeystoneStatus struct {
+	// the result of the keystone insertion
+	Status InserteystoneStatus `json:"status"`
+	// additional details on the result (optional field)
+	ValidationError string `json:"validationError,omitempty"`
+}
+
 type EngineAPIMethod string
 
 const (
@@ -708,6 +724,8 @@ const (
 	GetPayloadV2 EngineAPIMethod = "engine_getPayloadV2"
 	GetPayloadV3 EngineAPIMethod = "engine_getPayloadV3"
 	GetPayloadV4 EngineAPIMethod = "engine_getPayloadV4"
+
+	NewKeystone EngineAPIMethod = "engine_newKeystone"
 )
 
 // StorageKey is a marshaling utility for hex-encoded storage keys, which can have leading 0s and are
