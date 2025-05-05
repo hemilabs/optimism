@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     jq \
+    libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
