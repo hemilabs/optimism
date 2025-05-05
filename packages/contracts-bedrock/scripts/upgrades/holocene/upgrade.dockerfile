@@ -1,9 +1,7 @@
 # Use a base image with necessary tools
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 ARG REV
-
-ENV DEBIAN_FRONTEND=noninteractive
 
 # Install required packages
 RUN apt-get update && apt-get install -y \
@@ -12,7 +10,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     jq \
-    libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
