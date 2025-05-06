@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+// Contracts
+import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+
+// Libraries
 import { ERC165Checker } from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
-import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { SafeCall } from "src/libraries/SafeCall.sol";
-import { IOptimismMintableERC20, ILegacyMintableERC20 } from "src/universal/IOptimismMintableERC20.sol";
-import { CrossDomainMessenger } from "src/universal/CrossDomainMessenger.sol";
-import { OptimismMintableERC20 } from "src/universal/OptimismMintableERC20.sol";
-import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import { EOA } from "src/libraries/EOA.sol";
+
+// Interfaces
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IOptimismMintableERC20 } from "interfaces/universal/IOptimismMintableERC20.sol";
+import { ILegacyMintableERC20 } from "interfaces/legacy/ILegacyMintableERC20.sol";
+import { ICrossDomainMessenger } from "interfaces/universal/ICrossDomainMessenger.sol";
 
 /// @custom:upgradeable
 /// @title StandardBridge
@@ -37,7 +42,7 @@ abstract contract StandardBridge is Initializable {
 
     /// @notice Messenger contract on this domain.
     /// @custom:network-specific
-    CrossDomainMessenger public messenger;
+    ICrossDomainMessenger public messenger;
 
     /// @notice Corresponding bridge on the other domain.
     /// @custom:network-specific
@@ -98,7 +103,7 @@ abstract contract StandardBridge is Initializable {
     ///         calling code within their constructors, but also doesn't really matter since we're
     ///         just trying to prevent users accidentally depositing with smart contract wallets.
     modifier onlyEOA() {
-        require(!Address.isContract(msg.sender), "StandardBridge: function can only be called from an EOA");
+        require(EOA.isSenderEOA(), "StandardBridge: function can only be called from an EOA");
         _;
     }
 
@@ -115,7 +120,7 @@ abstract contract StandardBridge is Initializable {
     /// @param _messenger   Contract for CrossDomainMessenger on this network.
     /// @param _otherBridge Contract for the other StandardBridge contract.
     function __StandardBridge_init(
-        CrossDomainMessenger _messenger,
+        ICrossDomainMessenger _messenger,
         StandardBridge _otherBridge
     )
         internal
@@ -133,7 +138,7 @@ abstract contract StandardBridge is Initializable {
     ///         Public getter is legacy and will be removed in the future. Use `messenger` instead.
     /// @return Contract of the messenger on this domain.
     /// @custom:legacy
-    function MESSENGER() external view returns (CrossDomainMessenger) {
+    function MESSENGER() external view returns (ICrossDomainMessenger) {
         return messenger;
     }
 
@@ -178,10 +183,7 @@ abstract contract StandardBridge is Initializable {
         _initiateBridgeETH(msg.sender, _to, msg.value, _minGasLimit, _extraData);
     }
 
-    /// @notice Sends ERC20 tokens to the sender's address on the other chain. Note that if the
-    ///         ERC20 token on the other chain does not recognize the local token as the correct
-    ///         pair token, the ERC20 bridge will fail and the tokens will be returned to sender on
-    ///         this chain.
+    /// @notice Sends ERC20 tokens to the sender's address on the other chain.
     /// @param _localToken  Address of the ERC20 on this chain.
     /// @param _remoteToken Address of the corresponding token on the remote chain.
     /// @param _amount      Amount of local tokens to deposit.
@@ -203,10 +205,7 @@ abstract contract StandardBridge is Initializable {
         _initiateBridgeERC20(_localToken, _remoteToken, msg.sender, msg.sender, _amount, _minGasLimit, _extraData);
     }
 
-    /// @notice Sends ERC20 tokens to a receiver's address on the other chain. Note that if the
-    ///         ERC20 token on the other chain does not recognize the local token as the correct
-    ///         pair token, the ERC20 bridge will fail and the tokens will be returned to sender on
-    ///         this chain.
+    /// @notice Sends ERC20 tokens to a receiver's address on the other chain.
     /// @param _localToken  Address of the ERC20 on this chain.
     /// @param _remoteToken Address of the corresponding token on the remote chain.
     /// @param _to          Address of the receiver.
@@ -288,7 +287,7 @@ abstract contract StandardBridge is Initializable {
                 "StandardBridge: wrong remote token for Optimism Mintable ERC20 local token"
             );
 
-            OptimismMintableERC20(_localToken).mint(_to, _amount);
+            IOptimismMintableERC20(_localToken).mint(_to, _amount);
         } else {
             deposits[_localToken][_remoteToken] = deposits[_localToken][_remoteToken] - _amount;
             IERC20(_localToken).safeTransfer(_to, _amount);
@@ -349,13 +348,15 @@ abstract contract StandardBridge is Initializable {
     )
         internal
     {
+        require(msg.value == 0, "StandardBridge: cannot send value");
+
         if (_isOptimismMintableERC20(_localToken)) {
             require(
                 _isCorrectTokenPair(_localToken, _remoteToken),
                 "StandardBridge: wrong remote token for Optimism Mintable ERC20 local token"
             );
 
-            OptimismMintableERC20(_localToken).burn(_from, _amount);
+            IOptimismMintableERC20(_localToken).burn(_from, _amount);
         } else {
             IERC20(_localToken).safeTransferFrom(_from, address(this), _amount);
             deposits[_localToken][_remoteToken] = deposits[_localToken][_remoteToken] + _amount;
@@ -378,7 +379,7 @@ abstract contract StandardBridge is Initializable {
                 _to,
                 _amount,
                 _extraData
-                ),
+            ),
             _minGasLimit: _minGasLimit
         });
     }

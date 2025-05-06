@@ -12,12 +12,11 @@ var (
 	validL1EthRpc           = "http://localhost:8545"
 	validGameFactoryAddress = common.Address{0x23}
 	validRollupRpc          = "http://localhost:8555"
+	validSupervisorRpc      = "http://localhost:8999"
 )
 
 func validConfig() Config {
-	cfg := NewConfig(validGameFactoryAddress, validL1EthRpc)
-	cfg.RollupRpc = validRollupRpc
-	return cfg
+	return NewConfig(validGameFactoryAddress, validL1EthRpc, validRollupRpc)
 }
 
 func TestValidConfigIsValid(t *testing.T) {
@@ -36,8 +35,29 @@ func TestGameFactoryAddressRequired(t *testing.T) {
 	require.ErrorIs(t, config.Check(), ErrMissingGameFactoryAddress)
 }
 
-func TestRollupRpcRequired(t *testing.T) {
+func TestRollupRpcOrSupervisorRpcRequired(t *testing.T) {
 	config := validConfig()
 	config.RollupRpc = ""
-	require.ErrorIs(t, config.Check(), ErrMissingRollupRpc)
+	config.SupervisorRpc = ""
+	require.ErrorIs(t, config.Check(), ErrMissingRollupAndSupervisorRpc)
+}
+
+func TestRollupRpcNotRequiredWhenSupervisorRpcSet(t *testing.T) {
+	config := validConfig()
+	config.RollupRpc = ""
+	config.SupervisorRpc = validSupervisorRpc
+	require.NoError(t, config.Check())
+}
+
+func TestSupervisorRpcNotRequiredWhenRollupRpcSet(t *testing.T) {
+	config := validConfig()
+	config.RollupRpc = validRollupRpc
+	config.SupervisorRpc = ""
+	require.NoError(t, config.Check())
+}
+
+func TestMaxConcurrencyRequired(t *testing.T) {
+	config := validConfig()
+	config.MaxConcurrency = 0
+	require.ErrorIs(t, config.Check(), ErrMissingMaxConcurrency)
 }

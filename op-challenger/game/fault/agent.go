@@ -30,20 +30,21 @@ type Responder interface {
 
 type ClaimLoader interface {
 	GetAllClaims(ctx context.Context, block rpcblock.Block) ([]types.Claim, error)
+	IsL2BlockNumberChallenged(ctx context.Context, block rpcblock.Block) (bool, error)
 }
 
 type Agent struct {
-	metrics      metrics.Metricer
-	systemClock  clock.Clock
-	l1Clock      types.ClockReader
-	solver       *solver.GameSolver
-	loader       ClaimLoader
-	responder    Responder
-	selective    bool
-	claimants    []common.Address
-	maxDepth     types.Depth
-	gameDuration time.Duration
-	log          log.Logger
+	metrics          metrics.Metricer
+	systemClock      clock.Clock
+	l1Clock          types.ClockReader
+	solver           *solver.GameSolver
+	loader           ClaimLoader
+	responder        Responder
+	selective        bool
+	claimants        []common.Address
+	maxDepth         types.Depth
+	maxClockDuration time.Duration
+	log              log.Logger
 }
 
 func NewAgent(
@@ -52,7 +53,7 @@ func NewAgent(
 	l1Clock types.ClockReader,
 	loader ClaimLoader,
 	maxDepth types.Depth,
-	gameDuration time.Duration,
+	maxClockDuration time.Duration,
 	trace types.TraceAccessor,
 	responder Responder,
 	log log.Logger,
@@ -60,17 +61,17 @@ func NewAgent(
 	claimants []common.Address,
 ) *Agent {
 	return &Agent{
-		metrics:      m,
-		systemClock:  systemClock,
-		l1Clock:      l1Clock,
-		solver:       solver.NewGameSolver(maxDepth, trace),
-		loader:       loader,
-		responder:    responder,
-		selective:    selective,
-		claimants:    claimants,
-		maxDepth:     maxDepth,
-		gameDuration: gameDuration,
-		log:          log,
+		metrics:          m,
+		systemClock:      systemClock,
+		l1Clock:          l1Clock,
+		solver:           solver.NewGameSolver(maxDepth, trace),
+		loader:           loader,
+		responder:        responder,
+		selective:        selective,
+		claimants:        claimants,
+		maxDepth:         maxDepth,
+		maxClockDuration: maxClockDuration,
+		log:              log,
 	}
 }
 
@@ -84,6 +85,14 @@ func (a *Agent) Act(ctx context.Context) error {
 	defer func() {
 		a.metrics.RecordGameActTime(a.systemClock.Since(start).Seconds())
 	}()
+
+	if challenged, err := a.loader.IsL2BlockNumberChallenged(ctx, rpcblock.Latest); err != nil {
+		return fmt.Errorf("failed to check if L2 block number already challenged: %w", err)
+	} else if challenged {
+		a.log.Debug("Skipping game with already challenged L2 block number")
+		return nil
+	}
+
 	game, err := a.newGameFromContracts(ctx)
 	if err != nil {
 		return fmt.Errorf("create game from contracts: %w", err)
@@ -105,11 +114,13 @@ func (a *Agent) Act(ctx context.Context) error {
 
 func (a *Agent) performAction(ctx context.Context, wg *sync.WaitGroup, action types.Action) {
 	defer wg.Done()
-	actionLog := a.log.New("action", action.Type, "is_attack", action.IsAttack, "parent", action.ParentIdx)
+	actionLog := a.log.New("action", action.Type)
 	if action.Type == types.ActionTypeStep {
 		containsOracleData := action.OracleData != nil
 		isLocal := containsOracleData && action.OracleData.IsLocal
 		actionLog = actionLog.New(
+			"is_attack", action.IsAttack,
+			"parent", action.ParentClaim.ContractIndex,
 			"prestate", common.Bytes2Hex(action.PreState),
 			"proof", common.Bytes2Hex(action.ProofData),
 			"containsOracleData", containsOracleData,
@@ -118,8 +129,8 @@ func (a *Agent) performAction(ctx context.Context, wg *sync.WaitGroup, action ty
 		if action.OracleData != nil {
 			actionLog = actionLog.New("oracleKey", common.Bytes2Hex(action.OracleData.OracleKey))
 		}
-	} else {
-		actionLog = actionLog.New("value", action.Value)
+	} else if action.Type == types.ActionTypeMove {
+		actionLog = actionLog.New("is_attack", action.IsAttack, "parent", action.ParentClaim.ContractIndex, "value", action.Value)
 	}
 
 	switch action.Type {
@@ -127,6 +138,8 @@ func (a *Agent) performAction(ctx context.Context, wg *sync.WaitGroup, action ty
 		a.metrics.RecordGameMove()
 	case types.ActionTypeStep:
 		a.metrics.RecordGameStep()
+	case types.ActionTypeChallengeL2BlockNumber:
+		a.metrics.RecordGameL2Challenge()
 	}
 	actionLog.Info("Performing action")
 	err := a.responder.PerformAction(ctx, action)
@@ -140,6 +153,11 @@ func (a *Agent) performAction(ctx context.Context, wg *sync.WaitGroup, action ty
 func (a *Agent) tryResolve(ctx context.Context) bool {
 	if err := a.resolveClaims(ctx); err != nil {
 		a.log.Error("Failed to resolve claims", "err", err)
+		return false
+	}
+	if a.selective {
+		// Never resolve games in selective mode as it won't unlock any bonds for us.
+		// Assume the game is still in progress or the player wouldn't have told us to act.
 		return false
 	}
 	status, err := a.responder.CallResolve(ctx)
@@ -163,11 +181,14 @@ func (a *Agent) tryResolveClaims(ctx context.Context) error {
 	if len(claims) == 0 {
 		return errNoResolvableClaims
 	}
-	maxChessTime := a.gameDuration / 2
 
 	var resolvableClaims []uint64
 	for _, claim := range claims {
-		if claim.ChessTime(a.l1Clock.Now()) <= maxChessTime {
+		var parent types.Claim
+		if !claim.IsRootPosition() {
+			parent = claims[claim.ParentContractIndex]
+		}
+		if types.ChessClock(a.l1Clock.Now(), claim, parent) <= a.maxClockDuration {
 			continue
 		}
 		if a.selective {

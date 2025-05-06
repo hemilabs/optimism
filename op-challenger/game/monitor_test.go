@@ -49,7 +49,7 @@ func TestMonitorGames(t *testing.T) {
 					}:
 						headerNotSent = false
 					case <-ctx.Done():
-						break
+						return
 					default:
 					}
 				}
@@ -97,13 +97,12 @@ func TestMonitorGames(t *testing.T) {
 					Number: big.NewInt(1),
 				}:
 				case <-ctx.Done():
-					break
+					return
 				default:
 				}
 				// Just to avoid a tight loop
 				time.Sleep(100 * time.Millisecond)
 			}
-			require.NoError(t, waitErr)
 			mockHeadSource.SetErr(fmt.Errorf("eth subscribe test error"))
 			cancel()
 		}()
@@ -156,11 +155,6 @@ func setupMonitorTest(
 ) (*gameMonitor, *stubGameSource, *stubScheduler, *mockNewHeadSource, *stubPreimageScheduler, *mockScheduler) {
 	logger := testlog.Logger(t, log.LevelDebug)
 	source := &stubGameSource{}
-	i := uint64(1)
-	fetchBlockNum := func(ctx context.Context) (uint64, error) {
-		i++
-		return i, nil
-	}
 	sched := &stubScheduler{}
 	preimages := &stubPreimageScheduler{}
 	mockHeadSource := &mockNewHeadSource{}
@@ -173,7 +167,6 @@ func setupMonitorTest(
 		preimages,
 		time.Duration(0),
 		stubClaimer,
-		fetchBlockNum,
 		allowedGames,
 		mockHeadSource,
 	)
@@ -204,13 +197,17 @@ func (m *mockNewHeadSource) SetErr(err error) {
 	m.err = err
 }
 
-func (m *mockNewHeadSource) EthSubscribe(
+func (m *mockNewHeadSource) Subscribe(
 	_ context.Context,
+	namespace string,
 	ch any,
 	_ ...any,
 ) (ethereum.Subscription, error) {
 	m.Lock()
 	defer m.Unlock()
+	if namespace != "eth" {
+		return nil, fmt.Errorf("only support eth RPC subscription, got %q", namespace)
+	}
 	errChan := make(chan error)
 	m.sub = &mockSubscription{errChan, (ch).(chan<- *ethtypes.Header)}
 	if m.err != nil {

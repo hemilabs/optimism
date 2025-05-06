@@ -6,12 +6,13 @@ import (
 	"math/big"
 	"net"
 	"slices"
+	gosync "sync"
 	"testing"
 	"time"
 
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/sync"
-	"github.com/libp2p/go-libp2p"
+	libp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -126,12 +127,15 @@ func TestP2PFull(t *testing.T) {
 
 	conns := make(chan network.Conn, 1)
 	hostA := nodeA.Host()
+	var once gosync.Once
 	hostA.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, conn network.Conn) {
-			conns <- conn
+			once.Do(func() {
+				conns <- conn
+			})
 		}})
 
-	backend := NewP2PAPIBackend(nodeA, logA, nil)
+	backend := NewP2PAPIBackend(nodeA, logA)
 	srv := rpc.NewServer()
 	require.NoError(t, srv.RegisterName("opp2p", backend))
 	client := rpc.DialInProc(srv)
@@ -183,8 +187,19 @@ func TestP2PFull(t *testing.T) {
 
 	require.Error(t, p2pClientA.BlockAddr(ctx, nil))
 	require.Error(t, p2pClientA.UnblockAddr(ctx, nil))
+
 	require.Error(t, p2pClientA.BlockSubnet(ctx, nil))
+	require.Error(t, p2pClientA.BlockSubnet(ctx, &net.IPNet{}))
+	require.Error(t, p2pClientA.BlockSubnet(ctx, &net.IPNet{Mask: net.IPMask{255, 255, 0, 0}}))
+	require.Error(t, p2pClientA.BlockSubnet(ctx, &net.IPNet{IP: net.IP{0, 0, 0, 1}}))
+	require.NoError(t, p2pClientA.BlockSubnet(ctx, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 0, 0}}))
+
 	require.Error(t, p2pClientA.UnblockSubnet(ctx, nil))
+	require.Error(t, p2pClientA.UnblockSubnet(ctx, &net.IPNet{}))
+	require.Error(t, p2pClientA.UnblockSubnet(ctx, &net.IPNet{Mask: net.IPMask{255, 255, 0, 0}}))
+	require.Error(t, p2pClientA.UnblockSubnet(ctx, &net.IPNet{IP: net.IP{0, 0, 0, 1}}))
+	require.NoError(t, p2pClientA.UnblockSubnet(ctx, &net.IPNet{IP: net.IP{0, 0, 0, 1}, Mask: net.IPMask{255, 255, 0, 0}}))
+
 	require.Error(t, p2pClientA.BlockPeer(ctx, ""))
 	require.Error(t, p2pClientA.UnblockPeer(ctx, ""))
 	require.Error(t, p2pClientA.ProtectPeer(ctx, ""))

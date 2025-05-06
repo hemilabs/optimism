@@ -2,11 +2,14 @@
 pragma solidity >=0.7.0 <0.9.0;
 
 import "forge-std/Test.sol";
-import { LibSort } from "solady/utils/LibSort.sol";
-import { Safe as GnosisSafe, OwnerManager, ModuleManager, GuardManager } from "safe-contracts/Safe.sol";
-import { SafeProxyFactory as GnosisSafeProxyFactory } from "safe-contracts/proxies/SafeProxyFactory.sol";
+import { LibSort } from "@solady/utils/LibSort.sol";
+import { GnosisSafe } from "safe-contracts/GnosisSafe.sol";
+import { OwnerManager } from "safe-contracts/base/OwnerManager.sol";
+import { ModuleManager } from "safe-contracts/base/ModuleManager.sol";
+import { GuardManager } from "safe-contracts/base/GuardManager.sol";
+import { GnosisSafeProxyFactory } from "safe-contracts/proxies/GnosisSafeProxyFactory.sol";
 import { Enum } from "safe-contracts/common/Enum.sol";
-import { SignMessageLib } from "safe-contracts/libraries/SignMessageLib.sol";
+import { SignMessageLib } from "safe-contracts/examples/libraries/SignMessage.sol";
 import "./CompatibilityFallbackHandler_1_3_0.sol";
 
 // Tools to simplify testing Safe contracts
@@ -51,7 +54,7 @@ struct SafeInstance {
 
 library Sort {
     /// @dev Sorts an array of addresses in place
-    function sort(address[] memory arr) public pure returns (address[] memory) {
+    function sort(address[] memory arr) internal pure returns (address[] memory) {
         LibSort.sort(arr);
         return arr;
     }
@@ -59,9 +62,9 @@ library Sort {
 
 library SafeTestLib {
     /// @dev The address of foundry's VM contract
-    address constant VM_ADDR = 0x7109709ECfa91a80626fF3989D68f67F5b1DD12D;
+    address internal constant VM_ADDR = 0x7109709ECfa91a80626fF3989D68f67F5b1DD12D;
     /// @dev The address of the first owner in the linked list of owners
-    address constant SENTINEL_OWNERS = address(0x1);
+    address internal constant SENTINEL_OWNERS = address(0x1);
 
     /// @dev Get the address from a private key
     function getAddr(uint256 pk) internal pure returns (address) {
@@ -257,7 +260,7 @@ library SafeTestLib {
             instance,
             address(instance.safe),
             0,
-            abi.encodeWithSelector(ModuleManager.enableModule.selector, module),
+            abi.encodeCall(ModuleManager.enableModule, (module)),
             Enum.Operation.Call,
             0,
             0,
@@ -286,7 +289,7 @@ library SafeTestLib {
             instance,
             address(instance.safe),
             0,
-            abi.encodeWithSelector(ModuleManager.disableModule.selector, prevModule, module),
+            abi.encodeCall(ModuleManager.disableModule, (prevModule, module)),
             Enum.Operation.Call,
             0,
             0,
@@ -305,7 +308,7 @@ library SafeTestLib {
             instance,
             address(instance.safe),
             0,
-            abi.encodeWithSelector(GuardManager.setGuard.selector, guard),
+            abi.encodeCall(GuardManager.setGuard, (guard)),
             Enum.Operation.Call,
             0,
             0,
@@ -323,7 +326,7 @@ library SafeTestLib {
             instance: instance,
             to: signMessageLib,
             value: 0,
-            data: abi.encodeWithSelector(SignMessageLib.signMessage.selector, data),
+            data: abi.encodeCall(SignMessageLib.signMessage, (data)),
             operation: Enum.Operation.DelegateCall,
             safeTxGas: 0,
             baseGas: 0,
@@ -347,21 +350,13 @@ library SafeTestLib {
 
     /// @dev Adds a new owner to the safe
     function changeThreshold(SafeInstance memory instance, uint256 threshold) internal {
-        execTransaction(
-            instance,
-            address(instance.safe),
-            0,
-            abi.encodeWithSelector(OwnerManager.changeThreshold.selector, threshold)
-        );
+        execTransaction(instance, address(instance.safe), 0, abi.encodeCall(OwnerManager.changeThreshold, (threshold)));
     }
 
     /// @dev Adds a new owner to the safe
     function addOwnerWithThreshold(SafeInstance memory instance, address owner, uint256 threshold) internal {
         execTransaction(
-            instance,
-            address(instance.safe),
-            0,
-            abi.encodeWithSelector(OwnerManager.addOwnerWithThreshold.selector, owner, threshold)
+            instance, address(instance.safe), 0, abi.encodeCall(OwnerManager.addOwnerWithThreshold, (owner, threshold))
         );
     }
 
@@ -370,10 +365,7 @@ library SafeTestLib {
     function removeOwner(SafeInstance memory instance, address prevOwner, address owner, uint256 threshold) internal {
         prevOwner = prevOwner > address(0) ? prevOwner : SafeTestLib.getPrevOwner(instance, owner);
         execTransaction(
-            instance,
-            address(instance.safe),
-            0,
-            abi.encodeWithSelector(OwnerManager.removeOwner.selector, prevOwner, owner, threshold)
+            instance, address(instance.safe), 0, abi.encodeCall(OwnerManager.removeOwner, (prevOwner, owner, threshold))
         );
     }
 
@@ -382,10 +374,7 @@ library SafeTestLib {
     function swapOwner(SafeInstance memory instance, address prevOwner, address oldOwner, address newOwner) internal {
         prevOwner = prevOwner > address(0) ? prevOwner : SafeTestLib.getPrevOwner(instance, oldOwner);
         execTransaction(
-            instance,
-            address(instance.safe),
-            0,
-            abi.encodeWithSelector(OwnerManager.swapOwner.selector, prevOwner, oldOwner, newOwner)
+            instance, address(instance.safe), 0, abi.encodeCall(OwnerManager.swapOwner, (prevOwner, oldOwner, newOwner))
         );
     }
 
@@ -496,6 +485,8 @@ contract SafeTestTools {
 
     SafeInstance[] internal instances;
 
+    uint256 internal saltNonce = uint256(keccak256(bytes("SAFE TEST")));
+
     /// @dev can be called to reinitialize the singleton, proxyFactory and handler. Useful for forking.
     function _initializeSafeTools() internal {
         singleton = new GnosisSafe();
@@ -503,6 +494,12 @@ contract SafeTestTools {
         handler = new CompatibilityFallbackHandler();
     }
 
+    /// @dev Sets up a Safe with the given parameters.
+    /// @param ownerPKs The public keys of the owners.
+    /// @param threshold The threshold for the Safe.
+    /// @param initialBalance The initial balance of the Safe.
+    /// @param advancedParams The advanced parameters for the Safe initialization.
+    /// @return The initialized Safe instance.
     function _setupSafe(
         uint256[] memory ownerPKs,
         uint256 threshold,
@@ -526,16 +523,18 @@ contract SafeTestTools {
 
         bytes memory initData = advancedParams.initData.length > 0
             ? advancedParams.initData
-            : abi.encodeWithSelector(
-                GnosisSafe.setup.selector,
-                owners,
-                threshold,
-                advancedParams.setupModulesCall_to,
-                advancedParams.setupModulesCall_data,
-                advancedParams.includeFallbackHandler ? address(handler) : address(0),
-                advancedParams.refundToken,
-                advancedParams.refundAmount,
-                advancedParams.refundReceiver
+            : abi.encodeCall(
+                GnosisSafe.setup,
+                (
+                    owners,
+                    threshold,
+                    advancedParams.setupModulesCall_to,
+                    advancedParams.setupModulesCall_data,
+                    advancedParams.includeFallbackHandler ? address(handler) : address(0),
+                    advancedParams.refundToken,
+                    advancedParams.refundAmount,
+                    advancedParams.refundReceiver
+                )
             );
 
         DeployedSafe safe0 = DeployedSafe(
@@ -557,6 +556,11 @@ contract SafeTestTools {
         return instance0;
     }
 
+    /// @dev Sets up a Safe with the given parameters.
+    /// @param ownerPKs The public keys of the owners.
+    /// @param threshold The threshold for the Safe.
+    /// @param initialBalance The initial balance of the Safe.
+    /// @return The initialized Safe instance.
     function _setupSafe(
         uint256[] memory ownerPKs,
         uint256 threshold,
@@ -572,7 +576,7 @@ contract SafeTestTools {
             AdvancedSafeInitParams({
                 includeFallbackHandler: true,
                 initData: "",
-                saltNonce: 0,
+                saltNonce: saltNonce,
                 setupModulesCall_to: address(0),
                 setupModulesCall_data: "",
                 refundAmount: 0,
@@ -582,6 +586,10 @@ contract SafeTestTools {
         );
     }
 
+    /// @dev Sets up a Safe with the given parameters.
+    /// @param ownerPKs The public keys of the owners.
+    /// @param threshold The threshold for the Safe.
+    /// @return The initialized Safe instance.
     function _setupSafe(uint256[] memory ownerPKs, uint256 threshold) public returns (SafeInstance memory) {
         return _setupSafe(
             ownerPKs,
@@ -590,7 +598,7 @@ contract SafeTestTools {
             AdvancedSafeInitParams({
                 includeFallbackHandler: true,
                 initData: "",
-                saltNonce: 0,
+                saltNonce: saltNonce,
                 setupModulesCall_to: address(0),
                 setupModulesCall_data: "",
                 refundAmount: 0,
@@ -600,6 +608,8 @@ contract SafeTestTools {
         );
     }
 
+    /// @dev Sets up a Safe with default parameters. The SafeInstance will have 3 owners and a threshold of 2.
+    /// @return The initialized Safe instance.
     function _setupSafe() public returns (SafeInstance memory) {
         (, uint256[] memory defaultPKs) = SafeTestLib.makeAddrsAndKeys("default", 3);
 
@@ -610,7 +620,7 @@ contract SafeTestTools {
             AdvancedSafeInitParams({
                 includeFallbackHandler: true,
                 initData: "",
-                saltNonce: uint256(keccak256(bytes("SAFE TEST"))),
+                saltNonce: saltNonce,
                 setupModulesCall_to: address(0),
                 setupModulesCall_data: "",
                 refundAmount: 0,
@@ -620,6 +630,8 @@ contract SafeTestTools {
         );
     }
 
+    /// @dev Returns the first Safe instance.
+    /// @return The first Safe instance.
     function getSafe() public view returns (SafeInstance memory) {
         if (instances.length == 0) {
             revert("SAFETESTTOOLS: Test Safe has not been deployed, use _setupSafe() calling safe()");
@@ -627,6 +639,9 @@ contract SafeTestTools {
         return instances[0];
     }
 
+    /// @dev Returns the Safe instance with the given address.
+    /// @param _safe The address of the Safe instance to return.
+    /// @return The Safe instance with the given address.
     function getSafe(address _safe) public view returns (SafeInstance memory) {
         for (uint256 i; i < instances.length; ++i) {
             if (address(instances[i].safe) == _safe) return instances[i];

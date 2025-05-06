@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { Test } from "forge-std/Test.sol";
 import { StdUtils } from "forge-std/StdUtils.sol";
 import { Vm } from "forge-std/Vm.sol";
 import { SafeCall } from "src/libraries/SafeCall.sol";
@@ -30,7 +29,7 @@ contract SafeCall_Succeeds_Invariants is InvariantTest {
     ///
     ///                   If the check for remaining gas in `SafeCall.callWithMinGas` passes, the
     ///                   subcontext of the call below it must be provided at least `minGas` gas.
-    function invariant_callWithMinGas_alwaysForwardsMinGas_succeeds() public {
+    function invariant_callWithMinGas_alwaysForwardsMinGas_succeeds() public view {
         assertEq(actor.numCalls(), 0, "no failed calls allowed");
     }
 
@@ -63,7 +62,7 @@ contract SafeCall_Fails_Invariants is InvariantTest {
     ///                   If there is not enough gas in the callframe to ensure that
     ///                   `callWithMinGas` can provide the specified minimum gas limit
     ///                   to the subcontext of the call, then `callWithMinGas` must revert.
-    function invariant_callWithMinGas_neverForwardsMinGas_reverts() public {
+    function invariant_callWithMinGas_neverForwardsMinGas_reverts() public view {
         assertEq(actor.numCalls(), 0, "no successful calls allowed");
     }
 
@@ -103,10 +102,7 @@ contract SafeCaller_Actor is StdUtils {
 
         vm.expectCallMinGas(to, value, minGas, hex"");
         bool success = SafeCall.call(
-            msg.sender,
-            gas,
-            value,
-            abi.encodeWithSelector(SafeCall_Succeeds_Invariants.performSafeCallMinGas.selector, to, minGas)
+            msg.sender, gas, value, abi.encodeCall(SafeCall_Succeeds_Invariants.performSafeCallMinGas, (to, minGas))
         );
 
         if (success && FAILS) numCalls++;

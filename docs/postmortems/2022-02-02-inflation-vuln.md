@@ -5,7 +5,7 @@ It also details our response, lessons learned, and subsequent changes to our pro
 
 ## Incident Summary
 
-A vulnerability in Optimism’s fork of [Geth](https://github.com/ethereum/go-ethereum) (which we refer to as [L2Geth](../../l2geth/README.md)) was reported
+A vulnerability in Optimism’s fork of [Geth](https://github.com/ethereum/go-ethereum) (which we refer to as [L2Geth](https://github.com/ethereum-optimism/optimism-legacy/blob/8205f678b7b4ac4625c2afe351b9c82ffaa2e795/l2geth/README.md)) was reported
 to us by [Jay Freeman](https://twitter.com/saurik) (AKA saurik) on February 2nd, 2022. If exploited,
 this vulnerability would allow anyone to mint an unbounded amount of ETH on Optimism.
 
@@ -58,7 +58,7 @@ timeline and activities were as follows:
 (Using github handles as identifiers)
 
 - 2022-02-02 1625: smartcontracts receives an e-mail from saurik claiming to have found a critical
-  issue in L2Geth. E-mail was sent to securityoptimism.io.
+  issue in L2Geth. E-mail was sent to security@optimism.io.
 - 2022-02-02 X: saurik messaged smartcontracts on Discord to make sure we checked the e-mail since
   he knew we had a prior problem where security advisories went to spam.
 - 2022-02-02 1650: Huddle begins in #security on Slack.
@@ -133,7 +133,7 @@ the PR (36,311 lines added, 47,430 lines removed), which consumed the attention 
 engineering team with a sense of urgency for several months.
 
 An additional factor contributing to this bug was the significant complexity of the
-[L2Geth](https://github.com/ethereum-optimism/optimism/tree/master/l2geth) codebase, which is a fork
+[L2Geth](https://github.com/ethereum-optimism/optimism-legacy/blob/8205f678b7b4ac4625c2afe351b9c82ffaa2e795/l2geth) codebase, which is a fork
 of [Geth](https://github.com/ethereum/go-ethereum). Geth itself is already a very complex codebase.
 The changes introduced to L2Geth in order to support the OVM made it much more complex, such that
 very few people properly understood how it worked.
@@ -270,7 +270,7 @@ still there are opportunities to better document the proper process internally.
 ### Public disclosure
 
 Moving forward, we will adopt a process similar to the Geth team’s
-[silent patch policy](https://geth.ethereum.org/docs/vulnerabilities/vulnerabilities#why-silent-patches).
+[silent patch policy](https://geth.ethereum.org/docs/developers/geth-developer/disclosures#why-silent-patches).
 
 This means that we reserve the right to hide the fix, and delay the public announcement. We also
 reserve the right to directly notify a subset of downstream users prior to the public announcement.

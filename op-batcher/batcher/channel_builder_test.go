@@ -3,6 +3,7 @@ package batcher
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"math/rand"
@@ -22,9 +23,21 @@ import (
 
 const latestL1BlockOrigin = 10
 
-var defaultTestRollupConfig = rollup.Config{
+var defaultTestRollupConfig = &rollup.Config{
 	Genesis:   rollup.Genesis{L2: eth.BlockID{Number: 0}},
 	L2ChainID: big.NewInt(1234),
+}
+
+// newChannelBuilder creates a new channel builder or returns an error if the
+// channel out could not be created.
+// it acts as a factory for either a span or singular channel out
+func newChannelBuilder(cfg ChannelConfig, rollupCfg *rollup.Config, latestL1OriginBlockNum uint64) (*ChannelBuilder, error) {
+	co, err := NewChannelOut(cfg, rollupCfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating channel out: %w", err)
+	}
+
+	return NewChannelBuilderWithChannelOut(cfg, rollupCfg, latestL1OriginBlockNum, co), nil
 }
 
 // addMiniBlock adds a minimal valid L2 block to the channel builder using the
@@ -62,8 +75,8 @@ func newMiniL2BlockWithNumberParentAndL1Information(numTx int, l2Number *big.Int
 		Difficulty: common.Big0,
 		Number:     big.NewInt(l1Number),
 		Time:       blockTime,
-	}, nil, nil, nil, trie.NewStackTrie(nil))
-	l1InfoTx, err := derive.L1InfoDeposit(&defaultTestRollupConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block), blockTime)
+	}, nil, nil, trie.NewStackTrie(nil), types.DefaultBlockConfig)
+	l1InfoTx, err := derive.L1InfoDeposit(defaultTestRollupConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block), blockTime)
 	if err != nil {
 		panic(err)
 	}
@@ -77,23 +90,24 @@ func newMiniL2BlockWithNumberParentAndL1Information(numTx int, l2Number *big.Int
 	return types.NewBlock(&types.Header{
 		Number:     l2Number,
 		ParentHash: parent,
-	}, txs, nil, nil, trie.NewStackTrie(nil))
+	}, &types.Body{Transactions: txs}, nil, trie.NewStackTrie(nil), types.DefaultBlockConfig)
 }
 
 // addTooManyBlocks adds blocks to the channel until it hits an error,
 // which is presumably ErrTooManyRLPBytes.
-func addTooManyBlocks(cb *ChannelBuilder) error {
+func addTooManyBlocks(cb *ChannelBuilder, blockCount int) (int, error) {
 	rng := rand.New(rand.NewSource(1234))
 	t := time.Now()
-	for i := 0; i < 10_000; i++ {
+
+	for i := 0; i < blockCount; i++ {
 		block := dtest.RandomL2BlockWithChainIdAndTime(rng, 1000, defaultTestRollupConfig.L2ChainID, t.Add(time.Duration(i)*time.Second))
 		_, err := cb.AddBlock(block)
 		if err != nil {
-			return err
+			return i + 1, err
 		}
 	}
 
-	return nil
+	return blockCount, nil
 }
 
 // FuzzDurationTimeoutZeroMaxChannelDuration ensures that when whenever the MaxChannelDuration
@@ -105,7 +119,7 @@ func FuzzDurationTimeoutZeroMaxChannelDuration(f *testing.F) {
 	f.Fuzz(func(t *testing.T, l1BlockNum uint64) {
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.MaxChannelDuration = 0
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 		cb.timeout = 0
 		cb.updateDurationTimeout(l1BlockNum)
@@ -128,7 +142,7 @@ func FuzzChannelBuilder_DurationZero(f *testing.F) {
 		// Create the channel builder
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.MaxChannelDuration = maxChannelDuration
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 
 		// Whenever the timeout is set to 0, the channel builder should have a duration timeout
@@ -155,7 +169,7 @@ func FuzzDurationTimeoutMaxChannelDuration(f *testing.F) {
 		// Create the channel builder
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.MaxChannelDuration = maxChannelDuration
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 
 		// Whenever the timeout is greater than the l1BlockNum,
@@ -189,7 +203,7 @@ func FuzzChannelCloseTimeout(f *testing.F) {
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.ChannelTimeout = channelTimeout
 		channelConfig.SubSafetyMargin = subSafetyMargin
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 
 		// Check the timeout
@@ -217,7 +231,7 @@ func FuzzChannelZeroCloseTimeout(f *testing.F) {
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.ChannelTimeout = channelTimeout
 		channelConfig.SubSafetyMargin = subSafetyMargin
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 
 		// Check the timeout
@@ -244,12 +258,12 @@ func FuzzSeqWindowClose(f *testing.F) {
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.SeqWindowSize = seqWindowSize
 		channelConfig.SubSafetyMargin = subSafetyMargin
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 
 		// Check the timeout
 		cb.timeout = timeout
-		cb.updateSwTimeout(&derive.SingularBatch{EpochNum: rollup.Epoch(epochNum)})
+		cb.updateSwTimeout(epochNum)
 		calculatedTimeout := epochNum + seqWindowSize - subSafetyMargin
 		if timeout > calculatedTimeout && calculatedTimeout != 0 {
 			cb.CheckTimeout(calculatedTimeout)
@@ -272,12 +286,12 @@ func FuzzSeqWindowZeroTimeoutClose(f *testing.F) {
 		channelConfig := defaultTestChannelConfig()
 		channelConfig.SeqWindowSize = seqWindowSize
 		channelConfig.SubSafetyMargin = subSafetyMargin
-		cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+		cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 		require.NoError(t, err)
 
 		// Check the timeout
 		cb.timeout = 0
-		cb.updateSwTimeout(&derive.SingularBatch{EpochNum: rollup.Epoch(epochNum)})
+		cb.updateSwTimeout(epochNum)
 		calculatedTimeout := epochNum + seqWindowSize - subSafetyMargin
 		cb.CheckTimeout(calculatedTimeout)
 		if cb.timeout != 0 {
@@ -292,6 +306,7 @@ func TestChannelBuilderBatchType(t *testing.T) {
 		f    func(t *testing.T, batchType uint)
 	}{
 		{"ChannelBuilder_MaxRLPBytesPerChannel", ChannelBuilder_MaxRLPBytesPerChannel},
+		{"ChannelBuilder_MaxRLPBytesPerFjord", ChannelBuilder_MaxRLPBytesPerChannelFjord},
 		{"ChannelBuilder_OutputFramesMaxFrameIndex", ChannelBuilder_OutputFramesMaxFrameIndex},
 		{"ChannelBuilder_AddBlock", ChannelBuilder_AddBlock},
 		{"ChannelBuilder_PendingFrames_TotalFrames", ChannelBuilder_PendingFrames_TotalFrames},
@@ -319,7 +334,7 @@ func TestChannelBuilder_NextFrame(t *testing.T) {
 	channelConfig := defaultTestChannelConfig()
 
 	// Create a new channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 
 	// Mock the internals of `ChannelBuilder.outputFrame`
@@ -339,7 +354,7 @@ func TestChannelBuilder_NextFrame(t *testing.T) {
 		},
 		data: expectedBytes,
 	}
-	cb.PushFrames(frameData)
+	cb.frames = append(cb.frames, frameData)
 
 	// There should only be 1 frame in the channel builder
 	require.Equal(t, 1, cb.PendingFrames())
@@ -354,13 +369,13 @@ func TestChannelBuilder_NextFrame(t *testing.T) {
 	require.PanicsWithValue(t, "no next frame", func() { cb.NextFrame() })
 }
 
-// TestChannelBuilder_OutputWrongFramePanic tests that a panic is thrown when a frame is pushed with an invalid frame id
+// TestChannelBuilder_OutputWrongFramePanic tests that a panic is thrown when we try to rewind the cursor with an invalid frame id
 func ChannelBuilder_OutputWrongFramePanic(t *testing.T, batchType uint) {
 	channelConfig := defaultTestChannelConfig()
 	channelConfig.BatchType = batchType
 
 	// Construct a channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 
 	// Mock the internals of `ChannelBuilder.outputFrame`
@@ -368,7 +383,7 @@ func ChannelBuilder_OutputWrongFramePanic(t *testing.T, batchType uint) {
 	// the type of batch does not matter here because we are using it to construct a broken frame
 	c, err := channelConfig.CompressorConfig.NewCompressor()
 	require.NoError(t, err)
-	co, err := derive.NewSingularChannelOut(c)
+	co, err := derive.NewSingularChannelOut(c, rollup.NewChainSpec(defaultTestRollupConfig))
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	fn, err := co.OutputFrame(&buf, channelConfig.MaxFrameSize)
@@ -376,7 +391,7 @@ func ChannelBuilder_OutputWrongFramePanic(t *testing.T, batchType uint) {
 
 	// The frame push should panic since we constructed a new channel out
 	// so the channel out id won't match
-	require.PanicsWithValue(t, "wrong channel", func() {
+	require.PanicsWithValue(t, "cannot rewind to unknown frame", func() {
 		frame := frameData{
 			id: frameID{
 				chID:        co.ID(),
@@ -384,7 +399,7 @@ func ChannelBuilder_OutputWrongFramePanic(t *testing.T, batchType uint) {
 			},
 			data: buf.Bytes(),
 		}
-		cb.PushFrames(frame)
+		cb.RewindFrameCursor(frame)
 	})
 }
 
@@ -396,7 +411,7 @@ func TestChannelBuilder_OutputFrames(t *testing.T) {
 	channelConfig.InitNoneCompressor()
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 	require.False(t, cb.IsFull())
 	require.Equal(t, 0, cb.PendingFrames())
@@ -413,7 +428,8 @@ func TestChannelBuilder_OutputFrames(t *testing.T) {
 
 	// Check how many ready bytes
 	require.Greater(t, uint64(cb.co.ReadyBytes()+derive.FrameV0OverHeadSize), channelConfig.MaxFrameSize)
-	require.Equal(t, 0, cb.PendingFrames())
+
+	require.Equal(t, 0, cb.PendingFrames()) // always 0 because non compressor
 
 	// The channel should not be full
 	// but we want to output the frames for testing anyways
@@ -430,14 +446,26 @@ func TestChannelBuilder_OutputFrames(t *testing.T) {
 }
 
 func TestChannelBuilder_OutputFrames_SpanBatch(t *testing.T) {
+	for _, algo := range derive.CompressionAlgos {
+		t.Run("ChannelBuilder_OutputFrames_SpanBatch_"+algo.String(), func(t *testing.T) {
+			ChannelBuilder_OutputFrames_SpanBatch(t, algo) // to fill faster for brotli
+		})
+	}
+}
+
+func ChannelBuilder_OutputFrames_SpanBatch(t *testing.T, algo derive.CompressionAlgo) {
 	channelConfig := defaultTestChannelConfig()
 	channelConfig.MaxFrameSize = 20 + derive.FrameV0OverHeadSize
-	channelConfig.TargetNumFrames = 5
+	if algo.IsBrotli() {
+		channelConfig.TargetNumFrames = 3
+	} else {
+		channelConfig.TargetNumFrames = 5
+	}
 	channelConfig.BatchType = derive.SpanBatchType
-	channelConfig.InitRatioCompressor(1)
+	channelConfig.InitRatioCompressor(1, algo)
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 	require.False(t, cb.IsFull())
 	require.Equal(t, 0, cb.PendingFrames())
@@ -453,6 +481,10 @@ func TestChannelBuilder_OutputFrames_SpanBatch(t *testing.T) {
 	for {
 		err = addMiniBlock(cb)
 		if err == nil {
+			if cb.IsFull() {
+				// this happens when the data exactly fills the channel
+				break
+			}
 			require.False(t, cb.IsFull())
 			// There should be no ready bytes until the channel is full
 			require.Equal(t, cb.co.ReadyBytes(), 0)
@@ -485,17 +517,62 @@ func TestChannelBuilder_OutputFrames_SpanBatch(t *testing.T) {
 func ChannelBuilder_MaxRLPBytesPerChannel(t *testing.T, batchType uint) {
 	t.Parallel()
 	channelConfig := defaultTestChannelConfig()
-	channelConfig.MaxFrameSize = derive.MaxRLPBytesPerChannel * 2
+	chainSpec := rollup.NewChainSpec(defaultTestRollupConfig)
+	channelConfig.MaxFrameSize = chainSpec.MaxRLPBytesPerChannel(latestL1BlockOrigin) * 2
 	channelConfig.InitNoneCompressor()
 	channelConfig.BatchType = batchType
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 
 	// Add a block that overflows the [ChannelOut]
-	err = addTooManyBlocks(cb)
+	_, err = addTooManyBlocks(cb, 10_000)
 	require.ErrorIs(t, err, derive.ErrTooManyRLPBytes)
+}
+
+// ChannelBuilder_MaxRLPBytesPerChannelFjord tests the [ChannelBuilder.OutputFrames]
+// function works as intended postFjord.
+// strategy:
+// check preFjord how many blocks to fill the channel
+// then check postFjord w/ double the amount of blocks
+func ChannelBuilder_MaxRLPBytesPerChannelFjord(t *testing.T, batchType uint) {
+	t.Parallel()
+	channelConfig := defaultTestChannelConfig()
+	chainSpec := rollup.NewChainSpec(defaultTestRollupConfig)
+	channelConfig.MaxFrameSize = chainSpec.MaxRLPBytesPerChannel(latestL1BlockOrigin) * 2
+	channelConfig.InitNoneCompressor()
+	channelConfig.BatchType = batchType
+
+	// Construct the channel builder
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	require.NoError(t, err)
+
+	// Count how many a block that overflows the [ChannelOut]
+	blockCount, err := addTooManyBlocks(cb, 10_000)
+	require.ErrorIs(t, err, derive.ErrTooManyRLPBytes)
+
+	// Create a new channel builder with fjord fork
+	now := time.Now()
+	fjordTime := uint64(now.Add(-1 * time.Second).Unix())
+	rollupConfig := &rollup.Config{
+		Genesis:   rollup.Genesis{L2: eth.BlockID{Number: 0}},
+		L2ChainID: big.NewInt(1234),
+		FjordTime: &fjordTime,
+	}
+
+	chainSpec = rollup.NewChainSpec(rollupConfig)
+	channelConfig.MaxFrameSize = chainSpec.MaxRLPBytesPerChannel(uint64(now.Unix())) * 2
+	channelConfig.InitNoneCompressor()
+	channelConfig.BatchType = batchType
+
+	cb, err = newChannelBuilder(channelConfig, rollupConfig, latestL1BlockOrigin)
+	require.NoError(t, err)
+
+	// try add double the amount of block, it should not error
+	_, err = addTooManyBlocks(cb, 2*blockCount)
+
+	require.NoError(t, err)
 }
 
 // ChannelBuilder_OutputFramesMaxFrameIndex tests the [ChannelBuilder.OutputFrames]
@@ -504,7 +581,7 @@ func ChannelBuilder_OutputFramesMaxFrameIndex(t *testing.T, batchType uint) {
 	channelConfig := defaultTestChannelConfig()
 	channelConfig.MaxFrameSize = derive.FrameV0OverHeadSize + 1
 	channelConfig.TargetNumFrames = math.MaxUint16 + 1
-	channelConfig.InitRatioCompressor(.1)
+	channelConfig.InitRatioCompressor(.1, derive.Zlib)
 	channelConfig.BatchType = batchType
 
 	rng := rand.New(rand.NewSource(123))
@@ -512,7 +589,7 @@ func ChannelBuilder_OutputFramesMaxFrameIndex(t *testing.T, batchType uint) {
 	// Continuously add blocks until the max frame index is reached
 	// This should cause the [ChannelBuilder.OutputFrames] function
 	// to error
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 	require.False(t, cb.IsFull())
 	require.Equal(t, 0, cb.PendingFrames())
@@ -546,9 +623,9 @@ func TestChannelBuilder_FullShadowCompressor(t *testing.T) {
 		TargetNumFrames: 1,
 		BatchType:       derive.SpanBatchType,
 	}
-	cfg.InitShadowCompressor()
 
-	cb, err := NewChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
+	cfg.InitShadowCompressor(derive.Zlib)
+	cb, err := newChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(err)
 
 	rng := rand.New(rand.NewSource(420))
@@ -562,11 +639,11 @@ func TestChannelBuilder_FullShadowCompressor(t *testing.T) {
 
 	require.NoError(cb.OutputFrames())
 
-	require.True(cb.HasFrame())
+	require.True(cb.HasPendingFrame())
 	f := cb.NextFrame()
 	require.Less(len(f.data), int(cfg.MaxFrameSize)) // would fail without fix, full frame
 
-	require.False(cb.HasFrame(), "no leftover frame expected") // would fail without fix
+	require.False(cb.HasPendingFrame(), "no leftover frame expected") // would fail without fix
 }
 
 func ChannelBuilder_AddBlock(t *testing.T, batchType uint) {
@@ -577,10 +654,10 @@ func ChannelBuilder_AddBlock(t *testing.T, batchType uint) {
 	channelConfig.MaxFrameSize = 20 + derive.FrameV0OverHeadSize
 	channelConfig.TargetNumFrames = 2
 	// Configure the Input Threshold params so we observe a full channel
-	channelConfig.InitRatioCompressor(1)
+	channelConfig.InitRatioCompressor(1, derive.Zlib)
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 
 	// Add a nonsense block to the channel builder
@@ -593,8 +670,8 @@ func ChannelBuilder_AddBlock(t *testing.T, batchType uint) {
 		expectedInputBytes = 47
 	}
 	require.Equal(t, expectedInputBytes, cb.co.InputBytes())
-	require.Equal(t, 1, len(cb.blocks))
-	require.Equal(t, 0, len(cb.frames))
+	require.Equal(t, 1, cb.blocks.Len())
+	require.Equal(t, 0, cb.frames.Len())
 	require.True(t, cb.IsFull())
 
 	// Since the channel output is full, the next call to AddBlock
@@ -606,7 +683,7 @@ func TestChannelBuilder_CheckTimeout(t *testing.T) {
 	channelConfig := defaultTestChannelConfig()
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 
 	// Assert timeout is setup correctly
@@ -631,7 +708,7 @@ func TestChannelBuilder_CheckTimeoutZeroMaxChannelDuration(t *testing.T) {
 	channelConfig.MaxChannelDuration = 0
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(channelConfig, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 
 	// Without a max channel duration, timeout should not be set
@@ -654,7 +731,7 @@ func TestChannelBuilder_FramePublished(t *testing.T) {
 	cfg.SubSafetyMargin = 100
 
 	// Construct the channel builder
-	cb, err := NewChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 	require.Equal(t, latestL1BlockOrigin+cfg.MaxChannelDuration, cb.timeout)
 
@@ -671,7 +748,7 @@ func TestChannelBuilder_FramePublished(t *testing.T) {
 }
 
 func TestChannelBuilder_LatestL1Origin(t *testing.T) {
-	cb, err := NewChannelBuilder(defaultTestChannelConfig(), defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(defaultTestChannelConfig(), defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(t, err)
 	require.Equal(t, eth.BlockID{}, cb.LatestL1Origin())
 
@@ -692,6 +769,72 @@ func TestChannelBuilder_LatestL1Origin(t *testing.T) {
 	require.Equal(t, uint64(2), cb.LatestL1Origin().Number)
 }
 
+func TestChannelBuilder_OldestL1Origin(t *testing.T) {
+	cb, err := newChannelBuilder(defaultTestChannelConfig(), defaultTestRollupConfig, latestL1BlockOrigin)
+	require.NoError(t, err)
+	require.Equal(t, eth.BlockID{}, cb.OldestL1Origin())
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(1), common.Hash{}, 1, 100))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL1Origin().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(2), common.Hash{}, 1, 100))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL1Origin().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(3), common.Hash{}, 2, 110))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL1Origin().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(3), common.Hash{}, 1, 110))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL1Origin().Number)
+}
+
+func TestChannelBuilder_LatestL2(t *testing.T) {
+	cb, err := newChannelBuilder(defaultTestChannelConfig(), defaultTestRollupConfig, latestL1BlockOrigin)
+	require.NoError(t, err)
+	require.Equal(t, eth.BlockID{}, cb.LatestL2())
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(1), common.Hash{}, 1, 100))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.LatestL2().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(2), common.Hash{}, 1, 100))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), cb.LatestL2().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(3), common.Hash{}, 2, 110))
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), cb.LatestL2().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(3), common.Hash{}, 1, 110))
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), cb.LatestL2().Number)
+}
+
+func TestChannelBuilder_OldestL2(t *testing.T) {
+	cb, err := newChannelBuilder(defaultTestChannelConfig(), defaultTestRollupConfig, latestL1BlockOrigin)
+	require.NoError(t, err)
+	require.Equal(t, eth.BlockID{}, cb.OldestL2())
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(1), common.Hash{}, 1, 100))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL2().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(2), common.Hash{}, 1, 100))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL2().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(3), common.Hash{}, 2, 110))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL2().Number)
+
+	_, err = cb.AddBlock(newMiniL2BlockWithNumberParentAndL1Information(0, big.NewInt(3), common.Hash{}, 1, 110))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), cb.OldestL2().Number)
+}
+
 func ChannelBuilder_PendingFrames_TotalFrames(t *testing.T, batchType uint) {
 	const tnf = 9
 	rng := rand.New(rand.NewSource(94572314))
@@ -700,8 +843,8 @@ func ChannelBuilder_PendingFrames_TotalFrames(t *testing.T, batchType uint) {
 	cfg.MaxFrameSize = 1000
 	cfg.TargetNumFrames = tnf
 	cfg.BatchType = batchType
-	cfg.InitShadowCompressor()
-	cb, err := NewChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
+	cfg.InitShadowCompressor(derive.Zlib)
+	cb, err := newChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(err)
 
 	// initial builder should be empty
@@ -729,7 +872,7 @@ func ChannelBuilder_PendingFrames_TotalFrames(t *testing.T, batchType uint) {
 
 	// empty queue
 	for pf := nf - 1; pf >= 0; pf-- {
-		require.True(cb.HasFrame())
+		require.True(cb.HasPendingFrame())
 		_ = cb.NextFrame()
 		require.Equal(cb.PendingFrames(), pf)
 		require.Equal(cb.TotalFrames(), nf)
@@ -746,7 +889,7 @@ func ChannelBuilder_InputBytes(t *testing.T, batchType uint) {
 		chainId := big.NewInt(1234)
 		spanBatch = derive.NewSpanBatch(uint64(0), chainId)
 	}
-	cb, err := NewChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
+	cb, err := newChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(err)
 
 	require.Zero(cb.InputBytes())
@@ -758,7 +901,7 @@ func ChannelBuilder_InputBytes(t *testing.T, batchType uint) {
 		if batchType == derive.SingularBatchType {
 			l += blockBatchRlpSize(t, block)
 		} else {
-			singularBatch, l1Info, err := derive.BlockToSingularBatch(&defaultTestRollupConfig, block)
+			singularBatch, l1Info, err := derive.BlockToSingularBatch(defaultTestRollupConfig, block)
 			require.NoError(err)
 			err = spanBatch.AppendSingularBatch(singularBatch, l1Info.SequenceNumber)
 			require.NoError(err)
@@ -782,8 +925,8 @@ func ChannelBuilder_OutputBytes(t *testing.T, batchType uint) {
 	cfg.MaxFrameSize = 1000
 	cfg.TargetNumFrames = 16
 	cfg.BatchType = batchType
-	cfg.InitRatioCompressor(1.0)
-	cb, err := NewChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
+	cfg.InitRatioCompressor(1.0, derive.Zlib)
+	cb, err := newChannelBuilder(cfg, defaultTestRollupConfig, latestL1BlockOrigin)
 	require.NoError(err, "NewChannelBuilder")
 
 	require.Zero(cb.OutputBytes())
@@ -803,7 +946,7 @@ func ChannelBuilder_OutputBytes(t *testing.T, batchType uint) {
 	require.Greater(cb.PendingFrames(), 1)
 
 	var flen int
-	for cb.HasFrame() {
+	for cb.HasPendingFrame() {
 		f := cb.NextFrame()
 		flen += len(f.data)
 	}
@@ -813,7 +956,7 @@ func ChannelBuilder_OutputBytes(t *testing.T, batchType uint) {
 
 func blockBatchRlpSize(t *testing.T, b *types.Block) int {
 	t.Helper()
-	singularBatch, _, err := derive.BlockToSingularBatch(&defaultTestRollupConfig, b)
+	singularBatch, _, err := derive.BlockToSingularBatch(defaultTestRollupConfig, b)
 	batch := derive.NewBatchData(singularBatch)
 	require.NoError(t, err)
 	var buf bytes.Buffer

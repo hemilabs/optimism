@@ -17,6 +17,8 @@ const (
 	defaultListenPort  = 7300
 )
 
+var ErrInvalidPort = errors.New("invalid metrics port")
+
 func DefaultCLIConfig() CLIConfig {
 	return CLIConfig{
 		Enabled:    false,
@@ -35,7 +37,7 @@ func CLIFlags(envPrefix string) []cli.Flag {
 		&cli.StringFlag{
 			Name:    ListenAddrFlagName,
 			Usage:   "Metrics listening address",
-			Value:   defaultListenAddr, // TODO(CLI-4159): Switch to 127.0.0.1
+			Value:   defaultListenAddr, // TODO: Switch to 127.0.0.1
 			EnvVars: opservice.PrefixEnvVar(envPrefix, "METRICS_ADDR"),
 		},
 		&cli.IntFlag{
@@ -59,7 +61,7 @@ func (m CLIConfig) Check() error {
 	}
 
 	if m.ListenPort < 0 || m.ListenPort > math.MaxUint16 {
-		return errors.New("invalid metrics port")
+		return ErrInvalidPort
 	}
 
 	return nil

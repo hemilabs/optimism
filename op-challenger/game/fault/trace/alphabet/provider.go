@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"math/big"
 
-	preimage "github.com/ethereum-optimism/optimism/op-preimage"
-
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
+	preimage "github.com/ethereum-optimism/optimism/op-preimage"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -73,6 +72,10 @@ func (ap *AlphabetTraceProvider) Get(ctx context.Context, i types.Position) (com
 		return common.Hash{}, err
 	}
 	return alphabetStateHash(claimBytes), nil
+}
+
+func (ap *AlphabetTraceProvider) GetL2BlockNumberChallenge(_ context.Context) (*types.InvalidL2BlockNumberChallenge, error) {
+	return nil, types.ErrL2BlockNumberValid
 }
 
 // BuildAlphabetPreimage constructs the claim bytes for the index and claim.

@@ -3,7 +3,6 @@ package cannon
 import (
 	"context"
 	"embed"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -12,13 +11,17 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
-	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
-	"github.com/ethereum-optimism/optimism/op-service/ioutil"
-	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm/memory"
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm/singlethreaded"
+	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/utils"
+	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/vm"
+	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
+	"github.com/ethereum-optimism/optimism/op-service/ioutil"
+	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
 //go:embed test_data
@@ -48,16 +51,15 @@ func TestGet(t *testing.T) {
 
 	t.Run("ProofAfterEndOfTrace", func(t *testing.T) {
 		provider, generator := setupWithTestData(t, dataDir, prestate)
-		generator.finalState = &mipsevm.State{
-			Memory: &mipsevm.Memory{},
+		generator.finalState = &singlethreaded.State{
+			Memory: memory.NewMemory(),
 			Step:   10,
 			Exited: true,
 		}
 		value, err := provider.Get(context.Background(), PositionFromTraceIndex(provider, big.NewInt(7000)))
 		require.NoError(t, err)
 		require.Contains(t, generator.generated, 7000, "should have tried to generate the proof")
-		stateHash, err := generator.finalState.EncodeWitness().StateHash()
-		require.NoError(t, err)
+		_, stateHash := generator.finalState.EncodeWitness()
 		require.Equal(t, stateHash, value)
 	})
 
@@ -105,12 +107,12 @@ func TestGetStepData(t *testing.T) {
 	t.Run("GenerateProof", func(t *testing.T) {
 		dataDir, prestate := setupTestData(t)
 		provider, generator := setupWithTestData(t, dataDir, prestate)
-		generator.finalState = &mipsevm.State{
-			Memory: &mipsevm.Memory{},
+		generator.finalState = &singlethreaded.State{
+			Memory: memory.NewMemory(),
 			Step:   10,
 			Exited: true,
 		}
-		generator.proof = &proofData{
+		generator.proof = &utils.ProofData{
 			ClaimValue:   common.Hash{0xaa},
 			StateData:    []byte{0xbb},
 			ProofData:    []byte{0xcc},
@@ -131,12 +133,12 @@ func TestGetStepData(t *testing.T) {
 	t.Run("ProofAfterEndOfTrace", func(t *testing.T) {
 		dataDir, prestate := setupTestData(t)
 		provider, generator := setupWithTestData(t, dataDir, prestate)
-		generator.finalState = &mipsevm.State{
-			Memory: &mipsevm.Memory{},
+		generator.finalState = &singlethreaded.State{
+			Memory: memory.NewMemory(),
 			Step:   10,
 			Exited: true,
 		}
-		generator.proof = &proofData{
+		generator.proof = &utils.ProofData{
 			ClaimValue:   common.Hash{0xaa},
 			StateData:    []byte{0xbb},
 			ProofData:    []byte{0xcc},
@@ -148,7 +150,7 @@ func TestGetStepData(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, generator.generated, 7000, "should have tried to generate the proof")
 
-		witness := generator.finalState.EncodeWitness()
+		witness, _ := generator.finalState.EncodeWitness()
 		require.EqualValues(t, witness, preimage)
 		require.Equal(t, []byte{}, proof)
 		require.Nil(t, data)
@@ -157,12 +159,12 @@ func TestGetStepData(t *testing.T) {
 	t.Run("ReadLastStepFromDisk", func(t *testing.T) {
 		dataDir, prestate := setupTestData(t)
 		provider, initGenerator := setupWithTestData(t, dataDir, prestate)
-		initGenerator.finalState = &mipsevm.State{
-			Memory: &mipsevm.Memory{},
+		initGenerator.finalState = &singlethreaded.State{
+			Memory: memory.NewMemory(),
 			Step:   10,
 			Exited: true,
 		}
-		initGenerator.proof = &proofData{
+		initGenerator.proof = &utils.ProofData{
 			ClaimValue:   common.Hash{0xaa},
 			StateData:    []byte{0xbb},
 			ProofData:    []byte{0xcc},
@@ -175,12 +177,12 @@ func TestGetStepData(t *testing.T) {
 		require.Contains(t, initGenerator.generated, 7000, "should have tried to generate the proof")
 
 		provider, generator := setupWithTestData(t, dataDir, prestate)
-		generator.finalState = &mipsevm.State{
-			Memory: &mipsevm.Memory{},
+		generator.finalState = &singlethreaded.State{
+			Memory: memory.NewMemory(),
 			Step:   10,
 			Exited: true,
 		}
-		generator.proof = &proofData{
+		generator.proof = &utils.ProofData{
 			ClaimValue: common.Hash{0xaa},
 			StateData:  []byte{0xbb},
 			ProofData:  []byte{0xcc},
@@ -189,7 +191,8 @@ func TestGetStepData(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, generator.generated, "should not have to generate the proof again")
 
-		require.EqualValues(t, initGenerator.finalState.EncodeWitness(), preimage)
+		encodedWitness, _ := initGenerator.finalState.EncodeWitness()
+		require.EqualValues(t, encodedWitness, preimage)
 		require.Empty(t, proof)
 		require.Nil(t, data)
 	})
@@ -221,12 +224,13 @@ func setupTestData(t *testing.T) (string, string) {
 	entries, err := testData.ReadDir(srcDir)
 	require.NoError(t, err)
 	dataDir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dataDir, proofsDir), 0o777))
+	require.NoError(t, os.Mkdir(filepath.Join(dataDir, utils.ProofsDir), 0o777))
 	for _, entry := range entries {
 		path := filepath.Join(srcDir, entry.Name())
 		file, err := testData.ReadFile(path)
 		require.NoErrorf(t, err, "reading %v", path)
-		err = writeGzip(filepath.Join(dataDir, proofsDir, entry.Name()+".gz"), file)
+		proofFile := filepath.Join(dataDir, utils.ProofsDir, entry.Name()+".gz")
+		err = ioutil.WriteCompressedBytes(proofFile, file, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o644)
 		require.NoErrorf(t, err, "writing %v", path)
 	}
 	return dataDir, "state.json"
@@ -235,47 +239,58 @@ func setupTestData(t *testing.T) (string, string) {
 func setupWithTestData(t *testing.T, dataDir string, prestate string) (*CannonTraceProvider, *stubGenerator) {
 	generator := &stubGenerator{}
 	return &CannonTraceProvider{
-		logger:    testlog.Logger(t, log.LevelInfo),
-		dir:       dataDir,
-		generator: generator,
-		prestate:  filepath.Join(dataDir, prestate),
-		gameDepth: 63,
+		logger:         testlog.Logger(t, log.LevelInfo),
+		dir:            dataDir,
+		generator:      generator,
+		prestate:       filepath.Join(dataDir, prestate),
+		gameDepth:      63,
+		stateConverter: generator,
 	}, generator
 }
 
 type stubGenerator struct {
 	generated  []int // Using int makes assertions easier
-	finalState *mipsevm.State
-	proof      *proofData
+	finalState *singlethreaded.State
+	proof      *utils.ProofData
+
+	finalStatePath string
+}
+
+func (e *stubGenerator) ConvertStateToProof(ctx context.Context, statePath string) (*utils.ProofData, uint64, bool, error) {
+	if statePath == e.finalStatePath {
+		witness, hash := e.finalState.EncodeWitness()
+		return &utils.ProofData{
+			ClaimValue: hash,
+			StateData:  witness,
+			ProofData:  []byte{},
+		}, e.finalState.Step, e.finalState.Exited, nil
+	} else {
+		return nil, 0, false, fmt.Errorf("loading unexpected state: %s, only support: %s", statePath, e.finalStatePath)
+	}
 }
 
 func (e *stubGenerator) GenerateProof(ctx context.Context, dir string, i uint64) error {
 	e.generated = append(e.generated, int(i))
+	var proofFile string
+	var data []byte
+	var err error
 	if e.finalState != nil && e.finalState.Step <= i {
 		// Requesting a trace index past the end of the trace
-		data, err := json.Marshal(e.finalState)
+		proofFile = vm.FinalStatePath(dir, false)
+		e.finalStatePath = proofFile
+		data, err = json.Marshal(e.finalState)
 		if err != nil {
 			return err
 		}
-		return writeGzip(filepath.Join(dir, finalState), data)
+		return ioutil.WriteCompressedBytes(proofFile, data, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o644)
 	}
 	if e.proof != nil {
-		proofFile := filepath.Join(dir, proofsDir, fmt.Sprintf("%d.json.gz", i))
-		data, err := json.Marshal(e.proof)
+		proofFile = filepath.Join(dir, utils.ProofsDir, fmt.Sprintf("%d.json.gz", i))
+		data, err = json.Marshal(e.proof)
 		if err != nil {
 			return err
 		}
-		return writeGzip(proofFile, data)
+		return ioutil.WriteCompressedBytes(proofFile, data, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o644)
 	}
 	return nil
-}
-
-func writeGzip(path string, data []byte) error {
-	writer, err := ioutil.OpenCompressed(path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o644)
-	if err != nil {
-		return err
-	}
-	defer writer.Close()
-	_, err = writer.Write(data)
-	return err
 }

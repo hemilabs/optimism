@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/ethereum-optimism/optimism/op-challenger/metrics"
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -14,8 +15,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/version"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
+	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
-	"github.com/ethereum-optimism/optimism/op-service/opio"
 )
 
 var (
@@ -28,8 +29,10 @@ var VersionWithMeta = opservice.FormatVersion(version.Version, GitCommit, GitDat
 
 func main() {
 	args := os.Args
-	ctx := opio.WithInterruptBlocker(context.Background())
-	if err := run(ctx, args, challenger.Main); err != nil {
+	ctx := ctxinterrupt.WithSignalWaiterMain(context.Background())
+	if err := run(ctx, args, func(ctx context.Context, l log.Logger, config *config.Config) (cliapp.Lifecycle, error) {
+		return challenger.Main(ctx, l, config, metrics.NewMetrics())
+	}); err != nil {
 		log.Crit("Application failed", "err", err)
 	}
 }
@@ -48,9 +51,12 @@ func run(ctx context.Context, args []string, action ConfiguredLifecycle) error {
 	app.Commands = []*cli.Command{
 		ListGamesCommand,
 		ListClaimsCommand,
+		ListCreditsCommand,
 		CreateGameCommand,
 		MoveCommand,
 		ResolveCommand,
+		ResolveClaimCommand,
+		RunTraceCommand,
 	}
 	app.Action = cliapp.LifecycleCmd(func(ctx *cli.Context, close context.CancelCauseFunc) (cliapp.Lifecycle, error) {
 		logger, err := setupLogging(ctx)
@@ -59,7 +65,7 @@ func run(ctx context.Context, args []string, action ConfiguredLifecycle) error {
 		}
 		logger.Info("Starting op-challenger", "version", VersionWithMeta)
 
-		cfg, err := flags.NewConfigFromCLI(ctx)
+		cfg, err := flags.NewConfigFromCLI(ctx, logger)
 		if err != nil {
 			return nil, err
 		}

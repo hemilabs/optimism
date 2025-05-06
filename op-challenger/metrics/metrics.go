@@ -3,12 +3,13 @@ package metrics
 import (
 	"io"
 
-	"github.com/ethereum-optimism/optimism/op-service/httputil"
-	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/ethereum-optimism/optimism/op-service/httputil"
+	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
 
 	contractMetrics "github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
@@ -32,11 +33,14 @@ type Metricer interface {
 	// Record contract metrics
 	contractMetrics.ContractMetricer
 
+	// Record Vm metrics
+	VmMetricer
+
 	RecordActedL1Block(n uint64)
 
 	RecordGameStep()
 	RecordGameMove()
-	RecordCannonExecutionTime(t float64)
+	RecordGameL2Challenge()
 	RecordClaimResolutionTime(t float64)
 	RecordGameActTime(t float64)
 
@@ -51,10 +55,14 @@ type Metricer interface {
 	RecordGameUpdateScheduled()
 	RecordGameUpdateCompleted()
 
+	RecordLargePreimageCount(count int)
+
 	IncActiveExecutors()
 	DecActiveExecutors()
 	IncIdleExecutors()
 	DecIdleExecutors()
+
+	ToTypedVmMetrics(vmType string) TypedVmMetricer
 }
 
 // Metrics implementation must implement RegistryMetricer to allow the metrics server to work.
@@ -68,28 +76,30 @@ type Metrics struct {
 	txmetrics.TxMetrics
 	*opmetrics.CacheMetrics
 	*contractMetrics.ContractMetrics
+	*VmMetrics
 
-	info prometheus.GaugeVec
+	info *prometheus.GaugeVec
 	up   prometheus.Gauge
 
-	executors prometheus.GaugeVec
+	executors *prometheus.GaugeVec
 
 	bondClaimFailures prometheus.Counter
 	bondsClaimed      prometheus.Counter
 
 	preimageChallenged      prometheus.Counter
 	preimageChallengeFailed prometheus.Counter
+	preimageCount           prometheus.Gauge
 
 	highestActedL1Block prometheus.Gauge
 
-	moves prometheus.Counter
-	steps prometheus.Counter
+	moves        prometheus.Counter
+	steps        prometheus.Counter
+	l2Challenges prometheus.Counter
 
-	cannonExecutionTime prometheus.Histogram
 	claimResolutionTime prometheus.Histogram
 	gameActTime         prometheus.Histogram
 
-	trackedGames  prometheus.GaugeVec
+	trackedGames  *prometheus.GaugeVec
 	inflightGames prometheus.Gauge
 }
 
@@ -114,7 +124,9 @@ func NewMetrics() *Metrics {
 
 		ContractMetrics: contractMetrics.MakeContractMetrics(Namespace, factory),
 
-		info: *factory.NewGaugeVec(prometheus.GaugeOpts{
+		VmMetrics: NewVmMetrics(Namespace, factory),
+
+		info: factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
 			Name:      "info",
 			Help:      "Pseudo-metric tracking version and config info",
@@ -126,7 +138,7 @@ func NewMetrics() *Metrics {
 			Name:      "up",
 			Help:      "1 if the op-challenger has finished starting up",
 		}),
-		executors: *factory.NewGaugeVec(prometheus.GaugeOpts{
+		executors: factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
 			Name:      "executors",
 			Help:      "Number of active and idle executors",
@@ -143,13 +155,10 @@ func NewMetrics() *Metrics {
 			Name:      "steps",
 			Help:      "Number of game steps made by the challenge agent",
 		}),
-		cannonExecutionTime: factory.NewHistogram(prometheus.HistogramOpts{
+		l2Challenges: factory.NewCounter(prometheus.CounterOpts{
 			Namespace: Namespace,
-			Name:      "cannon_execution_time",
-			Help:      "Time (in seconds) to execute cannon",
-			Buckets: append(
-				[]float64{1.0, 10.0},
-				prometheus.ExponentialBuckets(30.0, 2.0, 14)...),
+			Name:      "l2_challenges",
+			Help:      "Number of L2 challenges made by the challenge agent",
 		}),
 		claimResolutionTime: factory.NewHistogram(prometheus.HistogramOpts{
 			Namespace: Namespace,
@@ -185,7 +194,12 @@ func NewMetrics() *Metrics {
 			Name:      "preimage_challenge_failed",
 			Help:      "Number of preimage challenges that failed",
 		}),
-		trackedGames: *factory.NewGaugeVec(prometheus.GaugeOpts{
+		preimageCount: factory.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "preimage_count",
+			Help:      "Number of large preimage proposals being tracked by the challenger",
+		}),
+		trackedGames: factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
 			Name:      "tracked_games",
 			Help:      "Number of games being tracked by the challenger",
@@ -225,7 +239,6 @@ func (m *Metrics) RecordInfo(version string) {
 
 // RecordUp sets the up metric to 1.
 func (m *Metrics) RecordUp() {
-	prometheus.MustRegister()
 	m.up.Set(1)
 }
 
@@ -241,6 +254,10 @@ func (m *Metrics) RecordGameStep() {
 	m.steps.Add(1)
 }
 
+func (m *Metrics) RecordGameL2Challenge() {
+	m.l2Challenges.Add(1)
+}
+
 func (m *Metrics) RecordPreimageChallenged() {
 	m.preimageChallenged.Add(1)
 }
@@ -249,16 +266,16 @@ func (m *Metrics) RecordPreimageChallengeFailed() {
 	m.preimageChallengeFailed.Add(1)
 }
 
+func (m *Metrics) RecordLargePreimageCount(count int) {
+	m.preimageCount.Set(float64(count))
+}
+
 func (m *Metrics) RecordBondClaimFailed() {
 	m.bondClaimFailures.Add(1)
 }
 
 func (m *Metrics) RecordBondClaimed(amount uint64) {
 	m.bondsClaimed.Add(float64(amount))
-}
-
-func (m *Metrics) RecordCannonExecutionTime(t float64) {
-	m.cannonExecutionTime.Observe(t)
 }
 
 func (m *Metrics) RecordClaimResolutionTime(t float64) {
@@ -301,4 +318,8 @@ func (m *Metrics) RecordGameUpdateScheduled() {
 
 func (m *Metrics) RecordGameUpdateCompleted() {
 	m.inflightGames.Sub(1)
+}
+
+func (m *Metrics) ToTypedVmMetrics(vmType string) TypedVmMetricer {
+	return NewTypedVmMetrics(m, vmType)
 }

@@ -22,7 +22,7 @@ module PAUSABILITY-LEMMAS
 
 ## Arithmetic
 
-Lemmas on arithmetic reasoning. Specifically, on: cancellativity, inequalites in which the two sides are of different signs; and the rounding-up mechanism of the Solidity compiler (expressed through `notMaxUInt5 &Int ( X +Int 31 )`, which rounds up `X` to the nearest multiple of 32).
+Lemmas on arithmetic reasoning. Specifically, on: cancellativity, inequalities in which the two sides are of different signs; and the rounding-up mechanism of the Solidity compiler (expressed through `notMaxUInt5 &Int ( X +Int 31 )`, which rounds up `X` to the nearest multiple of 32).
 
 ```k
     // Cancellativity #1
@@ -207,12 +207,12 @@ The summary lemma is as follows, with commentary inlined:
        andBool 0 <=Int SRC    andBool SRC    <Int maxBytesLength
        andBool 0 <=Int DEST   andBool DEST   <Int maxBytesLength
        andBool #sizeWordStack(WS) <=Int 1015
-
        andBool SRC +Int LENGTH <=Int DEST // No overlap between source and destination
        andBool DEST <=Int lengthBytes(LM) // Destination starts within current memory
+       andBool PCOUNT +Int 51 <Int lengthBytes(JUMPDESTS) // We are not looking outside of the JUMPDESTs bytearray
        // All JUMPDESTs in the program are valid
-       andBool (PCOUNT +Int 2) in JUMPDESTS andBool (PCOUNT +Int 32) in JUMPDESTS andBool (PCOUNT +Int 51) in JUMPDESTS
-       andBool PCOUNT +Int 51 <Int 2 ^Int 16  // and fit into two bytes
+       andBool JUMPDESTS[PCOUNT +Int 2] ==Int 1 andBool JUMPDESTS[PCOUNT +Int 32] ==Int 1 andBool JUMPDESTS[PCOUNT +Int 51] ==Int 1
+       andBool PCOUNT +Int 51 <Int 2 ^Int 24  // and fit into three bytes
       [priority(30), concrete(JUMPDESTS, PROGRAM, PCOUNT), preserves-definedness]
 
 endmodule

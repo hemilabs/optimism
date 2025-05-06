@@ -4,12 +4,13 @@ import (
 	"context"
 	"math/big"
 	"testing"
+	"time"
 
-	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
 	contractMetrics "github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	batchingTest "github.com/ethereum-optimism/optimism/op-service/sources/batching/test"
+	"github.com/ethereum-optimism/optimism/packages/contracts-bedrock/snapshots"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 )
@@ -24,8 +25,8 @@ func TestDelayedWeth_GetWithdrawals(t *testing.T) {
 
 	addrs := []common.Address{{0x01}, {0x02}}
 	expected := [][]*big.Int{
-		[]*big.Int{big.NewInt(123), big.NewInt(456)},
-		[]*big.Int{big.NewInt(123), big.NewInt(456)},
+		{big.NewInt(123), big.NewInt(456)},
+		{big.NewInt(123), big.NewInt(456)},
 	}
 
 	for i, addr := range addrs {
@@ -41,12 +42,26 @@ func TestDelayedWeth_GetWithdrawals(t *testing.T) {
 	}
 }
 
-func setupDelayedWethTest(t *testing.T) (*batchingTest.AbiBasedRpc, *DelayedWETHContract) {
-	delayedWethAbi, err := bindings.DelayedWETHMetaData.GetAbi()
+func TestDelayedWeth_GetBalanceAndDelay(t *testing.T) {
+	stubRpc, weth := setupDelayedWethTest(t)
+	block := rpcblock.ByNumber(482)
+	balance := big.NewInt(23984)
+	delaySeconds := int64(2983294824)
+	delay := time.Duration(delaySeconds) * time.Second
+
+	stubRpc.AddExpectedCall(batchingTest.NewGetBalanceCall(delayedWeth, block, balance))
+	stubRpc.SetResponse(delayedWeth, methodDelay, block, nil, []interface{}{big.NewInt(delaySeconds)})
+
+	actualBalance, actualDelay, err := weth.GetBalanceAndDelay(context.Background(), block)
 	require.NoError(t, err)
+	require.Equal(t, balance, actualBalance)
+	require.Equal(t, delay, actualDelay)
+}
+
+func setupDelayedWethTest(t *testing.T) (*batchingTest.AbiBasedRpc, *DelayedWETHContract) {
+	delayedWethAbi := snapshots.LoadDelayedWETHABI()
 	stubRpc := batchingTest.NewAbiBasedRpc(t, delayedWeth, delayedWethAbi)
 	caller := batching.NewMultiCaller(stubRpc, batching.DefaultBatchSize)
-	weth, err := NewDelayedWETHContract(contractMetrics.NoopContractMetrics, delayedWeth, caller)
-	require.NoError(t, err)
+	weth := NewDelayedWETHContract(contractMetrics.NoopContractMetrics, delayedWeth, caller)
 	return stubRpc, weth
 }

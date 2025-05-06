@@ -7,28 +7,51 @@ import (
 	"io"
 	"os"
 
-	"github.com/ethereum-optimism/optimism/op-service/client"
-
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
-
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	preimage "github.com/ethereum-optimism/optimism/op-preimage"
-	cldr "github.com/ethereum-optimism/optimism/op-program/client/driver"
+	"github.com/ethereum-optimism/optimism/op-program/client/boot"
+	"github.com/ethereum-optimism/optimism/op-program/client/claim"
+	"github.com/ethereum-optimism/optimism/op-program/client/interop"
 	"github.com/ethereum-optimism/optimism/op-program/client/l1"
 	"github.com/ethereum-optimism/optimism/op-program/client/l2"
-	oppio "github.com/ethereum-optimism/optimism/op-program/io"
-	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-program/client/tasks"
+	"github.com/ethereum-optimism/optimism/op-service/client"
+	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 )
+
+var errInvalidConfig = errors.New("invalid config")
+
+type Config struct {
+	SkipValidation bool
+	InteropEnabled bool
+	DB             l2.KeyValueStore
+	StoreBlockData bool
+}
 
 // Main executes the client program in a detached context and exits the current process.
 // The client runtime environment must be preset before calling this function.
-func Main(logger log.Logger) {
-	log.Info("Starting fault proof program client")
-	preimageOracle := CreatePreimageChannel()
-	preimageHinter := CreateHinterChannel()
-	if err := RunProgram(logger, preimageOracle, preimageHinter); errors.Is(err, cldr.ErrClaimNotValid) {
+func Main(useInterop bool) {
+	// Default to a machine parsable but relatively human friendly log format.
+	// Don't do anything fancy to detect if color output is supported.
+	logger := oplog.NewLogger(os.Stdout, oplog.CLIConfig{
+		Level:  log.LevelInfo,
+		Format: oplog.FormatLogFmt,
+		Color:  false,
+	})
+	oplog.SetGlobalLogHandler(logger.Handler())
+
+	logger.Info("Starting fault proof program client", "useInterop", useInterop)
+	preimageOracle := preimage.ClientPreimageChannel()
+	preimageHinter := preimage.ClientHinterChannel()
+	config := Config{
+		InteropEnabled: useInterop,
+		DB:             memorydb.New(),
+	}
+	if err := RunProgram(logger, preimageOracle, preimageHinter, config); errors.Is(err, claim.ErrClaimNotValid) {
 		log.Error("Claim is invalid", "err", err)
 		os.Exit(1)
 	} else if err != nil {
@@ -41,11 +64,11 @@ func Main(logger log.Logger) {
 }
 
 // RunProgram executes the Program, while attached to an IO based pre-image oracle, to be served by a host.
-func RunProgram(logger log.Logger, preimageOracle io.ReadWriter, preimageHinter io.ReadWriter) error {
+func RunProgram(logger log.Logger, preimageOracle io.ReadWriter, preimageHinter io.ReadWriter, cfg Config) error {
 	pClient := preimage.NewOracleClient(preimageOracle)
 	hClient := preimage.NewHintWriter(preimageHinter)
 	l1PreimageOracle := l1.NewCachingOracle(l1.NewPreimageOracle(pClient, hClient))
-	l2PreimageOracle := l2.NewCachingOracle(l2.NewPreimageOracle(pClient, hClient))
+	l2PreimageOracle := l2.NewCachingOracle(l2.NewPreimageOracle(pClient, hClient, cfg.InteropEnabled))
 
 	noOpBssClient := &client.NoOpBssClient{}
 
@@ -84,18 +107,14 @@ func runDerivation(logger log.Logger, cfg *rollup.Config, l2Cfg *params.ChainCon
 			return err
 		}
 	}
-	return d.ValidateClaim(l2ClaimBlockNum, eth.Bytes32(l2Claim))
-}
-
-func CreateHinterChannel() oppio.FileChannel {
-	r := os.NewFile(HClientRFd, "preimage-hint-read")
-	w := os.NewFile(HClientWFd, "preimage-hint-write")
-	return oppio.NewReadWritePair(r, w)
-}
-
-// CreatePreimageChannel returns a FileChannel for the preimage oracle in a detached context
-func CreatePreimageChannel() oppio.FileChannel {
-	r := os.NewFile(PClientRFd, "preimage-oracle-read")
-	w := os.NewFile(PClientWFd, "preimage-oracle-write")
-	return oppio.NewReadWritePair(r, w)
+	if cfg.InteropEnabled {
+		bootInfo := boot.BootstrapInterop(pClient)
+		return interop.RunInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, !cfg.SkipValidation)
+	}
+	if cfg.DB == nil {
+		return fmt.Errorf("%w: db config is required", errInvalidConfig)
+	}
+	bootInfo := boot.NewBootstrapClient(pClient).BootInfo()
+	derivationOptions := tasks.DerivationOptions{StoreBlockData: cfg.StoreBlockData}
+	return RunPreInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, cfg.DB, derivationOptions)
 }

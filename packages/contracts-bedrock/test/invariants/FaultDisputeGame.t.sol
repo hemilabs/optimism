@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
+// Testing
 import { Vm } from "forge-std/Vm.sol";
 import { StdUtils } from "forge-std/StdUtils.sol";
-import { FaultDisputeGame } from "src/dispute/FaultDisputeGame.sol";
 import { FaultDisputeGame_Init } from "test/dispute/FaultDisputeGame.t.sol";
 
-import "src/libraries/DisputeTypes.sol";
-import "src/libraries/DisputeErrors.sol";
+// Libraries
+import "src/dispute/lib/Types.sol";
+import "src/dispute/lib/Errors.sol";
+
+// Interfaces
+import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
 
 contract FaultDisputeGame_Solvency_Invariant is FaultDisputeGame_Init {
     Claim internal constant ROOT_CLAIM = Claim.wrap(bytes32(uint256(10)));
@@ -36,10 +40,20 @@ contract FaultDisputeGame_Solvency_Invariant is FaultDisputeGame_Init {
         (,,, uint256 rootBond,,,) = gameProxy.claimData(0);
 
         for (uint256 i = gameProxy.claimDataLen(); i > 0; i--) {
-            (bool success,) = address(gameProxy).call(abi.encodeCall(gameProxy.resolveClaim, (i - 1)));
+            (bool success,) = address(gameProxy).call(abi.encodeCall(gameProxy.resolveClaim, (i - 1, 0)));
             assertTrue(success);
         }
         gameProxy.resolve();
+
+        // Wait for finalization delay
+        vm.warp(block.timestamp + 3.5 days + 1 seconds);
+
+        // Close the game.
+        gameProxy.closeGame();
+
+        // Claim credit once to trigger unlock period.
+        gameProxy.claimCredit(address(this));
+        gameProxy.claimCredit(address(actor));
 
         // Wait for the withdrawal delay.
         vm.warp(block.timestamp + 7 days + 1 seconds);
@@ -65,7 +79,7 @@ contract FaultDisputeGame_Solvency_Invariant is FaultDisputeGame_Init {
             assertEq(DEFAULT_SENDER.balance, type(uint96).max - rootBond);
             assertEq(address(actor).balance, actor.totalBonded() + rootBond);
         } else {
-            revert("unreachable");
+            revert("FaultDisputeGame_Solvency_Invariant: unreachable");
         }
 
         assertEq(address(gameProxy).balance, 0);
@@ -73,12 +87,12 @@ contract FaultDisputeGame_Solvency_Invariant is FaultDisputeGame_Init {
 }
 
 contract RandomClaimActor is StdUtils {
-    FaultDisputeGame internal immutable GAME;
+    IFaultDisputeGame internal immutable GAME;
     Vm internal immutable VM;
 
     uint256 public totalBonded;
 
-    constructor(FaultDisputeGame _gameProxy, Vm _vm) {
+    constructor(IFaultDisputeGame _gameProxy, Vm _vm) {
         GAME = _gameProxy;
         VM = _vm;
     }
@@ -89,7 +103,8 @@ contract RandomClaimActor is StdUtils {
 
         totalBonded += _bondAmount;
 
-        GAME.move{ value: _bondAmount }(_parentIndex, _claim, _isAttack);
+        (,,,, Claim disputed,,) = GAME.claimData(_parentIndex);
+        GAME.move{ value: _bondAmount }(disputed, _parentIndex, _claim, _isAttack);
     }
 
     fallback() external payable { }

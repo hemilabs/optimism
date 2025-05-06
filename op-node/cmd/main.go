@@ -12,6 +12,7 @@ import (
 	opnode "github.com/ethereum-optimism/optimism/op-node"
 	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	"github.com/ethereum-optimism/optimism/op-node/cmd/genesis"
+	"github.com/ethereum-optimism/optimism/op-node/cmd/interop"
 	"github.com/ethereum-optimism/optimism/op-node/cmd/networks"
 	"github.com/ethereum-optimism/optimism/op-node/cmd/p2p"
 	"github.com/ethereum-optimism/optimism/op-node/flags"
@@ -20,9 +21,9 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/version"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
+	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/metrics/doc"
-	"github.com/ethereum-optimism/optimism/op-service/opio"
 )
 
 var (
@@ -62,9 +63,10 @@ func main() {
 			Name:        "networks",
 			Subcommands: networks.Subcommands,
 		},
+		interop.InteropCmd,
 	}
 
-	ctx := opio.WithInterruptBlocker(context.Background())
+	ctx := ctxinterrupt.WithSignalWaiterMain(context.Background())
 	err := app.RunContext(ctx, os.Args)
 	if err != nil {
 		log.Crit("Application failed", "message", err)
@@ -85,11 +87,6 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 	}
 	cfg.Cancel = closeApp
 
-	snapshotLog, err := opnode.NewSnapshotLogger(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create snapshot root logger: %w", err)
-	}
-
 	// Only pretty-print the banner if it is a terminal log. Other log it as key-value pairs.
 	if logCfg.Format == "terminal" {
 		log.Info("rollup config:\n" + cfg.Rollup.Description(chaincfg.L2ChainIDToNetworkDisplayName))
@@ -97,7 +94,7 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 		cfg.Rollup.LogDescription(log, chaincfg.L2ChainIDToNetworkDisplayName)
 	}
 
-	n, err := node.New(ctx.Context, cfg, log, snapshotLog, VersionWithMeta, m)
+	n, err := node.New(ctx.Context, cfg, log, VersionWithMeta, m)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create the rollup node: %w", err)
 	}

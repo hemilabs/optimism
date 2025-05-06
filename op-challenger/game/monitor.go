@@ -19,8 +19,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-type blockNumberFetcher func(ctx context.Context) (uint64, error)
-
 // gameSource loads information about the games available to play
 type gameSource interface {
 	GetGamesAtOrAfter(ctx context.Context, blockHash common.Hash, earliestTimestamp uint64) ([]types.GameMetadata, error)
@@ -44,22 +42,21 @@ type claimer interface {
 }
 
 type gameMonitor struct {
-	logger           log.Logger
-	clock            RWClock
-	source           gameSource
-	scheduler        gameScheduler
-	preimages        preimageScheduler
-	gameWindow       time.Duration
-	claimer          claimer
-	fetchBlockNumber blockNumberFetcher
-	allowedGames     []common.Address
-	l1HeadsSub       ethereum.Subscription
-	l1Source         *headSource
-	runState         sync.Mutex
+	logger       log.Logger
+	clock        RWClock
+	source       gameSource
+	scheduler    gameScheduler
+	preimages    preimageScheduler
+	gameWindow   time.Duration
+	claimer      claimer
+	allowedGames []common.Address
+	l1HeadsSub   ethereum.Subscription
+	l1Source     *headSource
+	runState     sync.Mutex
 }
 
 type MinimalSubscriber interface {
-	EthSubscribe(ctx context.Context, channel interface{}, args ...interface{}) (ethereum.Subscription, error)
+	Subscribe(ctx context.Context, namespace string, channel interface{}, args ...interface{}) (ethereum.Subscription, error)
 }
 
 type headSource struct {
@@ -67,7 +64,7 @@ type headSource struct {
 }
 
 func (s *headSource) SubscribeNewHead(ctx context.Context, ch chan<- *ethTypes.Header) (ethereum.Subscription, error) {
-	return s.inner.EthSubscribe(ctx, ch, "newHeads")
+	return s.inner.Subscribe(ctx, "eth", ch, "newHeads")
 }
 
 func newGameMonitor(
@@ -78,21 +75,19 @@ func newGameMonitor(
 	preimages preimageScheduler,
 	gameWindow time.Duration,
 	claimer claimer,
-	fetchBlockNumber blockNumberFetcher,
 	allowedGames []common.Address,
 	l1Source MinimalSubscriber,
 ) *gameMonitor {
 	return &gameMonitor{
-		logger:           logger,
-		clock:            cl,
-		scheduler:        scheduler,
-		preimages:        preimages,
-		source:           source,
-		gameWindow:       gameWindow,
-		claimer:          claimer,
-		fetchBlockNumber: fetchBlockNumber,
-		allowedGames:     allowedGames,
-		l1Source:         &headSource{inner: l1Source},
+		logger:       logger,
+		clock:        cl,
+		scheduler:    scheduler,
+		preimages:    preimages,
+		source:       source,
+		gameWindow:   gameWindow,
+		claimer:      claimer,
+		allowedGames: allowedGames,
+		l1Source:     &headSource{inner: l1Source},
 	}
 }
 

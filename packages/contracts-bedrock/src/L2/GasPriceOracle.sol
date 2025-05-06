@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { ISemver } from "src/universal/ISemver.sol";
+// Libraries
+import { LibZip } from "@solady/utils/LibZip.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
-import { L1Block } from "src/L2/L1Block.sol";
+import { Constants } from "src/libraries/Constants.sol";
+import { Arithmetic } from "src/libraries/Arithmetic.sol";
 
-/// @custom:proxied
+// Interfaces
+import { ISemver } from "interfaces/universal/ISemver.sol";
+import { IL1Block } from "interfaces/L2/IL1Block.sol";
+
+/// @custom:proxied true
 /// @custom:predeploy 0x420000000000000000000000000000000000000F
 /// @title GasPriceOracle
 /// @notice This contract maintains the variables responsible for computing the L1 portion of the
@@ -24,31 +30,89 @@ contract GasPriceOracle is ISemver {
     uint256 public constant DECIMALS = 6;
 
     /// @notice Semantic version.
-    /// @custom:semver 1.2.0
-    string public constant version = "1.2.0";
+    /// @custom:semver 1.4.0
+    string public constant version = "1.4.0";
+
+    /// @notice This is the intercept value for the linear regression used to estimate the final size of the
+    ///         compressed transaction.
+    int32 private constant COST_INTERCEPT = -42_585_600;
+
+    /// @notice This is the coefficient value for the linear regression used to estimate the final size of the
+    ///         compressed transaction.
+    uint32 private constant COST_FASTLZ_COEF = 836_500;
+
+    /// @notice This is the minimum bound for the fastlz to brotli size estimation. Any estimations below this
+    ///         are set to this value.
+    uint256 private constant MIN_TRANSACTION_SIZE = 100;
 
     /// @notice Indicates whether the network has gone through the Ecotone upgrade.
     bool public isEcotone;
+
+    /// @notice Indicates whether the network has gone through the Fjord upgrade.
+    bool public isFjord;
+
+    /// @notice Indicates whether the network has gone through the Isthmus upgrade.
+    bool public isIsthmus;
 
     /// @notice Computes the L1 portion of the fee based on the size of the rlp encoded input
     ///         transaction, the current L1 base fee, and the various dynamic parameters.
     /// @param _data Unsigned fully RLP-encoded transaction to get the L1 fee for.
     /// @return L1 fee that should be paid for the tx
     function getL1Fee(bytes memory _data) external view returns (uint256) {
-        if (isEcotone) {
+        if (isFjord) {
+            return _getL1FeeFjord(_data);
+        } else if (isEcotone) {
             return _getL1FeeEcotone(_data);
         }
         return _getL1FeeBedrock(_data);
     }
 
+    /// @notice returns an upper bound for the L1 fee for a given transaction size.
+    /// It is provided for callers who wish to estimate L1 transaction costs in the
+    /// write path, and is much more gas efficient than `getL1Fee`.
+    /// It assumes the worst case of fastlz upper-bound which covers %99.99 txs.
+    /// @param _unsignedTxSize Unsigned fully RLP-encoded transaction size to get the L1 fee for.
+    /// @return L1 estimated upper-bound fee that should be paid for the tx
+    function getL1FeeUpperBound(uint256 _unsignedTxSize) external view returns (uint256) {
+        require(isFjord, "GasPriceOracle: getL1FeeUpperBound only supports Fjord");
+
+        // Add 68 to the size to account for unsigned tx:
+        uint256 txSize = _unsignedTxSize + 68;
+        // txSize / 255 + 16 is the practical fastlz upper-bound covers %99.99 txs.
+        uint256 flzUpperBound = txSize + txSize / 255 + 16;
+
+        return _fjordL1Cost(flzUpperBound);
+    }
+
     /// @notice Set chain to be Ecotone chain (callable by depositor account)
     function setEcotone() external {
         require(
-            msg.sender == L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).DEPOSITOR_ACCOUNT(),
+            msg.sender == Constants.DEPOSITOR_ACCOUNT,
             "GasPriceOracle: only the depositor account can set isEcotone flag"
         );
         require(isEcotone == false, "GasPriceOracle: Ecotone already active");
         isEcotone = true;
+    }
+
+    /// @notice Set chain to be Fjord chain (callable by depositor account)
+    function setFjord() external {
+        require(
+            msg.sender == Constants.DEPOSITOR_ACCOUNT, "GasPriceOracle: only the depositor account can set isFjord flag"
+        );
+        require(isEcotone, "GasPriceOracle: Fjord can only be activated after Ecotone");
+        require(isFjord == false, "GasPriceOracle: Fjord already active");
+        isFjord = true;
+    }
+
+    /// @notice Set chain to be Isthmus chain (callable by depositor account)
+    function setIsthmus() external {
+        require(
+            msg.sender == Constants.DEPOSITOR_ACCOUNT,
+            "GasPriceOracle: only the depositor account can set isIsthmus flag"
+        );
+        require(isFjord, "GasPriceOracle: Isthmus can only be activated after Fjord");
+        require(isIsthmus == false, "GasPriceOracle: Isthmus already active");
+        isIsthmus = true;
     }
 
     /// @notice Retrieves the current gas price (base fee).
@@ -68,7 +132,7 @@ contract GasPriceOracle is ISemver {
     /// @return Current fee overhead.
     function overhead() public view returns (uint256) {
         require(!isEcotone, "GasPriceOracle: overhead() is deprecated");
-        return L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead();
+        return IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead();
     }
 
     /// @custom:legacy
@@ -76,31 +140,31 @@ contract GasPriceOracle is ISemver {
     /// @return Current fee scalar.
     function scalar() public view returns (uint256) {
         require(!isEcotone, "GasPriceOracle: scalar() is deprecated");
-        return L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeScalar();
+        return IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeScalar();
     }
 
     /// @notice Retrieves the latest known L1 base fee.
     /// @return Latest known L1 base fee.
     function l1BaseFee() public view returns (uint256) {
-        return L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).basefee();
+        return IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).basefee();
     }
 
     /// @notice Retrieves the current blob base fee.
     /// @return Current blob base fee.
     function blobBaseFee() public view returns (uint256) {
-        return L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).blobBaseFee();
+        return IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).blobBaseFee();
     }
 
     /// @notice Retrieves the current base fee scalar.
     /// @return Current base fee scalar.
     function baseFeeScalar() public view returns (uint32) {
-        return L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).baseFeeScalar();
+        return IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).baseFeeScalar();
     }
 
     /// @notice Retrieves the current blob base fee scalar.
     /// @return Current blob base fee scalar.
     function blobBaseFeeScalar() public view returns (uint32) {
-        return L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).blobBaseFeeScalar();
+        return IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).blobBaseFeeScalar();
     }
 
     /// @custom:legacy
@@ -114,12 +178,31 @@ contract GasPriceOracle is ISemver {
     ///         of padding to account for the fact that the input does not have a signature.
     /// @param _data Unsigned fully RLP-encoded transaction to get the L1 gas for.
     /// @return Amount of L1 gas used to publish the transaction.
+    /// @custom:deprecated This method does not accurately estimate the gas used for a transaction.
+    ///                    If you are calculating fees use getL1Fee or getL1FeeUpperBound.
     function getL1GasUsed(bytes memory _data) public view returns (uint256) {
+        if (isFjord) {
+            // Add 68 to the size to account for unsigned tx
+            // Assume the compressed data is mostly non-zero, and would pay 16 gas per calldata byte
+            // Divide by 1e6 due to the scaling factor of the linear regression
+            return _fjordLinearRegression(LibZip.flzCompress(_data).length + 68) * 16 / 1e6;
+        }
         uint256 l1GasUsed = _getCalldataGas(_data);
         if (isEcotone) {
             return l1GasUsed;
         }
-        return l1GasUsed + L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead();
+        return l1GasUsed + IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead();
+    }
+
+    function getOperatorFee(uint256 _gasUsed) public view returns (uint256) {
+        if (!isIsthmus) {
+            return 0;
+        }
+
+        return Arithmetic.saturatingAdd(
+            Arithmetic.saturatingMul(_gasUsed, IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).operatorFeeScalar()) / 1e6,
+            IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).operatorFeeConstant()
+        );
     }
 
     /// @notice Computation of the L1 portion of the fee for Bedrock.
@@ -127,8 +210,8 @@ contract GasPriceOracle is ISemver {
     /// @return L1 fee that should be paid for the tx
     function _getL1FeeBedrock(bytes memory _data) internal view returns (uint256) {
         uint256 l1GasUsed = _getCalldataGas(_data);
-        uint256 fee = (l1GasUsed + L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead()) * l1BaseFee()
-            * L1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeScalar();
+        uint256 fee = (l1GasUsed + IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead()) * l1BaseFee()
+            * IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeScalar();
         return fee / (10 ** DECIMALS);
     }
 
@@ -141,6 +224,13 @@ contract GasPriceOracle is ISemver {
         uint256 scaledBlobBaseFee = blobBaseFeeScalar() * blobBaseFee();
         uint256 fee = l1GasUsed * (scaledBaseFee + scaledBlobBaseFee);
         return fee / (16 * 10 ** DECIMALS);
+    }
+
+    /// @notice L1 portion of the fee after Fjord.
+    /// @param _data Unsigned fully RLP-encoded transaction to get the L1 fee for.
+    /// @return L1 fee that should be paid for the tx
+    function _getL1FeeFjord(bytes memory _data) internal view returns (uint256) {
+        return _fjordL1Cost(LibZip.flzCompress(_data).length + 68);
     }
 
     /// @notice L1 gas estimation calculation.
@@ -157,5 +247,26 @@ contract GasPriceOracle is ISemver {
             }
         }
         return total + (68 * 16);
+    }
+
+    /// @notice Fjord L1 cost based on the compressed and original tx size.
+    /// @param _fastLzSize estimated compressed tx size.
+    /// @return Fjord L1 fee that should be paid for the tx
+    function _fjordL1Cost(uint256 _fastLzSize) internal view returns (uint256) {
+        // Apply the linear regression to estimate the Brotli 10 size
+        uint256 estimatedSize = _fjordLinearRegression(_fastLzSize);
+        uint256 feeScaled = baseFeeScalar() * 16 * l1BaseFee() + blobBaseFeeScalar() * blobBaseFee();
+        return estimatedSize * feeScaled / (10 ** (DECIMALS * 2));
+    }
+
+    /// @notice Takes the fastLz size compression and returns the estimated Brotli
+    /// @param _fastLzSize fastlz compressed tx size.
+    /// @return Number of bytes in the compressed transaction
+    function _fjordLinearRegression(uint256 _fastLzSize) internal pure returns (uint256) {
+        int256 estimatedSize = COST_INTERCEPT + int256(COST_FASTLZ_COEF * _fastLzSize);
+        if (estimatedSize < int256(MIN_TRANSACTION_SIZE) * 1e6) {
+            estimatedSize = int256(MIN_TRANSACTION_SIZE) * 1e6;
+        }
+        return uint256(estimatedSize);
     }
 }

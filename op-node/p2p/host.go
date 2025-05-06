@@ -12,12 +12,12 @@ import (
 
 	libp2p "github.com/libp2p/go-libp2p"
 	mplex "github.com/libp2p/go-libp2p-mplex"
-	lconf "github.com/libp2p/go-libp2p/config"
 	"github.com/libp2p/go-libp2p/core/connmgr"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/metrics"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/core/sec/insecure"
 	basichost "github.com/libp2p/go-libp2p/p2p/host/basic"
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
@@ -39,10 +39,16 @@ const (
 	staticPeerTag = "static"
 )
 
+type HostNewStream interface {
+	NewStream(ctx context.Context, p peer.ID, pids ...protocol.ID) (network.Stream, error)
+}
+
 type ExtraHostFeatures interface {
 	host.Host
 	ConnectionGater() gating.BlockingConnectionGater
 	ConnectionManager() connmgr.ConnManager
+	IsStatic(peerID peer.ID) bool
+	SyncOnlyReqToStatic() bool
 }
 
 type extraHost struct {
@@ -51,11 +57,14 @@ type extraHost struct {
 	connMgr connmgr.ConnManager
 	log     log.Logger
 
-	staticPeers []*peer.AddrInfo
+	staticPeers   []*peer.AddrInfo
+	staticPeerIDs map[peer.ID]struct{}
 
 	pinging *PingService
 
 	quitC chan struct{}
+
+	syncOnlyReqToStatic bool
 }
 
 func (e *extraHost) ConnectionGater() gating.BlockingConnectionGater {
@@ -64,6 +73,15 @@ func (e *extraHost) ConnectionGater() gating.BlockingConnectionGater {
 
 func (e *extraHost) ConnectionManager() connmgr.ConnManager {
 	return e.connMgr
+}
+
+func (e *extraHost) IsStatic(peerID peer.ID) bool {
+	_, exists := e.staticPeerIDs[peerID]
+	return exists
+}
+
+func (e *extraHost) SyncOnlyReqToStatic() bool {
+	return e.syncOnlyReqToStatic
 }
 
 func (e *extraHost) Close() error {
@@ -196,11 +214,6 @@ func (conf *Config) Host(log log.Logger, reporter metrics.Reporter, metrics Host
 		tcp.WithConnectionTimeout(time.Minute*60)) // break unused connections
 	// TODO: technically we can also run the node on websocket and QUIC transports. Maybe in the future?
 
-	var nat lconf.NATManagerC // disabled if nil
-	if conf.NAT {
-		nat = basichost.NewNATManager
-	}
-
 	opts := []libp2p.Option{
 		libp2p.Identity(conf.Priv),
 		// Explicitly set the user-agent, so we can differentiate from other Go libp2p users.
@@ -214,15 +227,18 @@ func (conf *Config) Host(log log.Logger, reporter metrics.Reporter, metrics Host
 		libp2p.ConnectionGater(connGtr),
 		libp2p.ConnectionManager(connMngr),
 		//libp2p.ResourceManager(nil), // TODO use resource manager interface to manage resources per peer better.
-		libp2p.NATManager(nat),
 		libp2p.Peerstore(ps),
 		libp2p.BandwidthReporter(reporter), // may be nil if disabled
 		libp2p.MultiaddrResolver(madns.DefaultResolver),
 		// Ping is a small built-in libp2p protocol that helps us check/debug latency between peers.
 		libp2p.Ping(true),
+	}
+	if conf.NAT {
 		// Help peers with their NAT reachability status, but throttle to avoid too much work.
-		libp2p.EnableNATService(),
-		libp2p.AutoNATServiceRateLimit(10, 5, time.Second*60),
+		opts = append(opts,
+			libp2p.NATManager(basichost.NewNATManager),
+			libp2p.EnableNATService(),
+			libp2p.AutoNATServiceRateLimit(10, 5, time.Second*60))
 	}
 	opts = append(opts, conf.HostMux...)
 	if conf.NoTransportSecurity {
@@ -236,6 +252,7 @@ func (conf *Config) Host(log log.Logger, reporter metrics.Reporter, metrics Host
 	}
 
 	staticPeers := make([]*peer.AddrInfo, 0, len(conf.StaticPeers))
+	staticPeerIDs := make(map[peer.ID]struct{})
 	for _, peerAddr := range conf.StaticPeers {
 		addr, err := peer.AddrInfoFromP2pAddr(peerAddr)
 		if err != nil {
@@ -246,21 +263,27 @@ func (conf *Config) Host(log log.Logger, reporter metrics.Reporter, metrics Host
 			continue
 		}
 		staticPeers = append(staticPeers, addr)
+		staticPeerIDs[addr.ID] = struct{}{}
 	}
 
 	out := &extraHost{
-		Host:        h,
-		connMgr:     connMngr,
-		log:         log,
-		staticPeers: staticPeers,
-		quitC:       make(chan struct{}),
+		Host:                h,
+		connMgr:             connMngr,
+		log:                 log,
+		staticPeers:         staticPeers,
+		staticPeerIDs:       staticPeerIDs,
+		quitC:               make(chan struct{}),
+		syncOnlyReqToStatic: conf.SyncOnlyReqToStatic,
 	}
 
 	if conf.EnablePingService {
-		out.pinging = NewPingService(log,
+		out.pinging = NewPingService(
+			log,
 			func(ctx context.Context, peerID peer.ID) <-chan ping.Result {
 				return ping.Ping(ctx, h, peerID)
-			}, h.Network().Peers, clock.SystemClock)
+			},
+			h.Network().Peers,
+		)
 	}
 
 	out.initStaticPeers()

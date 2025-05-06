@@ -478,13 +478,14 @@ func TestSpanBatchReadTxData(t *testing.T) {
 		{"legacy tx", 32, testutils.RandomLegacyTx, true},
 		{"access list tx", 32, testutils.RandomAccessListTx, true},
 		{"dynamic fee tx", 32, testutils.RandomDynamicFeeTx, true},
+		{"setcode tx", 32, testutils.RandomSetCodeTx, true},
 	}
 
 	for i, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			rng := rand.New(rand.NewSource(int64(0x109550 + i)))
 			chainID := new(big.Int).SetUint64(rng.Uint64())
-			signer := types.NewLondonSigner(chainID)
+			signer := types.NewIsthmusSigner(chainID)
 			if !testCase.protected {
 				signer = types.HomesteadSigner{}
 			}
@@ -523,7 +524,7 @@ func TestSpanBatchMaxTxData(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x177288))
 
 	invalidTx := types.NewTx(&types.DynamicFeeTx{
-		Data: testutils.RandomData(rng, MaxSpanBatchSize+1),
+		Data: testutils.RandomData(rng, MaxSpanBatchElementCount+1),
 	})
 
 	txEncoded, err := invalidTx.MarshalBinary()
@@ -586,8 +587,8 @@ func TestSpanBatchTotalBlockTxCountNotOverflow(t *testing.T) {
 	chainID := big.NewInt(rng.Int63n(1000))
 
 	rawSpanBatch := RandomRawSpanBatch(rng, chainID)
-	rawSpanBatch.blockTxCounts[0] = MaxSpanBatchSize - 1
-	rawSpanBatch.blockTxCounts[1] = MaxSpanBatchSize - 1
+	rawSpanBatch.blockTxCounts[0] = MaxSpanBatchElementCount - 1
+	rawSpanBatch.blockTxCounts[1] = MaxSpanBatchElementCount - 1
 	// we are sure that totalBlockTxCount will overflow on uint64
 
 	var buf bytes.Buffer
