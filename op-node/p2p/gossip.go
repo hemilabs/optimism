@@ -30,17 +30,17 @@ const (
 	maxGossipSize = 10 * (1 << 20)
 	// minGossipSize is used to make sure that there is at least some data to validate the signature against.
 	minGossipSize          = 66
-	maxOutboundQueue       = 2048
-	maxValidateQueue       = 2048
-	globalValidateThrottle = 4096
+	maxOutboundQueue       = 16384
+	maxValidateQueue       = 16384
+	globalValidateThrottle = 32768
 	gossipHeartbeat        = 500 * time.Millisecond
 	// seenMessagesTTL limits the duration that message IDs are remembered for gossip deduplication purposes
 	// 130 * gossipHeartbeat
 	seenMessagesTTL  = 130 * gossipHeartbeat
-	DefaultMeshD     = 32 // topic stable mesh target count
-	DefaultMeshDlo   = 24 // topic stable mesh low watermark
-	DefaultMeshDhi   = 48 // topic stable mesh high watermark
-	DefaultMeshDlazy = 24 // gossip target
+	DefaultMeshD     = 256 // topic stable mesh target count
+	DefaultMeshDlo   = 192 // topic stable mesh low watermark
+	DefaultMeshDhi   = 384 // topic stable mesh high watermark
+	DefaultMeshDlazy = 192 // gossip target
 	// peerScoreInspectFrequency is the frequency at which peer scores are inspected
 	peerScoreInspectFrequency = 15 * time.Second
 )
