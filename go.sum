@@ -413,10 +413,10 @@ github.com/hashicorp/raft-boltdb/v2 v2.3.1 h1:ackhdCNPKblmOhjEU9+4lHSJYFkJd6Jqyv
 github.com/hashicorp/raft-boltdb/v2 v2.3.1/go.mod h1:n4S+g43dXF1tqDT+yzcXHhXM6y7MrlUd3TTwGRcUvQE=
 github.com/hemilabs/heminetwork v1.2.1-0.20250519164350-73f53306dd86 h1:ClXCcGcRSpnBE99GNPunKDe+YPhrDwN4VZDVzBjeWf8=
 github.com/hemilabs/heminetwork v1.2.1-0.20250519164350-73f53306dd86/go.mod h1:Bfpvf9PpCDLxFlg/HqrUhzpgNo287EFDjU1UgvOp9L4=
-github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250519183324-ff3c59cd40e9 h1:yz+WAFF7k1nzF4Fb2tJtNwVTDpGbIdUDmVFg5jB4H2k=
-github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250519183324-ff3c59cd40e9/go.mod h1:jEEzHvWZUFV9UjaZB32CgMAe2vT36ew9pfvmrs1e9iY=
-github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4 h1:X4egAf/gcS1zATw6wn4Ej8vjuVGxeHdan+bRb2ebyv4=
-github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4/go.mod h1:5GuXa7vkL8u9FkFuWdVvfR5ix8hRB7DbOAaYULamFpc=
+github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250519202254-4003f000453a h1:lFv3aPLcLZFyShjf6TRF95gTgXAGPYAcoJ0NKUVplKo=
+github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250519202254-4003f000453a/go.mod h1:5RInfe9H3ThSdOKLbBbB0LWufmi3cJ9dX7wsWDgZ2ZE=
+github.com/holiman/billy v0.0.0-20250108194907-5352da567d3e h1:pq/4Hzx6uYXfemif4EzNT4JxR1KAr7+xmDMWdeZSAmw=
+github.com/holiman/billy v0.0.0-20250108194907-5352da567d3e/go.mod h1:SCQdl3Vv9DgXmpsGuOn3kjhGgqFoWwB+Y2ITbC52dyc=
 github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZKVu0fao=
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
