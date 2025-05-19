@@ -411,8 +411,8 @@ github.com/hashicorp/raft-boltdb v0.0.0-20231211162105-6c830fa4535e h1:SK4y8oR4Z
 github.com/hashicorp/raft-boltdb v0.0.0-20231211162105-6c830fa4535e/go.mod h1:EMz/UIuG93P0MBeHh6CbXQAEe8ckVJLZjhD17lBzK5Q=
 github.com/hashicorp/raft-boltdb/v2 v2.3.1 h1:ackhdCNPKblmOhjEU9+4lHSJYFkJd6Jqyvj6eW9pwkc=
 github.com/hashicorp/raft-boltdb/v2 v2.3.1/go.mod h1:n4S+g43dXF1tqDT+yzcXHhXM6y7MrlUd3TTwGRcUvQE=
-github.com/hemilabs/heminetwork v1.2.0 h1:j0aRa2staSPnRE4v6vgWgaTZKOQuOSdYrddyMWKjBsE=
-github.com/hemilabs/heminetwork v1.2.0/go.mod h1:Bfpvf9PpCDLxFlg/HqrUhzpgNo287EFDjU1UgvOp9L4=
+github.com/hemilabs/heminetwork v1.2.1-0.20250519164350-73f53306dd86 h1:ClXCcGcRSpnBE99GNPunKDe+YPhrDwN4VZDVzBjeWf8=
+github.com/hemilabs/heminetwork v1.2.1-0.20250519164350-73f53306dd86/go.mod h1:Bfpvf9PpCDLxFlg/HqrUhzpgNo287EFDjU1UgvOp9L4=
 github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250519183324-ff3c59cd40e9 h1:yz+WAFF7k1nzF4Fb2tJtNwVTDpGbIdUDmVFg5jB4H2k=
 github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250519183324-ff3c59cd40e9/go.mod h1:jEEzHvWZUFV9UjaZB32CgMAe2vT36ew9pfvmrs1e9iY=
 github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4 h1:X4egAf/gcS1zATw6wn4Ej8vjuVGxeHdan+bRb2ebyv4=
