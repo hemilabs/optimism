@@ -19,7 +19,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -126,8 +125,7 @@ type Sequencer struct {
 	// toBlockRef converts a payload to a block-ref, and is only configurable for test-purposes
 	toBlockRef func(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.L2BlockRef, error)
 
-	bssClient client.BssClient
-	l2Chain   L2Chain
+	l2Chain L2Chain
 }
 
 var _ SequencerIface = (*Sequencer)(nil)
@@ -147,7 +145,6 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 	asyncGossip AsyncGossiper,
 	metrics Metrics,
 	l2Chain L2Chain,
-	bssClient client.BssClient,
 ) *Sequencer {
 	return &Sequencer{
 		ctx:              driverCtx,

@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -58,7 +57,6 @@ type AttributesQueue struct {
 	batch       *SingularBatch
 	concluding  bool
 	lastAttribs *AttributesWithParent
-	bssClient   client.BssClient
 }
 
 type SingularBatchProvider interface {
@@ -68,7 +66,7 @@ type SingularBatchProvider interface {
 	NextBatch(context.Context, eth.L2BlockRef) (*SingularBatch, bool, error)
 }
 
-func NewAttributesQueue(log log.Logger, cfg *rollup.Config, builder AttributesBuilder, prev SingularBatchProvider, bssClient client.BssClient) *AttributesQueue {
+func NewAttributesQueue(log log.Logger, cfg *rollup.Config, builder AttributesBuilder, prev SingularBatchProvider) *AttributesQueue {
 	return &AttributesQueue{
 		log:       log,
 		config:    cfg,

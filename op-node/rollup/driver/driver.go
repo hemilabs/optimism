@@ -3,8 +3,6 @@ package driver
 import (
 	"context"
 
-	"github.com/ethereum-optimism/optimism/op-service/client"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
@@ -173,7 +171,6 @@ func NewDriver(
 	safeHeadListener rollup.SafeHeadListener,
 	syncCfg *sync.Config,
 	sequencerConductor conductor.SequencerConductor,
-	bssClient client.BssClient,
 	altDA AltDAIface,
 	managedMode bool,
 ) *Driver {

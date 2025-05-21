@@ -91,8 +91,6 @@ type OpNode struct {
 
 	closed atomic.Bool
 
-	bssClient client.BssClient
-
 	// cancels execution prematurely, e.g. to halt. This may be nil.
 	cancel context.CancelCauseFunc
 	halted atomic.Bool
