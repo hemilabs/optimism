@@ -3,10 +3,10 @@ package node
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/hemilabs/heminetwork/hemi"
@@ -33,7 +33,8 @@ func getTipHeight(ctx context.Context, driver driverClient) (uint64, error) {
 	return syncStatus.UnsafeL2.Number, nil
 }
 
-func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient l2Client l2EthClient) ([]hemi.L2BTCFinality, error) {
+// TODO: fix me
+func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, l2Client l2EthClient) (interface{}, error) {
 	nextKeystoneHeight, err := getKeystoneProvidingFinality(blockNum)
 	if err != nil {
 		return nil, err
@@ -88,10 +89,11 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 	l2KeystonesToQuery := make([]hemi.L2Keystone, 1)
 	l2KeystonesToQuery[0] = *l2Keystone
 
-	return bssClient.BtcFinalityByKeystones(ctx, l2KeystonesToQuery)
+	return nil, errors.New("not yet")
 }
 
-func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Client l2EthClient, driver driverClient) ([]hemi.L2BTCFinality, error) {
+// TODO: fix me
+func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Client l2EthClient, driver driverClient) (interface{}, error) {
 	block, err := l2Client.InfoByHash(ctx, blockHash)
 	if err != nil {
 		return nil, err
@@ -111,5 +113,5 @@ func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Cl
 			"%d is %x", blockHash, blockNum, blockNum, blockHash)
 	}
 
-	return getBTCFinalityForBlockNum(ctx, blockNum, driver, bssClient, l2Client)
+	return getBTCFinalityForBlockNum(ctx, blockNum, driver, l2Client)
 }

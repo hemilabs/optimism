@@ -710,6 +710,11 @@ type KeystoneStatus struct {
 	ValidationError string `json:"validationError,omitempty"`
 }
 
+type PopPayout struct {
+	MinerAddress common.Address `json:"miner_address"`
+	Amount       *big.Int       `json:"amount"`
+}
+
 type EngineAPIMethod string
 
 const (
@@ -726,6 +731,7 @@ const (
 	GetPayloadV4 EngineAPIMethod = "engine_getPayloadV4"
 
 	NewKeystone EngineAPIMethod = "engine_newKeystone"
+	GetPayouts  EngineAPIMethod = "engine_popPayoutsByL2Keystone"
 )
 
 // StorageKey is a marshaling utility for hex-encoded storage keys, which can have leading 0s and are

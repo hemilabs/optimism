@@ -159,7 +159,6 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 		metrics:          metrics,
 		timeNow:          time.Now,
 		toBlockRef:       derive.PayloadToBlockRef,
-		bssClient:        bssClient,
 		l2Chain:          l2Chain,
 	}
 }
@@ -841,9 +840,9 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 	d.log.Info("Calculating PoP Payout", "block containing payout", newBlockHeight,
 		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
 
-	popPayouts, err := d.bssClient.GetPoPPayouts(ctx, *l2PayoutKeystone)
+	popPayouts, err := d.l2Chain.PopPayoutsByL2Keystone(ctx, *hemi.L2KeystoneAbbreviate(*l2PayoutKeystone).Hash())
 	if err != nil {
-		return nil, fmt.Errorf("unable to fetch PoP Payouts from BSS: %v", err)
+		return nil, fmt.Errorf("unable to fetch PoP Payouts from opgeth: %v", err)
 	}
 
 	if len(popPayouts) == 0 {

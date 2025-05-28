@@ -68,11 +68,10 @@ type SingularBatchProvider interface {
 
 func NewAttributesQueue(log log.Logger, cfg *rollup.Config, builder AttributesBuilder, prev SingularBatchProvider) *AttributesQueue {
 	return &AttributesQueue{
-		log:       log,
-		config:    cfg,
-		builder:   builder,
-		prev:      prev,
-		bssClient: bssClient,
+		log:     log,
+		config:  cfg,
+		builder: builder,
+		prev:    prev,
 	}
 }
 

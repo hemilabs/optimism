@@ -22,7 +22,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	opflags "github.com/ethereum-optimism/optimism/op-service/flags"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -119,7 +118,6 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 
 		IgnoreMissingPectraBlobSchedule: ctx.Bool(flags.IgnoreMissingPectraBlobSchedule.Name),
 		FetchWithdrawalRootFromState:    ctx.Bool(flags.FetchWithdrawalRootFromState.Name),
-		BSS:                             *NewBSSEndpointConfig(ctx),
 	}
 
 	if err := cfg.LoadPersisted(log); err != nil {
@@ -153,12 +151,6 @@ func NewBeaconEndpointConfig(ctx *cli.Context) node.L1BeaconEndpointSetup {
 		BeaconFallbackAddrs:    ctx.StringSlice(flags.BeaconFallbackAddrs.Name),
 		BeaconCheckIgnore:      ctx.Bool(flags.BeaconCheckIgnore.Name),
 		BeaconFetchAllSidecars: ctx.Bool(flags.BeaconFetchAllSidecars.Name),
-	}
-}
-
-func NewBSSEndpointConfig(ctx *cli.Context) *client.BssEndpointConfig {
-	return &client.BssEndpointConfig{
-		BSSURL: ctx.String(flags.BSSNodeAddr.Name),
 	}
 }
 

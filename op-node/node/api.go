@@ -117,7 +117,6 @@ func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, sa
 		safeDB: safeDB,
 		log:    log,
 		m:      m,
-		bsc:    bssClient,
 	}
 }
 
@@ -168,14 +167,15 @@ func (n *nodeAPI) Version(ctx context.Context) (string, error) {
 	return version.Version + "-" + version.Meta, nil
 }
 
-func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) ([]hemi.L2BTCFinality, error) {
-	return n.bsc.BtcFinalityByRecentKeystones(ctx, uint32(numRecentKeystones))
+// TODO: fix me
+func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) (interface{}, error) {
+	return nil, errors.New("not yet")
 }
 
-func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) ([]hemi.L2BTCFinality, error) {
-	return n.bsc.BtcFinalityByKeystones(ctx, l2Keystones)
+func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) (interface{}, error) {
+	return nil, errors.New("not yet")
 }
 
-func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) ([]hemi.L2BTCFinality, error) {
-	return getBTCFinalityForBlockHash(ctx, blockHash, n.client, n.dr, n.bsc)
+func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) (interface{}, error) {
+	return nil, errors.New("not yet")
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/eth/catalyst"
@@ -167,4 +168,24 @@ func (s *EngineAPIClient) NewKeystone(ctx context.Context, keystone hemi.L2Keyst
 		return nil, fmt.Errorf("failed to insert keystone: %w", err)
 	}
 	return &result, nil
+}
+
+func (s *EngineAPIClient) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
+	e := s.log.New("hash", abrevHash)
+	e.Trace("asking for payouts for keystone")
+
+	method := eth.GetPayouts
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var result []eth.PopPayout
+
+	err := s.RPC.CallContext(execCtx, &result, string(method), abrevHash)
+
+	e.Trace("Received payouts for keystone")
+	if err != nil {
+		e.Error("Error retrieving payouts", "err", err)
+		return nil, fmt.Errorf("failed to retrieve payouts: %w", err)
+	}
+	return result, nil
 }

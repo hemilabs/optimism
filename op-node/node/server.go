@@ -36,7 +36,7 @@ func newRPCServer(rpcCfg *RPCConfig, rollupCfg *rollup.Config, l2Client l2EthCli
 		oprpc.WithCORSHosts([]string{"*"}), // CORS is not important on op-node, but we used to do this on the old op-node RPC server, so kept for compatibility.
 		oprpc.WithRPCRecorder(metrics.NewRecorder("main")),
 	)
-	api := NewNodeAPI(rollupCfg, l2Client, dr, safeDB, log, metrics, bssClient)
+	api := NewNodeAPI(rollupCfg, l2Client, dr, safeDB, log, metrics)
 	server.AddAPI(rpc.API{
 		Namespace: "optimism",
 		Service:   api,

@@ -135,9 +135,6 @@ func (n *OpNode) init(ctx context.Context, cfg *Config) error {
 	if err := n.initTracer(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init the trace: %w", err)
 	}
-	if err := n.initBSSConnection(ctx, cfg); err != nil {
-		return fmt.Errorf("failed to init the BSS Websocket connection: %w", err)
-	}
 	n.initEventSystem()
 	if err := n.initL1(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init L1: %w", err)
@@ -439,29 +436,14 @@ func (n *OpNode) initL2(ctx context.Context, cfg *Config) error {
 		n.safeDB = safedb.Disabled
 	}
 	n.l2Driver = driver.NewDriver(n.eventSys, n.eventDrain, &cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source,
-		n.beacon, n, n, n.log, n.metrics, cfg.ConfigPersistence, n.safeDB, &cfg.Sync, sequencerConductor, n.bssClient, altDA, managedMode)
-	return nil
-}
-
-func (n *OpNode) initBSSConnection(ctx context.Context, cfg *Config) error {
-	bssc, err := client.NewLiveBssClient(n.log, &cfg.BSS)
-	if err != nil {
-		log.Error("Error creating BSS Client!", "err", err)
-		return fmt.Errorf("failed to create BSS Client: %v", err)
-	}
-	n.bssClient = bssc
-	err = n.bssClient.Run(ctx)
-	if err != nil {
-		log.Error("Error starting up bssClient!", "err", err)
-		return fmt.Errorf("failed to create BSS Client: %v", err)
-	}
+		n.beacon, n, n, n.log, n.metrics, cfg.ConfigPersistence, n.safeDB, &cfg.Sync, sequencerConductor, altDA, managedMode)
 	return nil
 }
 
 func (n *OpNode) initRPCServer(cfg *Config) error {
 	server := newRPCServer(&cfg.RPC, &cfg.Rollup,
 		n.l2Source.L2Client, n.l2Driver, n.safeDB,
-		n.log, n.metrics, n.appVersion, n.bssClient)
+		n.log, n.metrics, n.appVersion)
 	if p2pNode := n.getP2PNodeIfEnabled(); p2pNode != nil {
 		server.AddAPI(rpc.API{
 			Namespace: p2p.NamespaceRPC,
