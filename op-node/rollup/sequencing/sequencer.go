@@ -842,7 +842,9 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 
 	popPayouts, err := d.l2Chain.PopPayoutsByL2Keystone(ctx, *hemi.L2KeystoneAbbreviate(*l2PayoutKeystone).Hash())
 	if err != nil {
-		return nil, fmt.Errorf("unable to fetch PoP Payouts from opgeth: %v", err)
+		// Clayton: check not found vs error (there may be reorgs)
+		log.Warn("unable to fetch pop payouts from op-geth", "error", err)
+		return nil, nil
 	}
 
 	if len(popPayouts) == 0 {
