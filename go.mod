@@ -30,7 +30,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/hashicorp/raft v1.7.2
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
-	github.com/hemilabs/heminetwork v1.1.1-0.20250528115641-6941c7f47b6d
+	github.com/hemilabs/heminetwork v1.1.1-0.20250529134410-e7f144847b07
 	github.com/holiman/uint256 v1.3.2
 	github.com/ipfs/go-datastore v0.6.0
 	github.com/ipfs/go-ds-leveldb v0.5.0
@@ -292,4 +292,4 @@ exclude (
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 )
 
-replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250528153428-6f8b8c7f469f
+replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250529134739-ebbb99f2abef
