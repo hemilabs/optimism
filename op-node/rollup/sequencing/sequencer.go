@@ -855,15 +855,16 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		return nil, nil
 	}
 
-	d.log.Info("Received PoP Payouts for block", "payout count", len(popPayouts),
-		"block containing payout", newBlockHeight, "block paid out for", payoutBlockHeight,
-		"hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
-
 	// Create PoP payout tx
 	popMinerAddresses := make([]common.Address, len(popPayouts))
 	popMinerAmounts := make([]*big.Int, len(popPayouts))
 
+	d.log.Info("Received PoP Payouts for block", "payout count", len(popPayouts),
+		"block containing payout", newBlockHeight, "block paid out for", payoutBlockHeight,
+		"hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+
 	for i := 0; i < len(popPayouts); i++ {
+		d.log.Info("will payout to address", "address", popPayouts[i].MinerAddress.String())
 		popMinerAddresses[i] = popPayouts[i].MinerAddress
 		popMinerAmounts[i] = popPayouts[i].Amount
 	}
