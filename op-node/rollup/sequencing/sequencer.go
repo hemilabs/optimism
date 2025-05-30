@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"slices"
 	"sync/atomic"
 	"time"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/hemilabs/heminetwork/hemi"
 	"github.com/protolambda/ctxlock"
 
@@ -833,13 +831,7 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		EPHash:             payoutBlock.Hash[:],
 	}
 
-	payoutL2KeystoneAbrevHashB := hemi.L2KeystoneAbbreviate(*l2PayoutKeystone).Hash().CloneBytes()
-	slices.Reverse(payoutL2KeystoneAbrevHashB)
-
-	payoutL2KeystoneAbrevHash, err := chainhash.NewHash(payoutL2KeystoneAbrevHashB)
-	if err != nil {
-		return nil, err
-	}
+	payoutL2KeystoneAbrevHash := hemi.L2KeystoneAbbreviate(*l2PayoutKeystone).Hash()
 
 	d.log.Info("querying for keystone", "L1BlockNumber", l2PayoutKeystone.L1BlockNumber,
 		"L2BlockNumber", l2PayoutKeystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2PayoutKeystone.ParentEPHash),
