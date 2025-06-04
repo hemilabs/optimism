@@ -264,8 +264,8 @@ func (l *BatchSubmitter) loadBlocksIntoState(ctx context.Context, start, end uin
 	for i := start; i <= end; i++ {
 		block, err := l.loadBlockIntoState(ctx, i)
 		if errors.Is(err, ErrReorg) {
-			l.Log.Warn("Found L2 reorg", "block_number", i)
-			return err
+			l.Log.Warn("Found L2 reorg, ignoring", "block_number", i)
+			// return err
 		} else if err != nil {
 			l.Log.Warn("Failed to load block into state", "err", err)
 			return err
