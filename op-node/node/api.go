@@ -195,7 +195,7 @@ func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi
 		return nil, err
 	}
 
-	body, err := io.ReadAll(resp)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
