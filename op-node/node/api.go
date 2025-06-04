@@ -205,5 +205,5 @@ func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi
 		return nil, err
 	}
 
-
 	return &l2KeystoneBitcoinFinalityResponse, nil
+}
