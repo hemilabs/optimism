@@ -269,6 +269,12 @@ var (
 		Value:    time.Second * 12 * 32,
 		Category: L1RPCCategory,
 	}
+	BFGEndpointFlag = &cli.StringFlag{
+		Name:     "bfg.endpoint",
+		Usage:    "the http endpoint that will be used to communicate with BFG",
+		EnvVars:  prefixEnvVars("BFG_ENDPOINT"),
+		Category: SequencerCategory,
+	}
 	RuntimeConfigReloadIntervalFlag = &cli.DurationFlag{
 		Name:     "l1.runtime-config-reload-interval",
 		Usage:    "Poll interval for reloading the runtime config, useful when config events are not being picked up. Disabled if 0 or negative.",
@@ -474,6 +480,7 @@ var optionalFlags = []cli.Flag{
 	SequencerL1Confs,
 	SequencerRecoverMode,
 	L1EpochPollIntervalFlag,
+	BFGEndpointFlag,
 	RuntimeConfigReloadIntervalFlag,
 	RPCEnableAdmin,
 	RPCAdminPersistence,

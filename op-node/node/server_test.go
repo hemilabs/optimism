@@ -102,7 +102,7 @@ func TestOutputAtBlock(t *testing.T) {
 	status := randomSyncStatus(rand.New(rand.NewSource(123)))
 	drClient.ExpectBlockRefWithStatus(0xdcdc89, ref, status, nil)
 	m := &opmetrics.NoopRPCMetrics{}
-	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0")
+	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0", "")
 	require.NoError(t, server.Start())
 	defer func() {
 		require.NoError(t, server.Stop())
@@ -138,7 +138,7 @@ func TestVersion(t *testing.T) {
 		// ignore other rollup config info in this test
 	}
 	m := &opmetrics.NoopRPCMetrics{}
-	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0")
+	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0", "")
 	assert.NoError(t, server.Start())
 	defer func() {
 		require.NoError(t, server.Stop())
@@ -184,7 +184,7 @@ func TestSyncStatus(t *testing.T) {
 		// ignore other rollup config info in this test
 	}
 	m := &opmetrics.NoopRPCMetrics{}
-	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0")
+	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0", "")
 	assert.NoError(t, server.Start())
 	defer func() {
 		require.NoError(t, server.Stop())
@@ -227,7 +227,7 @@ func TestSafeHeadAtL1Block(t *testing.T) {
 		// ignore other rollup config info in this test
 	}
 	m := &opmetrics.NoopRPCMetrics{}
-	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0")
+	server := newRPCServer(rpcCfg, rollupCfg, l2Client, drClient, safeReader, log, m, "0.0", "")
 	require.NoError(t, server.Start())
 	defer func() {
 		require.NoError(t, server.Stop())

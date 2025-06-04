@@ -443,7 +443,7 @@ func (n *OpNode) initL2(ctx context.Context, cfg *Config) error {
 func (n *OpNode) initRPCServer(cfg *Config) error {
 	server := newRPCServer(&cfg.RPC, &cfg.Rollup,
 		n.l2Source.L2Client, n.l2Driver, n.safeDB,
-		n.log, n.metrics, n.appVersion)
+		n.log, n.metrics, n.appVersion, cfg.BFGEndpoint)
 	if p2pNode := n.getP2PNodeIfEnabled(); p2pNode != nil {
 		server.AddAPI(rpc.API{
 			Namespace: p2p.NamespaceRPC,

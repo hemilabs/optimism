@@ -89,7 +89,7 @@ func NewL2Verifier(t Testing, log log.Logger, l1 derive.L1Fetcher, blobsSrc deri
 	apis := []rpc.API{
 		{
 			Namespace:     "optimism",
-			Service:       node.NewNodeAPI(cfg, eng, backend, safeHeadListener, log, m, bssClient),
+			Service:       node.NewNodeAPI(cfg, eng, backend, safeHeadListener, log, m, ""),
 			Public:        true,
 			Authenticated: false,
 		},

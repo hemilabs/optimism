@@ -107,6 +107,7 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		SafeDBPath:                  ctx.String(flags.SafeDBPath.Name),
 		Sync:                        *syncConfig,
 		RollupHalt:                  haltOption,
+		BFGEndpoint:                 ctx.String(flags.BFGEndpointFlag.Name),
 
 		ConductorEnabled: ctx.Bool(flags.ConductorEnabledFlag.Name),
 		ConductorRpc: func(context.Context) (string, error) {

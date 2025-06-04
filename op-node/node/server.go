@@ -30,13 +30,13 @@ func (s *rpcServer) EnableAdminAPI(api *adminAPI) {
 }
 
 func newRPCServer(rpcCfg *RPCConfig, rollupCfg *rollup.Config, l2Client l2EthClient, dr driverClient,
-	safeDB SafeDBReader, log log.Logger, metrics opmetrics.RPCMetricer, appVersion string) *oprpc.Server {
+	safeDB SafeDBReader, log log.Logger, metrics opmetrics.RPCMetricer, appVersion string, bfgEndpoint string) *oprpc.Server {
 	server := oprpc.NewServer(rpcCfg.ListenAddr, rpcCfg.ListenPort, appVersion,
 		oprpc.WithLogger(log),
 		oprpc.WithCORSHosts([]string{"*"}), // CORS is not important on op-node, but we used to do this on the old op-node RPC server, so kept for compatibility.
 		oprpc.WithRPCRecorder(metrics.NewRecorder("main")),
 	)
-	api := NewNodeAPI(rollupCfg, l2Client, dr, safeDB, log, metrics)
+	api := NewNodeAPI(rollupCfg, l2Client, dr, safeDB, log, metrics, bfgEndpoint)
 	server.AddAPI(rpc.API{
 		Namespace: "optimism",
 		Service:   api,

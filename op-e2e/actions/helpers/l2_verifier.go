@@ -214,7 +214,7 @@ func NewL2Verifier(t Testing, log log.Logger, l1 derive.L1Fetcher,
 	apis := []rpc.API{
 		{
 			Namespace:     "optimism",
-			Service:       node.NewNodeAPI(cfg, eng, backend, safeHeadListener, log),
+			Service:       node.NewNodeAPI(cfg, eng, backend, safeHeadListener, log, ""),
 			Public:        true,
 			Authenticated: false,
 		},

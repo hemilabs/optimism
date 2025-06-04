@@ -2,12 +2,16 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/api/bfgapi"
 	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
@@ -101,22 +105,24 @@ func (n *adminAPI) SetRecoverMode(ctx context.Context, mode bool) error {
 }
 
 type nodeAPI struct {
-	config *rollup.Config
-	client l2EthClient
-	dr     driverClient
-	safeDB SafeDBReader
-	log    log.Logger
-	m      metrics.RPCMetricer
+	config      *rollup.Config
+	client      l2EthClient
+	dr          driverClient
+	safeDB      SafeDBReader
+	log         log.Logger
+	m           metrics.RPCMetricer
+	bfgEndpoint string
 }
 
-func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, safeDB SafeDBReader, log log.Logger, m metrics.RPCMetricer) *nodeAPI {
+func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, safeDB SafeDBReader, log log.Logger, m metrics.RPCMetricer, bfgEndpoint string) *nodeAPI {
 	return &nodeAPI{
-		config: config,
-		client: l2Client,
-		dr:     dr,
-		safeDB: safeDB,
-		log:    log,
-		m:      m,
+		config:      config,
+		client:      l2Client,
+		dr:          dr,
+		safeDB:      safeDB,
+		log:         log,
+		m:           m,
+		bfgEndpoint: bfgEndpoint,
 	}
 }
 
@@ -167,15 +173,37 @@ func (n *nodeAPI) Version(ctx context.Context) (string, error) {
 	return version.Version + "-" + version.Meta, nil
 }
 
-// TODO: fix me
+// TODO: we need to implement the these other two finalty calls, we should
+// confirm that they're needed
 func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) (interface{}, error) {
-	return nil, errors.New("not yet")
-}
-
-func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) (interface{}, error) {
 	return nil, errors.New("not yet")
 }
 
 func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) (interface{}, error) {
 	return nil, errors.New("not yet")
 }
+
+func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) (*bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
+	if len(l2Keystones) != 1 {
+		return nil, fmt.Errorf("you can only query by 1 keystone at a time, received: %d", len(l2Keystones))
+	}
+
+	bfgUrl := fmt.Sprintf("%s/v2/keystonefinality/%s", n.bfgEndpoint, hemi.L2KeystoneAbbreviate(l2Keystones[0]).Hash().String())
+
+	resp, err := http.Get(bfgUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := io.ReadAll(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var l2KeystoneBitcoinFinalityResponse bfgapi.L2KeystoneBitcoinFinalityResponse
+	if err := json.Unmarshal(body, &l2KeystoneBitcoinFinalityResponse); err != nil {
+		return nil, err
+	}
+
+
+	return &l2KeystoneBitcoinFinalityResponse, nil
