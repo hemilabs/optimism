@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/hemilabs/heminetwork/api/bfgapi"
-	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -183,12 +182,8 @@ func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.H
 	return nil, errors.New("not yet")
 }
 
-func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) (*bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
-	if len(l2Keystones) != 1 {
-		return nil, fmt.Errorf("you can only query by 1 keystone at a time, received: %d", len(l2Keystones))
-	}
-
-	bfgUrl := fmt.Sprintf("%s/v2/keystonefinality/%s", n.bfgEndpoint, hemi.L2KeystoneAbbreviate(l2Keystones[0]).Hash().String())
+func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2KeystoneAbrevHash common.Hash) (*bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
+	bfgUrl := fmt.Sprintf("%s/v2/keystonefinality/%s", n.bfgEndpoint, l2KeystoneAbrevHash.String())
 
 	resp, err := http.Get(bfgUrl)
 	if err != nil {
