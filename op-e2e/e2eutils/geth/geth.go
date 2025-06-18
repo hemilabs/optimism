@@ -1,6 +1,7 @@
 package geth
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -131,7 +132,7 @@ func createGethNode(l2 bool, nodeCfg *node.Config, ethCfg *ethconfig.Config, opt
 		return nil, err
 	}
 
-	backend, err := eth.New(n, ethCfg)
+	backend, err := eth.New(n, ethCfg, context.Background())
 	if err != nil {
 		n.Close()
 		return nil, err

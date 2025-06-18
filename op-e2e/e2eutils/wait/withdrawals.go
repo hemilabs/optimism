@@ -77,8 +77,6 @@ func ForFinalizationPeriod(ctx context.Context, client *ethclient.Client, l1Prov
 
 // ForGamePublished waits until a game is published on L1 for the given l2BlockNumber.
 func ForGamePublished(ctx context.Context, client *ethclient.Client, optimismPortalAddr common.Address, disputeGameFactoryAddr common.Address, l2BlockNumber *big.Int) (uint64, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
 	l2BlockNumber = new(big.Int).Set(l2BlockNumber) // Don't clobber caller owned l2BlockNumber
 
 	optimismPortal2Contract, err := bindingspreview.NewOptimismPortal2Caller(optimismPortalAddr, client)
@@ -111,8 +109,6 @@ func ForGamePublished(ctx context.Context, client *ethclient.Client, optimismPor
 
 // ForWithdrawalCheck waits until the withdrawal check in the portal succeeds.
 func ForWithdrawalCheck(ctx context.Context, client *ethclient.Client, withdrawal crossdomain.Withdrawal, optimismPortalAddr common.Address, proofSubmitter common.Address) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
 	opts := &bind.CallOpts{Context: ctx}
 	portal, err := bindingspreview.NewOptimismPortal2Caller(optimismPortalAddr, client)
 	if err != nil {
