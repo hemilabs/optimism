@@ -56,6 +56,8 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 	var depositTxs []hexutil.Bytes
 	var seqNumber uint64
 
+	fmt.Println("Preparing attributes for l1 receipts")
+
 	sysConfig, err := ba.l2.SystemConfigByL2Hash(ctx, l2Parent.Hash)
 	if err != nil {
 		return nil, NewTemporaryError(fmt.Errorf("failed to retrieve L2 parent block: %w", err))
@@ -65,6 +67,8 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 	// case we need to fetch all transaction receipts from the L1 origin block so we can scan for
 	// user deposits.
 	if l2Parent.L1Origin.Number != epoch.Number {
+		fmt.Printf("l2Parent.L1Origin.Number != epoch.Number")
+
 		info, receipts, err := ba.l1.FetchReceipts(ctx, epoch.Hash)
 		if err != nil {
 			return nil, NewTemporaryError(fmt.Errorf("failed to fetch L1 block info and receipts: %w", err))
@@ -86,9 +90,13 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		}
 
 		l1Info = info
+		fmt.Printf("info v1: %+v, base blob gas: %s\n", info, info.BlobBaseFee().String())
+
 		depositTxs = deposits
 		seqNumber = 0
 	} else {
+		fmt.Printf("l2Parent.L1Origin.Number == epoch.Number")
+
 		if l2Parent.L1Origin.Hash != epoch.Hash {
 			return nil, NewResetError(fmt.Errorf("cannot create new block with L1 origin %s in conflict with L1 origin %s", epoch, l2Parent.L1Origin))
 		}
@@ -97,6 +105,8 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 			return nil, NewTemporaryError(fmt.Errorf("failed to fetch L1 block info: %w", err))
 		}
 		l1Info = info
+		fmt.Printf("info v2: %+v, base blob gas: %s\n", info, info.BlobBaseFee().String())
+
 		depositTxs = nil
 		seqNumber = l2Parent.SequenceNumber + 1
 	}
@@ -132,6 +142,7 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		upgradeTxs = append(upgradeTxs, isthmus...)
 	}
 
+	fmt.Println("Calculating L1InfoDepositBytes")
 	l1InfoTx, err := L1InfoDepositBytes(ba.rollupCfg, sysConfig, seqNumber, l1Info, nextL2Time)
 	if err != nil {
 		return nil, NewCriticalError(fmt.Errorf("failed to create l1InfoTx: %w", err))

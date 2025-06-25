@@ -415,23 +415,30 @@ func L1InfoDeposit(rollupCfg *rollup.Config, sysCfg eth.SystemConfig, seqNumber 
 	}
 	var data []byte
 	if isEcotoneButNotFirstBlock(rollupCfg, l2Timestamp) {
+		fmt.Printf("isEcotoneButNotFirstBlock\n")
 		isIsthmusActivated := isIsthmusButNotFirstBlock(rollupCfg, l2Timestamp)
 		l1BlockInfo.BlobBaseFee = block.BlobBaseFee()
+		fmt.Printf("Set l1BlockInfo.BlobBaseFee to %s\n", l1BlockInfo.BlobBaseFee.String())
 
 		// Apply Cancun blob base fee calculation if this chain needs the L1 Pectra
 		// blob schedule fix (mostly Holesky and Sepolia OP-Stack chains).
 		if t := rollupCfg.PectraBlobScheduleTime; t != nil && block.Time() < *t {
 			if ebg := block.ExcessBlobGas(); ebg != nil {
 				l1BlockInfo.BlobBaseFee = eth.CalcBlobFeeCancun(*ebg)
+				fmt.Printf("Set l1BlockInfo.BlobBaseFee to %s from eth.CalcBlobFeeCancun()\n", l1BlockInfo.BlobBaseFee.String())
 			} else {
 				// If L1 isn't on Cancun yet. It should already have been set
 				// to nil above in this case anyways.
 				l1BlockInfo.BlobBaseFee = nil
+
+				fmt.Printf("Set l1BlockInfo.BlobBaseFee to nil\n")
 			}
 		}
 
 		if l1BlockInfo.BlobBaseFee == nil {
 			// The L2 spec states to use the MIN_BLOB_GASPRICE from EIP-4844 if not yet active on L1.
+
+			fmt.Printf("l1BlockInfo.BlobBaseFee is nil, setting to 1\n")
 			l1BlockInfo.BlobBaseFee = big.NewInt(1)
 		}
 		scalars, err := sysCfg.EcotoneScalars()
@@ -439,21 +446,28 @@ func L1InfoDeposit(rollupCfg *rollup.Config, sysCfg eth.SystemConfig, seqNumber 
 			return nil, err
 		}
 		l1BlockInfo.BlobBaseFeeScalar = scalars.BlobBaseFeeScalar
+		fmt.Printf("Set l1BlockInfo.BlobBaseFeeScalar to %d\n", l1BlockInfo.BlobBaseFeeScalar)
 		l1BlockInfo.BaseFeeScalar = scalars.BaseFeeScalar
+		fmt.Printf("Set l1BlockInfo.BaseFeeScalar to %d\n", l1BlockInfo.BaseFeeScalar)
 
 		if isIsthmusActivated {
+			fmt.Printf("Isthmus is activated\n")
 			operatorFee := sysCfg.OperatorFee()
 			l1BlockInfo.OperatorFeeScalar = operatorFee.Scalar
 			l1BlockInfo.OperatorFeeConstant = operatorFee.Constant
+			fmt.Printf("Set l1BlockInfo.OperatorFeeScalar to %d\n", l1BlockInfo.OperatorFeeScalar)
+			fmt.Printf("Set l1BlockInfo.OperatorFeeConstant to %d\n", l1BlockInfo.OperatorFeeConstant)
 		}
 
 		if isIsthmusActivated {
+			fmt.Printf("Marshalling binary Isthmus")
 			out, err := l1BlockInfo.marshalBinaryIsthmus()
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal Isthmus l1 block info: %w", err)
 			}
 			data = out
 		} else {
+			fmt.Printf("Marshalling binary Ecotone")
 			out, err := l1BlockInfo.marshalBinaryEcotone()
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal Ecotone l1 block info: %w", err)
@@ -462,8 +476,11 @@ func L1InfoDeposit(rollupCfg *rollup.Config, sysCfg eth.SystemConfig, seqNumber 
 		}
 
 	} else {
+		fmt.Printf("!isEcotoneButNotFirstBlock\n")
 		l1BlockInfo.L1FeeOverhead = sysCfg.Overhead
 		l1BlockInfo.L1FeeScalar = sysCfg.Scalar
+		fmt.Printf("Set l1BlockInfo.L1FeeOverhead to %d\n", l1BlockInfo.L1FeeOverhead)
+		fmt.Printf("Set l1BlockInfo.L1FeeScalar to %d\n", l1BlockInfo.L1FeeScalar)
 		out, err := l1BlockInfo.marshalBinaryBedrock()
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal Bedrock l1 block info: %w", err)
@@ -502,6 +519,7 @@ func L1InfoDepositBytes(rollupCfg *rollup.Config, sysCfg eth.SystemConfig, seqNu
 		return nil, fmt.Errorf("failed to create L1 info tx: %w", err)
 	}
 	l1Tx := types.NewTx(dep)
+	fmt.Printf("L1InfoDepositBytes l1Tx.BlobGas(): %d, l1Tx.BlobGasFeeCap(): %d", l1Tx.BlobGas(), l1Tx.BlobGasFeeCap())
 	opaqueL1Tx, err := l1Tx.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode L1 info tx: %w", err)

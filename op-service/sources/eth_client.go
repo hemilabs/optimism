@@ -337,10 +337,12 @@ func (s *EthClient) PayloadByLabel(ctx context.Context, label eth.BlockLabel) (*
 // It verifies the receipt hash in the block header against the receipt hash of the fetched receipts
 // to ensure that the execution engine did not fail to return any receipts.
 func (s *EthClient) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {
+	fmt.Printf("Fetching receipts...")
 	info, txs, err := s.InfoAndTxsByHash(ctx, blockHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying block: %w", err)
 	}
+	fmt.Printf("L1 FetchReceipts info.BlobBaseFee(): %s, info.ExcessBlobGas(): %s", info.BlobBaseFee().String(), info.ExcessBlobGas())
 
 	txHashes, _ := eth.TransactionsToHashes(txs), eth.ToBlockID(info)
 	receipts, err := s.recProvider.FetchReceipts(ctx, info, txHashes)
