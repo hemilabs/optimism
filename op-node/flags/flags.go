@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hemilabs/heminetwork/api/bfgapi"
 	"github.com/urfave/cli/v2"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
@@ -45,6 +46,13 @@ func prefixEnvVars(names ...string) []string {
 }
 
 var (
+	/* Required Flags */
+	BFGNodeAddr = &cli.StringFlag{
+		Name:    "bfg",
+		Usage:   "Address of bfg endpoint to use",
+		Value:   bfgapi.DefaultListenAddress,
+		EnvVars: prefixEnvVars("BFG_WS"),
+	}
 	L1NodeAddr = &cli.StringFlag{
 		Name:     "l1",
 		Usage:    "Address of L1 User JSON-RPC endpoint to use (eth namespace required)",
