@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hemilabs/heminetwork/api/bssapi"
 	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -396,9 +395,7 @@ func TestSequencerChaosMonkey(t *testing.T) {
 				}
 
 				// Always mock empty PoP Payout for this test
-				popPayout := make([]bssapi.PopPayout, 0)
-
-				bssc.ExpectGetPoPPayouts(l2PayoutKeystone, popPayout, nil)
+				// fix this test
 			}
 		}
 		payload, err := seq.RunNextSequencerAction(context.Background(), async.NoOpGossiper{}, &conductor.NoOpConductor{})

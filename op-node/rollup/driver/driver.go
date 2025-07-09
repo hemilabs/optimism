@@ -3,8 +3,6 @@ package driver
 import (
 	"context"
 
-	"github.com/ethereum-optimism/optimism/op-service/client"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
@@ -173,7 +171,6 @@ func NewDriver(
 	safeHeadListener rollup.SafeHeadListener,
 	syncCfg *sync.Config,
 	sequencerConductor conductor.SequencerConductor,
-	bssClient client.BssClient,
 	altDA AltDAIface,
 	managedMode bool,
 ) *Driver {
@@ -191,7 +188,7 @@ func NewDriver(
 	verifConfDepth := confdepth.NewConfDepth(driverCfg.VerifierConfDepth, statusTracker.L1Head, l1)
 
 	ec := engine.NewEngineController(l2, log, metrics, cfg, syncCfg,
-		sys.Register("engine-controller", nil, opts), bssClient)
+		sys.Register("engine-controller", nil, opts))
 
 	sys.Register("engine-reset",
 		engine.NewEngineResetDeriver(driverCtx, log, cfg, l1, l2, syncCfg), opts)
@@ -210,7 +207,7 @@ func NewDriver(
 	sys.Register("attributes-handler",
 		attributes.NewAttributesHandler(log, cfg, driverCtx, l2), opts)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l1Blobs, altDA, l2, metrics, managedMode, bssClient)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l1Blobs, altDA, l2, metrics, managedMode)
 
 	sys.Register("pipeline",
 		derive.NewPipelineDeriver(driverCtx, derivationPipeline), opts)
@@ -244,7 +241,7 @@ func NewDriver(
 		findL1Origin := sequencing.NewL1OriginSelector(driverCtx, log, cfg, sequencerConfDepth)
 		sys.Register("origin-selector", findL1Origin, opts)
 		sequencer = sequencing.NewSequencer(driverCtx, log, cfg, attrBuilder, findL1Origin,
-			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, l2, bssClient)
+			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, l2)
 		sys.Register("sequencer", sequencer, opts)
 	} else {
 		sequencer = sequencing.DisabledSequencer{}

@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/hemi"
 )
 
 var (
@@ -212,4 +213,8 @@ func (o *OracleEngine) SystemConfigByL2Hash(ctx context.Context, hash common.Has
 		return eth.SystemConfig{}, err
 	}
 	return derive.PayloadToSystemConfig(o.rollupCfg, payload.ExecutionPayload)
+}
+
+func (o *OracleEngine) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
+	return nil, errors.New("unsupported")
 }

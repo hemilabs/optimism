@@ -19,7 +19,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -126,8 +125,7 @@ type Sequencer struct {
 	// toBlockRef converts a payload to a block-ref, and is only configurable for test-purposes
 	toBlockRef func(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.L2BlockRef, error)
 
-	bssClient client.BssClient
-	l2Chain   L2Chain
+	l2Chain L2Chain
 }
 
 var _ SequencerIface = (*Sequencer)(nil)
@@ -147,7 +145,6 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 	asyncGossip AsyncGossiper,
 	metrics Metrics,
 	l2Chain L2Chain,
-	bssClient client.BssClient,
 ) *Sequencer {
 	return &Sequencer{
 		ctx:              driverCtx,
@@ -162,7 +159,6 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 		metrics:          metrics,
 		timeNow:          time.Now,
 		toBlockRef:       derive.PayloadToBlockRef,
-		bssClient:        bssClient,
 		l2Chain:          l2Chain,
 	}
 }
@@ -835,18 +831,22 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		EPHash:             payoutBlock.Hash[:],
 	}
 
+	payoutL2KeystoneAbrevHash := hemi.L2KeystoneAbbreviate(*l2PayoutKeystone).Hash()
+
 	d.log.Info("querying for keystone", "L1BlockNumber", l2PayoutKeystone.L1BlockNumber,
 		"L2BlockNumber", l2PayoutKeystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2PayoutKeystone.ParentEPHash),
 		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2PayoutKeystone.PrevKeystoneEPHash),
 		"StateRoot", fmt.Sprintf("%x", l2PayoutKeystone.StateRoot),
-		"EPHash", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+		"EPHash", fmt.Sprintf("%x", l2PayoutKeystone.EPHash),
+		"L2KeystoneAbrevHash", payoutL2KeystoneAbrevHash.String(),
+	)
 
 	d.log.Info("Calculating PoP Payout", "block containing payout", newBlockHeight,
 		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
 
-	popPayouts, err := d.bssClient.GetPoPPayouts(ctx, *l2PayoutKeystone)
+	popPayouts, err := d.l2Chain.PopPayoutsByL2Keystone(ctx, *payoutL2KeystoneAbrevHash)
 	if err != nil {
-		return nil, fmt.Errorf("unable to fetch PoP Payouts from BSS: %v", err)
+		return nil, fmt.Errorf("unable to fetch PoP Payouts from opgeth: %v", err)
 	}
 
 	if len(popPayouts) == 0 {

@@ -7,8 +7,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-service/client"
-
 	"github.com/ethereum/go-ethereum/log"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
@@ -23,7 +21,6 @@ import (
 
 type Config struct {
 	Beacon L1BeaconEndpointSetup
-	BSS    client.BssEndpointConfig
 	L1     L1EndpointSetup
 	L2     L2EndpointSetup
 

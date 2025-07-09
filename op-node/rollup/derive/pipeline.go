@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -92,14 +91,12 @@ type DerivationPipeline struct {
 	resetSysConfig eth.SystemConfig
 	engineIsReset  bool
 
-	bssClient client.BssClient
-
 	metrics Metrics
 }
 
 // NewDerivationPipeline creates a DerivationPipeline, to turn L1 data into L2 block-inputs.
 func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L1Fetcher, l1Blobs L1BlobsFetcher,
-	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics, managedMode bool, bssClient client.BssClient,
+	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics, managedMode bool,
 ) *DerivationPipeline {
 	spec := rollup.NewChainSpec(rollupCfg)
 	// Stages are strung together into a pipeline,
@@ -117,7 +114,7 @@ func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L
 	chInReader := NewChannelInReader(rollupCfg, log, channelMux, metrics)
 	batchMux := NewBatchMux(log, rollupCfg, chInReader, l2Source)
 	attrBuilder := NewFetchingAttributesBuilder(rollupCfg, l1Fetcher, l2Source)
-	attributesQueue := NewAttributesQueue(log, rollupCfg, attrBuilder, batchMux, bssClient)
+	attributesQueue := NewAttributesQueue(log, rollupCfg, attrBuilder, batchMux)
 
 	// Reset from ResetEngine then up from L1 Traversal. The stages do not talk to each other during
 	// the ResetEngine, but after the ResetEngine, this is the order in which the stages could talk to each other.
@@ -132,7 +129,6 @@ func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L
 		resetting: 0,
 		stages:    stages,
 		metrics:   metrics,
-		bssClient: bssClient,
 		traversal: l1Traversal,
 		attrib:    attributesQueue,
 		l2:        l2Source,

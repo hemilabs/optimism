@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum"
@@ -44,9 +44,11 @@ type ExecEngine interface {
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
 	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
+	NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error)
+	PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error)
 }
 
-type bssNotification struct {
+type opgethNotification struct {
 	unsafeL2             eth.ExecutionPayload
 	unsafeL2PrevKeystone eth.L2BlockRef
 }
@@ -98,12 +100,11 @@ type EngineController struct {
 	buildingInfo eth.PayloadInfo
 	buildingSafe bool
 
-	bssNotifierCh chan *bssNotification
-	bssClient     client.BssClient
+	opgethNotifierCh chan *opgethNotification
 }
 
 func NewEngineController(engine ExecEngine, log log.Logger, metrics derive.Metrics,
-	rollupCfg *rollup.Config, syncCfg *sync.Config, emitter event.Emitter, bssClient client.BssClient,
+	rollupCfg *rollup.Config, syncCfg *sync.Config, emitter event.Emitter,
 ) *EngineController {
 	syncStatus := syncStatusCL
 	if syncCfg.SyncMode == sync.ELSync {
@@ -111,21 +112,20 @@ func NewEngineController(engine ExecEngine, log log.Logger, metrics derive.Metri
 	}
 
 	e := &EngineController{
-		engine:        engine,
-		log:           log,
-		metrics:       metrics,
-		rollupCfg:     rollupCfg,
-		syncStatus:    syncStatus,
-		clock:         clock.SystemClock,
-		bssNotifierCh: make(chan *bssNotification, 10),
-		bssClient:     bssClient,
-		emitter:       emitter,
-		chainSpec:     rollup.NewChainSpec(rollupCfg),
-		syncCfg:       syncCfg,
+		engine:           engine,
+		log:              log,
+		metrics:          metrics,
+		rollupCfg:        rollupCfg,
+		syncStatus:       syncStatus,
+		clock:            clock.SystemClock,
+		opgethNotifierCh: make(chan *opgethNotification, 10),
+		emitter:          emitter,
+		chainSpec:        rollup.NewChainSpec(rollupCfg),
+		syncCfg:          syncCfg,
 	}
 
 	// XXX see if there is a better place to start this goroutine.
-	go e.bssNotifier()
+	go e.opgethNotifier()
 
 	return e
 }
@@ -399,7 +399,7 @@ func (e *EngineController) TryUpdateEngine(ctx context.Context) error {
 		return derive.NewTemporaryError(fmt.Errorf("could not get envelope for hash %s", e.unsafeHead.Hash))
 	}
 
-	if err := e.parseAndNotifyBSS(ctx, envelope); err != nil {
+	if err := e.parseAndNotifyOpgeth(ctx, envelope); err != nil {
 		return err
 	}
 
@@ -487,9 +487,9 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 		e.syncStatus = syncStatusFinishedEL
 	}
 
-	e.log.Info("checking whether to notify bss from InsertUnsafePayload")
+	e.log.Info("checking whether to notify opgeth from InsertUnsafePayload")
 
-	if err := e.parseAndNotifyBSS(ctx, envelope); err != nil {
+	if err := e.parseAndNotifyOpgeth(ctx, envelope); err != nil {
 		return err
 	}
 
@@ -514,8 +514,8 @@ func (e *EngineController) InsertUnsafePayload(ctx context.Context, envelope *et
 	return nil
 }
 
-func (e *EngineController) parseAndNotifyBSS(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
-	bn := &bssNotification{
+func (e *EngineController) parseAndNotifyOpgeth(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
+	bn := &opgethNotification{
 		unsafeL2: *envelope.ExecutionPayload,
 	}
 
@@ -547,9 +547,9 @@ func (e *EngineController) parseAndNotifyBSS(ctx context.Context, envelope *eth.
 	}
 
 	select {
-	case e.bssNotifierCh <- bn:
+	case e.opgethNotifierCh <- bn:
 	default:
-		e.log.Warn("BSS notifier channel full, dropping event...")
+		e.log.Warn("opgeth notifier channel full, dropping event...")
 	}
 
 	return nil
@@ -638,10 +638,10 @@ func (e *EngineController) ResetBuildingState() {
 	e.resetBuildingState()
 }
 
-func (e *EngineController) bssNotifier() {
+func (e *EngineController) opgethNotifier() {
 	ctx := context.Background()
 	for {
-		bn := <-e.bssNotifierCh
+		bn := <-e.opgethNotifierCh
 
 		var l1OriginNumber uint64
 
@@ -657,18 +657,18 @@ func (e *EngineController) bssNotifier() {
 			continue
 		}
 
-		e.log.Info(fmt.Sprintf("Sending BSS keystone notification for L2 block %v with L1 origin %v",
+		e.log.Info(fmt.Sprintf("Sending opgeth keystone notification for L2 block %v with L1 origin %v",
 			bn.unsafeL2.BlockNumber, l1OriginNumber))
 
-		if err := e.notifyBSSKeystone(ctx, bn); err != nil {
-			e.log.Warn("Failed to notify BSS of keystone", "err", err)
+		if err := e.notifyOpgethKeystone(ctx, bn); err != nil {
+			e.log.Warn("Failed to notify opgeth of keystone", "err", err)
 			continue
 		}
-		e.log.Info("BSS notified of keystone")
+		e.log.Info("opgeth notified of keystone")
 	}
 }
 
-func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotification) error {
+func (e *EngineController) notifyOpgethKeystone(ctx context.Context, bn *opgethNotification) error {
 	prevKeystoneHash := [common.HashLength]byte{}
 
 	if &bn.unsafeL2PrevKeystone != nil {
@@ -680,7 +680,7 @@ func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotific
 		return err
 	}
 
-	l2Keystone := &hemi.L2Keystone{
+	l2Keystone := hemi.L2Keystone{
 		Version:            0x01,
 		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
 		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
@@ -690,14 +690,15 @@ func (e *EngineController) notifyBSSKeystone(ctx context.Context, bn *bssNotific
 		EPHash:             unsafeL2BlockRef.Hash[:],
 	}
 
-	e.log.Info("Sending notification to BSS of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
+	e.log.Info("Sending notification to opgeth of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
 		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
 		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
 		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
 		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
 
-	err = e.bssClient.NotifyL2Keystone(ctx, *l2Keystone)
+	_, err = e.engine.NewKeystone(ctx, l2Keystone)
 	if err != nil {
+		e.log.Warn("Failed to insert keystone in opgeth", "err", err)
 		return err
 	}
 

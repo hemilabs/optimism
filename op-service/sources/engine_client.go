@@ -3,7 +3,9 @@ package sources
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/eth/catalyst"
@@ -14,6 +16,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
+	"github.com/hemilabs/heminetwork/hemi"
 )
 
 type EngineClientConfig struct {
@@ -145,4 +148,44 @@ func (s *EngineAPIClient) SignalSuperchainV1(ctx context.Context, recommended, r
 		Required:    required,
 	})
 	return result, err
+}
+
+func (s *EngineAPIClient) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
+	e := s.log.New("ep_hash", keystone.EPHash)
+	e.Trace("sending keystone for insertion")
+
+	method := eth.NewKeystone
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var result eth.KeystoneStatus
+
+	err := s.RPC.CallContext(execCtx, &result, string(method), keystone)
+
+	e.Trace("Received keystone insertion result", "status", result.Status, "message", result.ValidationError)
+	if err != nil {
+		e.Error("Keystone insertion failed", "err", err)
+		return nil, fmt.Errorf("failed to insert keystone: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *EngineAPIClient) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
+	e := s.log.New("hash", abrevHash)
+	e.Trace("asking for payouts for keystone")
+
+	method := eth.GetPayouts
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var result []eth.PopPayout
+
+	err := s.RPC.CallContext(execCtx, &result, string(method), abrevHash)
+
+	e.Trace("Received payouts for keystone")
+	if err != nil {
+		e.Error("Error retrieving payouts", "err", err)
+		return nil, fmt.Errorf("failed to retrieve payouts: %w", err)
+	}
+	return result, nil
 }

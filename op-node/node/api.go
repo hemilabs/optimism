@@ -8,13 +8,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/api/bfgapi"
 	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/version"
 	"github.com/ethereum-optimism/optimism/op-service/apis"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -108,10 +108,10 @@ type nodeAPI struct {
 	safeDB SafeDBReader
 	log    log.Logger
 	m      metrics.RPCMetricer
-	bsc    client.BssClient
+	bfgURL string
 }
 
-func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, safeDB SafeDBReader, log log.Logger, m metrics.RPCMetricer, bssClient client.BssClient) *nodeAPI {
+func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, safeDB SafeDBReader, log log.Logger, m metrics.RPCMetricer, bfgURL string) *nodeAPI {
 	return &nodeAPI{
 		config: config,
 		client: l2Client,
@@ -119,7 +119,7 @@ func NewNodeAPI(config *rollup.Config, l2Client l2EthClient, dr driverClient, sa
 		safeDB: safeDB,
 		log:    log,
 		m:      m,
-		bsc:    bssClient,
+		bfgURL: bfgURL,
 	}
 }
 
@@ -170,14 +170,15 @@ func (n *nodeAPI) Version(ctx context.Context) (string, error) {
 	return version.Version + "-" + version.Meta, nil
 }
 
-func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) ([]hemi.L2BTCFinality, error) {
-	return n.bsc.BtcFinalityByRecentKeystones(ctx, uint32(numRecentKeystones))
+// TODO: fix me
+func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) (interface{}, error) {
+	return nil, errors.New("not yet")
 }
 
-func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) ([]hemi.L2BTCFinality, error) {
-	return n.bsc.BtcFinalityByKeystones(ctx, l2Keystones)
+func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) (interface{}, error) {
+	return nil, errors.New("not yet")
 }
 
-func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) ([]hemi.L2BTCFinality, error) {
-	return getBTCFinalityForBlockHash(ctx, blockHash, n.client, n.dr, n.bsc)
+func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash) (bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
+	return getBTCFinalityForBlockHash(ctx, blockHash, n.client, n.dr, n.bfgURL)
 }

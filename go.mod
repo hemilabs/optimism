@@ -1,8 +1,6 @@
 module github.com/ethereum-optimism/optimism
 
-go 1.23
-
-toolchain go1.23.8
+go 1.24.2
 
 require (
 	github.com/BurntSushi/toml v1.5.0
@@ -32,7 +30,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
-	github.com/hemilabs/heminetwork v1.0.0
+	github.com/hemilabs/heminetwork v1.1.1-0.20250529134410-e7f144847b07
 	github.com/holiman/uint256 v1.3.2
 	github.com/ipfs/go-datastore v0.6.0
 	github.com/ipfs/go-ds-leveldb v0.5.0
@@ -74,6 +72,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/VictoriaMetrics/fastcache v1.12.2 // indirect
 	github.com/adrg/xdg v0.4.0 // indirect
+	github.com/aead/siphash v1.0.1 // indirect
 	github.com/allegro/bigcache v1.2.1 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
@@ -144,7 +143,7 @@ require (
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
 	github.com/hashicorp/golang-lru/arc/v2 v2.0.7 // indirect
 	github.com/hashicorp/raft-boltdb v0.0.0-20231211162105-6c830fa4535e // indirect
-	github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4 // indirect
+	github.com/holiman/billy v0.0.0-20250108194907-5352da567d3e // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/influxdata/influxdb-client-go/v2 v2.4.0 // indirect
@@ -156,6 +155,7 @@ require (
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jbenet/goprocess v0.1.4 // indirect
 	github.com/juju/loggo v1.0.0 // indirect
+	github.com/kkdai/bstream v0.0.0-20161212061736-f391b8402d23 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/koron/go-ssdp v0.0.4 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -253,7 +253,7 @@ require (
 	github.com/wlynxg/anet v0.0.4 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
-	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.etcd.io/bbolt v1.3.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.59.0 // indirect
@@ -290,7 +290,7 @@ exclude (
 	google.golang.org/genproto v0.0.0-20181202183823-bd91e49a0898
 	google.golang.org/genproto v0.0.0-20190306203927-b5d61aea6440
 	google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
-
+	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 )
 
-replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250506143223-73c4e4de3b53
+replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20250529134739-ebbb99f2abef

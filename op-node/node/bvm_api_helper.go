@@ -3,12 +3,14 @@ package node
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/api/bfgapi"
 	"github.com/hemilabs/heminetwork/hemi"
 )
 
@@ -33,26 +35,27 @@ func getTipHeight(ctx context.Context, driver driverClient) (uint64, error) {
 	return syncStatus.UnsafeL2.Number, nil
 }
 
-func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, bssClient client.BssClient, l2Client l2EthClient) ([]hemi.L2BTCFinality, error) {
+func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driverClient, l2Client l2EthClient, bfgURL string) (bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
+	emptyFin := bfgapi.L2KeystoneBitcoinFinalityResponse{}
 	nextKeystoneHeight, err := getKeystoneProvidingFinality(blockNum)
 	if err != nil {
-		return nil, err
+		return emptyFin, err
 	}
 
 	log.Trace("getBTCFinalityForBlockNum", "nextKeystoneHeight", nextKeystoneHeight)
 
 	l2TIpHeight, err := getTipHeight(ctx, driver)
 	if err != nil {
-		return nil, err
+		return emptyFin, err
 	}
 
 	if nextKeystoneHeight > l2TIpHeight {
-		return nil, fmt.Errorf("keystone %d providing finality for block %d not yet produced, L2 tip = %d",
+		return emptyFin, fmt.Errorf("keystone %d providing finality for block %d not yet produced, L2 tip = %d",
 			nextKeystoneHeight, blockNum, l2TIpHeight)
 	}
 	nextKeystone, _, err := driver.BlockRefWithStatus(ctx, nextKeystoneHeight)
 	if err != nil {
-		return nil, err
+		return emptyFin, err
 	}
 
 	// Get height of the previous keystone, so we can reconstruct the appropriate L2Keystone header
@@ -61,14 +64,14 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 	if prevKeystoneHeight >= 0 {
 		prevKeystone, _, err := driver.BlockRefWithStatus(ctx, prevKeystoneHeight)
 		if err != nil {
-			return nil, err
+			return emptyFin, err
 		}
 		prevKeystoneHash = [32]byte(prevKeystone.Hash[:])
 	}
 
 	block, err := l2Client.InfoByHash(ctx, nextKeystone.Hash)
 	if err != nil {
-		return nil, err
+		return emptyFin, err
 	}
 
 	stateRoot := block.Root()
@@ -85,16 +88,37 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 
 	log.Trace("going to query for keystone", "keystone", spew.Sdump(l2Keystone), "nextKeystone", spew.Sdump(nextKeystone), "prevKeystoneHash", hex.EncodeToString(prevKeystoneHash[:]))
 
-	l2KeystonesToQuery := make([]hemi.L2Keystone, 1)
-	l2KeystonesToQuery[0] = *l2Keystone
+	kssHash := hemi.L2KeystoneAbbreviate(*l2Keystone).Hash()
+	u := fmt.Sprintf("%v/v%v/keystonefinality/%v",
+		bfgURL, bfgapi.APIVersion, kssHash)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return emptyFin, err
+	}
 
-	return bssClient.BtcFinalityByKeystones(ctx, l2KeystonesToQuery)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return emptyFin, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return emptyFin, fmt.Errorf("unexpected status code: %v", resp.StatusCode)
+	}
+
+	fin := bfgapi.L2KeystoneBitcoinFinalityResponse{}
+	if err := json.NewDecoder(resp.Body).Decode(&fin); err != nil {
+		return emptyFin, err
+	}
+
+	return fin, nil
 }
 
-func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Client l2EthClient, driver driverClient, bssClient client.BssClient) ([]hemi.L2BTCFinality, error) {
+func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Client l2EthClient, driver driverClient, bfgURL string) (bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
+	emptyFin := bfgapi.L2KeystoneBitcoinFinalityResponse{}
 	block, err := l2Client.InfoByHash(ctx, blockHash)
 	if err != nil {
-		return nil, err
+		return emptyFin, err
 	}
 
 	// Fetch the block from the canonical chain at the same index as the block corresponding to the provided hash to
@@ -102,14 +126,14 @@ func getBTCFinalityForBlockHash(ctx context.Context, blockHash common.Hash, l2Cl
 	blockNum := block.NumberU64()
 	refetch, _, err := driver.BlockRefWithStatus(ctx, blockNum)
 	if err != nil {
-		return nil, err
+		return emptyFin, err
 	}
 
 	// Check passed in hash matches hash of block from canonical chain at same height
 	if refetch.Hash != blockHash {
-		return nil, fmt.Errorf("block %x at height %d is not on the canonical chain, canonical block at height "+
+		return emptyFin, fmt.Errorf("block %x at height %d is not on the canonical chain, canonical block at height "+
 			"%d is %x", blockHash, blockNum, blockNum, blockHash)
 	}
 
-	return getBTCFinalityForBlockNum(ctx, blockNum, driver, bssClient, l2Client)
+	return getBTCFinalityForBlockNum(ctx, blockNum, driver, l2Client, bfgURL)
 }
