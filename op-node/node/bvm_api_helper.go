@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/davecgh/go-spew/spew"
@@ -89,7 +88,6 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 
 	log.Trace("going to query for keystone", "keystone", spew.Sdump(l2Keystone), "nextKeystone", spew.Sdump(nextKeystone), "prevKeystoneHash", hex.EncodeToString(prevKeystoneHash[:]))
 
-	client := &http.Client{}
 	kssHash := hemi.L2KeystoneAbbreviate(*l2Keystone).Hash()
 	u := fmt.Sprintf("%v/v%v/keystonefinality/%v",
 		bfgURL, bfgapi.APIVersion, kssHash)
@@ -98,7 +96,7 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 		return emptyFin, err
 	}
 
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return emptyFin, err
 	}
@@ -109,16 +107,7 @@ func getBTCFinalityForBlockNum(ctx context.Context, blockNum uint64, driver driv
 	}
 
 	fin := bfgapi.L2KeystoneBitcoinFinalityResponse{}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return emptyFin, err
-	}
-
-	if err = resp.Body.Close(); err != nil {
-		return emptyFin, err
-	}
-
-	if err = json.Unmarshal(body, &fin); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&fin); err != nil {
 		return emptyFin, err
 	}
 

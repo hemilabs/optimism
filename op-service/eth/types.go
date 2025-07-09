@@ -694,7 +694,7 @@ func (v *Uint64String) UnmarshalText(b []byte) error {
 	return nil
 }
 
-type InserteystoneStatus string
+type InsertKeystoneStatus string
 
 const (
 	// given keystone is valid
@@ -705,7 +705,7 @@ const (
 
 type KeystoneStatus struct {
 	// the result of the keystone insertion
-	Status InserteystoneStatus `json:"status"`
+	Status InsertKeystoneStatus `json:"status"`
 	// additional details on the result (optional field)
 	ValidationError string `json:"validationError,omitempty"`
 }
