@@ -94,7 +94,7 @@ func L1VersionsFor(chainID uint64) (validation.Versions, error) {
 	switch chainID {
 	case 1:
 		return validation.StandardVersionsMainnet, nil
-	case 11155111:
+	case 11155111, 1337:
 		return validation.StandardVersionsSepolia, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -105,7 +105,7 @@ func GuardianAddressFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.Guardian), nil
-	case 11155111:
+	case 11155111, 1337:
 		return common.Address(validation.StandardConfigRolesSepolia.Guardian), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -116,7 +116,7 @@ func ChallengerAddressFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.Challenger), nil
-	case 11155111:
+	case 11155111, 1337:
 		return common.Address(validation.StandardConfigRolesSepolia.Challenger), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -161,7 +161,7 @@ func SuperchainProxyAdminAddrFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.HexToAddress("0x543bA4AADBAb8f9025686Bd03993043599c6fB04"), nil
-	case 11155111:
+	case 11155111, 1337:
 		return common.HexToAddress("0x189aBAAaa82DfC015A588A7dbaD6F13b1D3485Bc"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -172,7 +172,7 @@ func L1ProxyAdminOwner(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.L1ProxyAdminOwner), nil
-	case 11155111:
+	case 11155111, 1337:
 		return common.Address(validation.StandardConfigRolesSepolia.L1ProxyAdminOwner), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -183,7 +183,7 @@ func L2ProxyAdminOwner(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.L2ProxyAdminOwner), nil
-	case 11155111:
+	case 11155111, 1337:
 		return common.Address(validation.StandardConfigRolesSepolia.L2ProxyAdminOwner), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -194,7 +194,7 @@ func ProtocolVersionsOwner(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.ProtocolVersionsOwner), nil
-	case 11155111:
+	case 11155111, 1337:
 		return common.Address(validation.StandardConfigRolesSepolia.ProtocolVersionsOwner), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
