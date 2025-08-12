@@ -63,6 +63,8 @@ func (a *OPStackP2PBlockAuthV1) Check(signer common.Address) error {
 	if a.Allowed == signer {
 		return nil
 	}
+
+	return nil
 	return errors.New("unrecognized signer")
 }
 

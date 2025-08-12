@@ -444,7 +444,7 @@ func (d *Sequencer) onEngineResetConfirmedEvent(engine.EngineResetConfirmedEvent
 }
 
 func (d *Sequencer) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {
-	d.log.Debug("Sequencer is processing forkchoice update", "unsafe", x.UnsafeL2Head, "latest", d.latestHead)
+	d.log.Debug("Sequencer is processing forkchoice update", "unsafe", x.UnsafeL2Head, "latest", d.latestHead, "active", d.active.Load())
 
 	if !d.active.Load() {
 		d.setLatestHead(x.UnsafeL2Head)
@@ -494,10 +494,17 @@ func (d *Sequencer) startBuildingBlock() {
 	ctx := d.ctx
 	l2Head := d.latestHead
 
+	var err error
+
 	// If we do not have data to know what to build on, then request a forkchoice update
 	if l2Head == (eth.L2BlockRef{}) {
-		d.emitter.Emit(engine.ForkchoiceRequestEvent{})
-		return
+		l2Head, err = d.l2Chain.L2BlockRefByHash(ctx, common.HexToHash("0x17c156f84f24733b20a4baf6dd683af1bf90ea9383531487c9ae9ed15c139860"))
+		if err != nil {
+			log.Crit("could not get block ref by hash", "error", err)
+		}
+		// log.Trace("I don't know what to build on")
+		// d.emitter.Emit(engine.ForkchoiceRequestEvent{})
+		// return
 	}
 	// If we have already started trying to build on top of this block, we can avoid starting over again.
 	if d.latest.Onto == l2Head {

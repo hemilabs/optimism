@@ -305,5 +305,7 @@ func NewSyncConfig(ctx *cli.Context, log log.Logger) (*sync.Config, error) {
 		cfg.SyncMode = sync.ELSync
 	}
 
+	log.Info("starting with sync mode", "SyncMode", cfg.SyncMode)
+
 	return cfg, nil
 }

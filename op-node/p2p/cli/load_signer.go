@@ -34,5 +34,7 @@ func LoadSignerSetup(ctx *cli.Context, logger log.Logger) (p2p.SignerSetup, erro
 		return &p2p.PreparedSigner{Signer: remoteSigner}, nil
 	}
 
+	log.Debug("key is blank and signerCfg is not enabled")
+
 	return nil, nil
 }
