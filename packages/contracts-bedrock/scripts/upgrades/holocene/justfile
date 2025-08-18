@@ -20,7 +20,6 @@ run deploy-config-path output-folder-path="$(pwd)/output/" *args='':
     -v {{output-folder-path}}:/output \
     -v {{deploy-config-path}}:/app/packages/contracts-bedrock/deploy-config/deploy-config.json \
     --env-file=.env \
-    --network=e2e_e2e \
     op-holocene-upgrade:local {{args}}
 
 # Build the image locally.
