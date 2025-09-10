@@ -30,7 +30,7 @@ var (
 	// superchainConfigProxy refers to the address of the Sepolia superchain config proxy.
 	// NOTE: this is currently hardcoded and we will need to move this to the superchain-registry
 	// and have 1 deployed for each superchain target.
-	superchainConfigProxy = common.HexToAddress("0xC2Be75506d5724086DEB7245bd260Cc9753911Be")
+	superchainConfigProxy = common.HexToAddress("0xe4c5ef29cf4112bc2928a2c82412b9c509970a1e")
 )
 
 // L1 will add calls for upgrading each of the L1 contracts.
@@ -586,7 +586,7 @@ func OptimismPortal(batch *safe.Batch, implementations superchain.Implementation
 	}
 
 	if systemConfig != common.HexToAddress(chainConfig.SystemConfigAddr.String()) {
-		return fmt.Errorf("upgrading OptimismPortal: SystemConfig address doesn't match config")
+		return fmt.Errorf("upgrading OptimismPortal: SystemConfig address doesn't match config %s != %s", systemConfig, chainConfig.SystemConfigAddr.String())
 	}
 
 	calldata, err := optimismPortalABI.Pack("initialize", l2OutputOracle, systemConfig, superchainConfigProxy)
