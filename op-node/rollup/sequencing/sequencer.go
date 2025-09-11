@@ -498,7 +498,7 @@ func (d *Sequencer) startBuildingBlock() {
 
 	// If we do not have data to know what to build on, then request a forkchoice update
 	if l2Head == (eth.L2BlockRef{}) {
-		l2Head, err = d.l2Chain.L2BlockRefByHash(ctx, common.HexToHash("0x17c156f84f24733b20a4baf6dd683af1bf90ea9383531487c9ae9ed15c139860"))
+		l2Head, err = d.l2Chain.L2BlockRefByLabel(ctx, "latest")
 		if err != nil {
 			log.Crit("could not get block ref by hash", "error", err)
 		}
