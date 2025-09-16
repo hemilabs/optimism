@@ -586,7 +586,7 @@ func OptimismPortal(batch *safe.Batch, implementations superchain.Implementation
 	}
 
 	if systemConfig != common.HexToAddress(chainConfig.SystemConfigAddr.String()) {
-		return fmt.Errorf("upgrading OptimismPortal: SystemConfig address doesn't match config")
+		return fmt.Errorf("upgrading OptimismPortal: SystemConfig address doesn't match config %s != %s", systemConfig, chainConfig.SystemConfigAddr.String())
 	}
 
 	calldata, err := optimismPortalABI.Pack("initialize", l2OutputOracle, systemConfig, superchainConfigProxy)

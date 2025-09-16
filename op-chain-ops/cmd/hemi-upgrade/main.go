@@ -5,19 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"io"
-
 	"encoding/hex"
+	"crypto/ecdsa"
+	"math/big"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
+
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/clients"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/safe"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/upgrades"
+
+	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
 
 	"github.com/ethereum-optimism/superchain-registry/superchain"
 
@@ -26,37 +33,36 @@ import (
 // deployments contains the L1 addresses of the contracts that are being upgraded to.
 // Note that the key is the L2 chain id. This is because the L1 contracts must be specific
 // for a particular OP Stack chain and cannot currently be used by multiple chains.
-// Clayton note: will this clash with OP Sepolia or existing Hemi Sepolia contracts when deployed?
 var deployments = map[uint64]superchain.ImplementationList{
-	// Hemi Sepolia
+	// Hemi Sepolia, addresses were created with IMPL_SALT=something4
 	743111: {
 		L1CrossDomainMessenger: superchain.VersionedContract{
 			Version: "2.3.0",
-			Address: superchain.HexToAddress("0xD3494713A5cfaD3F5359379DfA074E2Ac8C6Fd65"),
+			Address: superchain.HexToAddress("0x07A160b7EaE398586A45748427b04b637Cbde769"),
 		},
 		L1ERC721Bridge: superchain.VersionedContract{
 			Version: "2.1.0",
-			Address: superchain.HexToAddress("0xAE2AF01232a6c4a4d3012C5eC5b1b35059caF10d"),
+			Address: superchain.HexToAddress("0x9364e51948008a68c1639B511757bf3889cF9E84"),
 		},
 		L1StandardBridge: superchain.VersionedContract{
 			Version: "2.1.0",
-			Address: superchain.HexToAddress("0x64B5a5Ed26DCb17370Ff4d33a8D503f0fbD06CfF"),
+			Address: superchain.HexToAddress("0xF8E745A3F14C5A23Ac42AfE0F2EF0265342ceD06"),
 		},
 		OptimismPortal: superchain.VersionedContract{
 			Version: "2.5.0",
-			Address: superchain.HexToAddress("0x2D778797049FE9259d947D1ED8e5442226dFB589"),
+			Address: superchain.HexToAddress("0x69b4e5eDaeE67295458BF57D769824B34b5d83AF"),
 		},
 		SystemConfig: superchain.VersionedContract{
 			Version: "1.12.0",
-			Address: superchain.HexToAddress("0xba2492e52F45651B60B8B38d4Ea5E2390C64Ffb1"),
+			Address: superchain.HexToAddress("0x2425dA120dd224126DdB9a6Ed5A23322AD6f8901"),
 		},
 		L2OutputOracle: superchain.VersionedContract{
 			Version: "1.8.0",
-			Address: superchain.HexToAddress("0xF243BEd163251380e78068d317ae10f26042B292"),
+			Address: superchain.HexToAddress("0x393D882ba5C1d86Df0B4887b59aC2a22C68D0232"),
 		},
 		OptimismMintableERC20Factory: superchain.VersionedContract{
 			Version: "1.9.0",
-			Address: superchain.HexToAddress("0xE01efbeb1089D1d1dB9c6c8b135C934C0734c846"),
+			Address: superchain.HexToAddress("0x2C902480463aA98078eB5e14e31F288a0e9675ea"),
 		},
 	},
 }
@@ -75,7 +81,7 @@ var proxyAddresses = map[uint64]*superchain.AddressList{
 }
 
 var chainConfigs = map[uint64]*superchain.ChainConfig{
-	// Clayton note: does this need to be filled out if it's in the deploy config
+	// Clayton note: audit this
 	743111: {
 		Name: "Hemi Sepolia",
 		ChainID: 743111,
@@ -120,6 +126,11 @@ func main() {
 				Value: "true",
 				Required: false,
 				EnvVars: []string{"SEND_TXS"},
+			},
+			&cli.PathFlag{
+				Name: "private-key",
+				Required: true,
+				EnvVars: []string{"PRIVATE_KEY"},
 			},
 		},
 		Action: entrypoint,
@@ -209,58 +220,84 @@ func entrypoint(ctx *cli.Context) error {
 		dataStr := fmt.Sprintf("0x%s", hex.EncodeToString(tx.Data))
 		log.Info("found transaction", "to", tx.To.String(), "data", dataStr)
 
-		const owner = "0x382D0AA958998408DD7695c8965C46BdaBBC3003"
-		const privateKey = "0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e"
+		privateKeyArg := ctx.String("private-key")
 
-		castCmd := []string{
-			"/root/foundry/target/release/cast",
-			"send",
-			tx.To.String(),
-			"--from",
-			owner,
-			"--rpc-url",
-			ctx.String("l1-rpc-url"),
-			dataStr,
-			"--private-key",
-			privateKey,
-			"--unlocked",
-			"--transaction-input-kind",
-			"input",
-		}
-
-		log.Info("will call command", "cmd", castCmd)
-
-		finalCmd := exec.Command(castCmd[0], castCmd[1:]...)
-
-		stdErrPipe, err := finalCmd.StderrPipe()
+		privateKey, err := crypto.HexToECDSA(privateKeyArg)
 		if err != nil {
-			return fmt.Errorf("error creating stderr pipe: %s", err)
+			return fmt.Errorf("could not parse private key: %s", err)
 		}
 
-		stdOutPipe, err := finalCmd.StdoutPipe()
+		publicKey := privateKey.Public()
+
+		publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
+		if ! ok {
+			return fmt.Errorf("failed to create ecdsa public key")
+		}
+
+		address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+
+		log.Info("my info", "public key", publicKey, "address", address)
+
+		nonce, err := clients.L1Client.NonceAt(ctx.Context, address, nil)
 		if err != nil {
-			return fmt.Errorf("error creating stdout pipe: %s", err)
+			return fmt.Errorf("could not get none for address: %s", err)
 		}
 
-		if err := finalCmd.Start(); err != nil {
-			return fmt.Errorf("error starting command: %s", err)
+		dynamicFeeTx := types.LegacyTx{
+			Nonce: nonce,
+			To: &tx.To,
+			Data: tx.Data,
 		}
 
-		slurp, err := io.ReadAll(stdOutPipe)
+		txToSign := types.NewTx(&dynamicFeeTx)
+
+		signer := types.NewEIP155Signer(l1ChainID)
+
+		signedTx, err := types.SignTx(txToSign, signer, privateKey)
 		if err != nil {
-			fmt.Errorf("error reading from stdErrPipe: %s", err)
+			return fmt.Errorf("failed to sign tx: %s", err)
 		}
 
-		errSlurp, err := io.ReadAll(stdErrPipe)
+		safe, err := bindings.NewSafeV130Transactor(
+			common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003"),
+			clients.L1Client,
+		)
 		if err != nil {
-			fmt.Errorf("error reading from stdErrPipe: %s", err)
+			return fmt.Errorf("could not create safe: %s", err)
 		}
 
-		if err := finalCmd.Wait(); err != nil {
-			return fmt.Errorf("error running command: %s -- %s", err, string(errSlurp))
+		r, s, v := signedTx.RawSignatureValues()
+
+		signatures := []byte{}
+		signatures = append(signatures, s.Bytes()...)
+		signatures = append(signatures, r.Bytes()...)
+		signatures = append(signatures, v.Bytes()...)
+
+		bigZero := big.NewInt(0)
+
+		safeTx, err := safe.ExecTransaction(
+			&bind.TransactOpts{},
+			*signedTx.To(),
+			bigZero,
+			signedTx.Data(),
+			1 /* operation? */,
+			bigZero,
+			bigZero,
+			bigZero,
+			common.HexToAddress("0x"),
+			common.HexToAddress("0x"),
+			signatures,
+		)
+		if err != nil {
+			return fmt.Errorf("could not create safe.ExecTransaction: %s", err)
 		}
 
-		log.Info("successfully ran command", "output", string(slurp))
+		log.Info("created signed transaction", "hash", signedTx.Hash())
+
+		err = clients.L1Client.SendTransaction(ctx.Context, safeTx)
+		if err != nil {
+			return fmt.Errorf("could not send tx: %s", err)
+		}
 	}
 
 	return nil
