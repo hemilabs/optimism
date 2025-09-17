@@ -1,28 +1,27 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"encoding/hex"
-	"crypto/ecdsa"
+	"io"
 	"math/big"
 	"net/http"
-	"bytes"
-	"io"
-	"context"
+	"os"
 
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
-	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/clients"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
@@ -32,7 +31,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
 
 	"github.com/ethereum-optimism/superchain-registry/superchain"
-
 )
 
 // deployments contains the L1 addresses of the contracts that are being upgraded to.
@@ -74,22 +72,22 @@ var deployments = map[uint64]superchain.ImplementationList{
 
 var proxyAddresses = map[uint64]*superchain.AddressList{
 	743111: {
-		AddressManager: superchain.HexToAddress("0x23f0022354241fdb721dc43e7897d7af662a2995"),
-		L1CrossDomainMessengerProxy: superchain.HexToAddress("0x9bcccf1d222539c4c47e4c6f5749e4d5fa33215c"),
-		L1ERC721BridgeProxy: superchain.HexToAddress("0xa5ba2558b41f34f0b5cc4ed389386201a3d31aec"),
-		L1StandardBridgeProxy: superchain.HexToAddress("0xc94b1bee63a3e101fe5f71c80f912b4f4b055925"),
-		L2OutputOracleProxy: superchain.HexToAddress("0x032d1e1dd960a4b027a9a35ff8b2b672e333bc27"),
+		AddressManager:                    superchain.HexToAddress("0x23f0022354241fdb721dc43e7897d7af662a2995"),
+		L1CrossDomainMessengerProxy:       superchain.HexToAddress("0x9bcccf1d222539c4c47e4c6f5749e4d5fa33215c"),
+		L1ERC721BridgeProxy:               superchain.HexToAddress("0xa5ba2558b41f34f0b5cc4ed389386201a3d31aec"),
+		L1StandardBridgeProxy:             superchain.HexToAddress("0xc94b1bee63a3e101fe5f71c80f912b4f4b055925"),
+		L2OutputOracleProxy:               superchain.HexToAddress("0x032d1e1dd960a4b027a9a35ff8b2b672e333bc27"),
 		OptimismMintableERC20FactoryProxy: superchain.HexToAddress("0xb4bCe3efD3282Da4eEC69429966a85f92298799B"),
-		OptimismPortalProxy: superchain.HexToAddress("0xB6f9579980aE46f61217A99145645341E49E2516"),
-		ProxyAdmin: superchain.HexToAddress("0xc43ED1E8D70d0e5801514833fAD3D93Ba16Da4Aa"),
+		OptimismPortalProxy:               superchain.HexToAddress("0xB6f9579980aE46f61217A99145645341E49E2516"),
+		ProxyAdmin:                        superchain.HexToAddress("0xc43ED1E8D70d0e5801514833fAD3D93Ba16Da4Aa"),
 	},
 }
 
 var chainConfigs = map[uint64]*superchain.ChainConfig{
 	// Clayton note: audit this
 	743111: {
-		Name: "Hemi Sepolia",
-		ChainID: 743111,
+		Name:             "Hemi Sepolia",
+		ChainID:          743111,
 		SystemConfigAddr: superchain.HexToAddress("0xfa73580F4D72294Ae9EE3DAaC36D8bF111B37Ce9"),
 	},
 }
@@ -127,15 +125,15 @@ func main() {
 				EnvVars: []string{"OUTFILE"},
 			},
 			&cli.PathFlag{
-				Name: "send-txs",
-				Value: "true",
+				Name:     "send-txs",
+				Value:    "true",
 				Required: false,
-				EnvVars: []string{"SEND_TXS"},
+				EnvVars:  []string{"SEND_TXS"},
 			},
 			&cli.PathFlag{
-				Name: "private-key",
+				Name:     "private-key",
 				Required: true,
-				EnvVars: []string{"PRIVATE_KEY"},
+				EnvVars:  []string{"PRIVATE_KEY"},
 			},
 		},
 		Action: entrypoint,
@@ -225,6 +223,11 @@ func entrypoint(ctx *cli.Context) error {
 		dataStr := fmt.Sprintf("0x%s", hex.EncodeToString(tx.Data))
 		log.Info("found transaction", "to", tx.To.String(), "data", dataStr)
 
+		// fake, used for signing (but we impersonate other accounts too and
+		// still sign with this one)
+		privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+
+		// used to sign multiple?
 		privateKeys := []string{
 			"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
 			"59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
@@ -233,8 +236,8 @@ func entrypoint(ctx *cli.Context) error {
 
 		dynamicFeeTx := types.DynamicFeeTx{
 			ChainID: l1ChainID,
-			To: &tx.To,
-			Data: tx.Data,
+			To:      &tx.To,
+			Data:    tx.Data,
 		}
 		txToSign := types.NewTx(&dynamicFeeTx)
 
@@ -265,97 +268,91 @@ func entrypoint(ctx *cli.Context) error {
 			return fmt.Errorf("error getting nonce: %s", err)
 		}
 
-		for _, privateKeyStr := range privateKeys {
-			privateKey, err := crypto.HexToECDSA(privateKeyStr)
+		privateKey, err := crypto.HexToECDSA(privateKeyStr)
+		if err != nil {
+			return fmt.Errorf("could not parse private key: %s", err)
+		}
+
+		publicKey := privateKey.Public()
+
+		publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("failed to create ecdsa public key")
+		}
+
+		address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+
+		log.Info("my info", "public key", publicKey, "address", address)
+
+		owners, err := safeCaller.GetOwners(nil)
+		if err != nil {
+			return err
+		}
+
+		for _, owner := range owners {
+			log.Info("an owner is", "address", owner)
+			// now that we have the address, set the user as an owner
+
+			type bodyJSON struct {
+				Method  string   `json:"method"`
+				ID      int      `json:"id"`
+				JSONRPC string   `json:"jsonrpc"`
+				Params  []string `json:"params"`
+			}
+
+			body := bodyJSON{
+				Method:  "hardhat_impersonateAccount",
+				ID:      1,
+				JSONRPC: "2.0",
+				Params: []string{
+					owner.Hex(),
+				},
+			}
+
+			buf, err := json.Marshal(body)
 			if err != nil {
-				return fmt.Errorf("could not parse private key: %s", err)
+				return fmt.Errorf("cannot marshal json body: %s", err)
 			}
 
-			publicKey := privateKey.Public()
+			log.Info("will send request body", "body", string(buf))
 
-			publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
-			if !ok {
-				return fmt.Errorf("failed to create ecdsa public key")
+			resp, err := http.Post(ctx.String("l1-rpc-url"), "application/json", bytes.NewBuffer(buf))
+			if err != nil {
+				return fmt.Errorf("could not post request: %s", err)
 			}
 
-			address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+			// Clayton note: add check for RPC error field failure
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("received unexpected status: %d", resp.Status)
+			}
 
-			log.Info("my info", "public key", publicKey, "address", address)
+			defer resp.Body.Close()
 
-			// // now that we have the address, set the user as an owner
-			// baseSlot := make([]byte, 32)
-			// baseSlot[0] = 0x01
-			// slices.Reverse(baseSlot)
-			// newSlot := append(address.Bytes(), baseSlot...)
-			// newSlot = append(make([]byte, 12), newSlot...)
-
-			// storageSlot := crypto.Keccak256(newSlot)
-
-			// log.Info("will set new owner", "new owner slot", hex.EncodeToString(newSlot), "hashed slot", hex.EncodeToString(storageSlot[:]))
-
-			// type bodyJSON struct {
-			// 	Method string `json:"method"`
-			// 	ID int `json:"id"`
-			// 	JSONRPC string `json:"jsonrpc"`
-			// 	Params []string `json:"params"`
-			// }
-
-			// addressToSave := append(make([]byte, 12), address.Bytes()...)
-
-
-			// body := bodyJSON{
-			// 	Method: "hardhat_setStorageAt",
-			// 	ID: 1,
-			// 	JSONRPC: "2.0",
-			// 	Params: []string{
-			// 		"0x382D0AA958998408DD7695c8965C46BdaBBC3003",
-			// 		fmt.Sprintf("0x%s", hex.EncodeToString(storageSlot[:])),
-			// 		fmt.Sprintf("0x%s", hex.EncodeToString(addressToSave)),
-			// 	},
-			// }
-
-			// buf, err := json.Marshal(body)
-			// if err != nil {
-			// 	return fmt.Errorf("cannot marshal json body: %s", err)
-			// }
-
-			// log.Info("will send request body", "body", string(buf))
-
-			// resp, err := http.Post(ctx.String("l1-rpc-url"), "application/json", bytes.NewBuffer(buf))
-			// if err != nil {
-			// 	return fmt.Errorf("could not post request: %s", err)
-			// }
-
-			// if resp.StatusCode != http.StatusOK {
-			// 	return fmt.Errorf("received unexpected status: %d", resp.Status)
-			// }
-
-			// defer resp.Body.Close()
-
-			// // Read the entire response body into a byte slice
-			// b, err := io.ReadAll(resp.Body)
-			// if err != nil {
-			// 	return err
-			// }
-
-			// log.Info("received response body", "body", string(b))
-
-			// log.Info("request succeeded", "status", resp.StatusCode)
-
-			owners, err := safeCaller.GetOwners(nil)
+			// Read the entire response body into a byte slice
+			b, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return err
 			}
 
-			for _, owner := range  owners {
-				log.Info("an owner is", "address", owner)
-			}
+			log.Info("received response body", "body", string(b))
 
+			log.Info("request succeeded", "status", resp.StatusCode)
 			signer := types.NewCancunSigner(l1ChainID)
 
-			signedTx, err = types.SignTx(txToSign, signer, privateKey)
-			if err != nil {
-				return fmt.Errorf("failed to sign tx: %s", err)
+			for _, pk := range privateKeys {
+				if signedTx == nil {
+					signedTx = txToSign
+				}
+
+				privateKey, err := crypto.HexToECDSA(pk)
+				if err != nil {
+					return fmt.Errorf("could not parse private key: %s", err)
+				}
+
+				signedTx, err = types.SignTx(txToSign, signer, privateKey)
+				if err != nil {
+					return fmt.Errorf("failed to sign tx: %s", err)
+				}
 			}
 
 			hash, err := safeCaller.GetTransactionHash(
@@ -363,7 +360,7 @@ func entrypoint(ctx *cli.Context) error {
 				*signedTx.To(),
 				bigZero,
 				signedTx.Data(),
-				1 /* operation? */,
+				1, /* operation? */
 				bigZero,
 				bigZero,
 				bigZero,
@@ -377,7 +374,23 @@ func entrypoint(ctx *cli.Context) error {
 
 			log.Info("will approve transaction", "hash", hex.EncodeToString(hash[:]), "address", address)
 
-			tx, err := safe.ApproveHash(&bind.TransactOpts{}, hash)
+			nonce, err := clients.L1Client.NonceAt(ctx.Context, address, nil)
+			if err != nil {
+				return err
+			}
+
+			tx, err := safe.ApproveHash(&bind.TransactOpts{
+				Nonce: big.NewInt(int64(nonce)),
+				From:  owner,
+				Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+					signedTxTmp, err := types.SignTx(tx, signer, privateKey)
+					if err != nil {
+						return nil, fmt.Errorf("failed to sign tx: %s", err)
+					}
+
+					return signedTxTmp, nil
+				},
+			}, hash)
 			if err != nil {
 				return fmt.Errorf("could not approve hash: %s", err)
 			}
@@ -391,42 +404,56 @@ func entrypoint(ctx *cli.Context) error {
 				return fmt.Errorf("failed receipt status")
 			}
 
+			v, r, s := signedTx.RawSignatureValues()
+
+			signatures := []byte{}
+			signatures = append(signatures, r.Bytes()...)
+			signatures = append(signatures, s.Bytes()...)
+			signatures = append(signatures, v.Bytes()...)
+
+			log.Info("the signatures are", "s", hex.EncodeToString(s.Bytes()), "r", hex.EncodeToString(r.Bytes()), "v", hex.EncodeToString(v.Bytes()))
+
+			nonce, err = clients.L1Client.NonceAt(ctx.Context, owner, nil)
+			if err != nil {
+				return err
+			}
+
+			safeTx, err := safe.ExecTransaction(
+				&bind.TransactOpts{
+					Nonce: big.NewInt(int64(nonce)),
+					From: owner,
+					Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+						signedTxTmp, err := types.SignTx(tx, signer, privateKey)
+						if err != nil {
+							return nil, fmt.Errorf("failed to sign tx: %s", err)
+						}
+
+						return signedTxTmp, nil
+					},
+				},
+				*signedTx.To(),
+				bigZero,
+				signedTx.Data(),
+				1, /* operation? */
+				bigZero,
+				bigZero,
+				bigZero,
+				common.HexToAddress("0x"),
+				common.HexToAddress("0x"),
+				signatures,
+			)
+			if err != nil {
+				return fmt.Errorf("could not create safe.ExecTransaction: %s", err)
+			}
+
+			log.Info("created signed transaction", "hash", signedTx.Hash())
+
+			err = clients.L1Client.SendTransaction(ctx.Context, safeTx)
+			if err != nil {
+				return fmt.Errorf("could not send tx: %s", err)
+			}
 		}
 
-
-		v, r, s := signedTx.RawSignatureValues()
-
-		signatures := []byte{}
-		signatures = append(signatures, r.Bytes()...)
-		signatures = append(signatures, s.Bytes()...)
-		signatures = append(signatures, v.Bytes()...)
-
-
-		log.Info("the signatures are", "s", hex.EncodeToString(s.Bytes()), "r", hex.EncodeToString(r.Bytes()), "v", hex.EncodeToString(v.Bytes()))
-
-		safeTx, err := safe.ExecTransaction(
-			&bind.TransactOpts{},
-			*signedTx.To(),
-			bigZero,
-			signedTx.Data(),
-			1 /* operation? */,
-			bigZero,
-			bigZero,
-			bigZero,
-			common.HexToAddress("0x"),
-			common.HexToAddress("0x"),
-			signatures,
-		)
-		if err != nil {
-			return fmt.Errorf("could not create safe.ExecTransaction: %s", err)
-		}
-
-		log.Info("created signed transaction", "hash", signedTx.Hash())
-
-		err = clients.L1Client.SendTransaction(ctx.Context, safeTx)
-		if err != nil {
-			return fmt.Errorf("could not send tx: %s", err)
-		}
 	}
 
 	return nil
@@ -446,17 +473,16 @@ func writeJSON(outfile string, input interface{}) error {
 
 func debugStorage(ctx context.Context, address common.Address, client *ethclient.Client) error {
 	type bodyJSON struct {
-		Method string `json:"method"`
-		ID int `json:"id"`
-		JSONRPC string `json:"jsonrpc"`
-		Params []string `json:"params"`
+		Method  string   `json:"method"`
+		ID      int      `json:"id"`
+		JSONRPC string   `json:"jsonrpc"`
+		Params  []string `json:"params"`
 	}
 
-
-	for i := 0 ;; i++ {
+	for i := 0; ; i++ {
 		body := bodyJSON{
-			Method: "eth_getStorageAt",
-			ID: 1,
+			Method:  "eth_getStorageAt",
+			ID:      1,
 			JSONRPC: "2.0",
 			Params: []string{
 				fmt.Sprintf("0x%s", hex.EncodeToString(address.Bytes())),
@@ -486,20 +512,18 @@ func debugStorage(ctx context.Context, address common.Address, client *ethclient
 			Result string `json:"result"`
 		}
 
-// Read the entire response body into a byte slice
-b, err := io.ReadAll(resp.Body)
-if err != nil {
-	return err
-}
-
+		// Read the entire response body into a byte slice
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
 
 		var res response
 		if err := json.Unmarshal(b, &res); err != nil {
 			return err
 		}
 
-
-		if res.Result != "0x0000000000000000000000000000000000000000000000000000000000000000"{
+		if res.Result != "0x0000000000000000000000000000000000000000000000000000000000000000" {
 
 			log.Info("result", "res body", res.Result)
 		}
