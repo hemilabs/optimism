@@ -8,6 +8,10 @@ import (
 	"encoding/hex"
 	"crypto/ecdsa"
 	"math/big"
+	"net/http"
+	"bytes"
+	"io"
+	"context"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -15,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
+	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 
@@ -220,43 +225,20 @@ func entrypoint(ctx *cli.Context) error {
 		dataStr := fmt.Sprintf("0x%s", hex.EncodeToString(tx.Data))
 		log.Info("found transaction", "to", tx.To.String(), "data", dataStr)
 
-		privateKeyArg := ctx.String("private-key")
-
-		privateKey, err := crypto.HexToECDSA(privateKeyArg)
-		if err != nil {
-			return fmt.Errorf("could not parse private key: %s", err)
+		privateKeys := []string{
+			"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+			"59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+			"5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
 		}
 
-		publicKey := privateKey.Public()
-
-		publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
-		if ! ok {
-			return fmt.Errorf("failed to create ecdsa public key")
-		}
-
-		address := crypto.PubkeyToAddress(*publicKeyEcdsa)
-
-		log.Info("my info", "public key", publicKey, "address", address)
-
-		nonce, err := clients.L1Client.NonceAt(ctx.Context, address, nil)
-		if err != nil {
-			return fmt.Errorf("could not get none for address: %s", err)
-		}
-
-		dynamicFeeTx := types.LegacyTx{
-			Nonce: nonce,
+		dynamicFeeTx := types.DynamicFeeTx{
+			ChainID: l1ChainID,
 			To: &tx.To,
 			Data: tx.Data,
 		}
-
 		txToSign := types.NewTx(&dynamicFeeTx)
 
-		signer := types.NewEIP155Signer(l1ChainID)
-
-		signedTx, err := types.SignTx(txToSign, signer, privateKey)
-		if err != nil {
-			return fmt.Errorf("failed to sign tx: %s", err)
-		}
+		var signedTx *types.Transaction
 
 		safe, err := bindings.NewSafeV130Transactor(
 			common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003"),
@@ -266,14 +248,161 @@ func entrypoint(ctx *cli.Context) error {
 			return fmt.Errorf("could not create safe: %s", err)
 		}
 
-		r, s, v := signedTx.RawSignatureValues()
+		safeCaller, err := bindings.NewSafeV130Caller(
+			common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003"),
+			clients.L1Client,
+		)
+		if err != nil {
+			return fmt.Errorf("could not create safe: %s", err)
+		}
 
-		signatures := []byte{}
-		signatures = append(signatures, s.Bytes()...)
-		signatures = append(signatures, r.Bytes()...)
-		signatures = append(signatures, v.Bytes()...)
+		// debugStorage(ctx.Context, common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003"), clients.L1Client)
 
 		bigZero := big.NewInt(0)
+
+		nonce, err := safeCaller.Nonce(&bind.CallOpts{})
+		if err != nil {
+			return fmt.Errorf("error getting nonce: %s", err)
+		}
+
+		for _, privateKeyStr := range privateKeys {
+			privateKey, err := crypto.HexToECDSA(privateKeyStr)
+			if err != nil {
+				return fmt.Errorf("could not parse private key: %s", err)
+			}
+
+			publicKey := privateKey.Public()
+
+			publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
+			if !ok {
+				return fmt.Errorf("failed to create ecdsa public key")
+			}
+
+			address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+
+			log.Info("my info", "public key", publicKey, "address", address)
+
+			// // now that we have the address, set the user as an owner
+			// baseSlot := make([]byte, 32)
+			// baseSlot[0] = 0x01
+			// slices.Reverse(baseSlot)
+			// newSlot := append(address.Bytes(), baseSlot...)
+			// newSlot = append(make([]byte, 12), newSlot...)
+
+			// storageSlot := crypto.Keccak256(newSlot)
+
+			// log.Info("will set new owner", "new owner slot", hex.EncodeToString(newSlot), "hashed slot", hex.EncodeToString(storageSlot[:]))
+
+			// type bodyJSON struct {
+			// 	Method string `json:"method"`
+			// 	ID int `json:"id"`
+			// 	JSONRPC string `json:"jsonrpc"`
+			// 	Params []string `json:"params"`
+			// }
+
+			// addressToSave := append(make([]byte, 12), address.Bytes()...)
+
+
+			// body := bodyJSON{
+			// 	Method: "hardhat_setStorageAt",
+			// 	ID: 1,
+			// 	JSONRPC: "2.0",
+			// 	Params: []string{
+			// 		"0x382D0AA958998408DD7695c8965C46BdaBBC3003",
+			// 		fmt.Sprintf("0x%s", hex.EncodeToString(storageSlot[:])),
+			// 		fmt.Sprintf("0x%s", hex.EncodeToString(addressToSave)),
+			// 	},
+			// }
+
+			// buf, err := json.Marshal(body)
+			// if err != nil {
+			// 	return fmt.Errorf("cannot marshal json body: %s", err)
+			// }
+
+			// log.Info("will send request body", "body", string(buf))
+
+			// resp, err := http.Post(ctx.String("l1-rpc-url"), "application/json", bytes.NewBuffer(buf))
+			// if err != nil {
+			// 	return fmt.Errorf("could not post request: %s", err)
+			// }
+
+			// if resp.StatusCode != http.StatusOK {
+			// 	return fmt.Errorf("received unexpected status: %d", resp.Status)
+			// }
+
+			// defer resp.Body.Close()
+
+			// // Read the entire response body into a byte slice
+			// b, err := io.ReadAll(resp.Body)
+			// if err != nil {
+			// 	return err
+			// }
+
+			// log.Info("received response body", "body", string(b))
+
+			// log.Info("request succeeded", "status", resp.StatusCode)
+
+			owners, err := safeCaller.GetOwners(nil)
+			if err != nil {
+				return err
+			}
+
+			for _, owner := range  owners {
+				log.Info("an owner is", "address", owner)
+			}
+
+			signer := types.NewCancunSigner(l1ChainID)
+
+			signedTx, err = types.SignTx(txToSign, signer, privateKey)
+			if err != nil {
+				return fmt.Errorf("failed to sign tx: %s", err)
+			}
+
+			hash, err := safeCaller.GetTransactionHash(
+				&bind.CallOpts{},
+				*signedTx.To(),
+				bigZero,
+				signedTx.Data(),
+				1 /* operation? */,
+				bigZero,
+				bigZero,
+				bigZero,
+				common.HexToAddress("0x"),
+				common.HexToAddress("0x"),
+				nonce,
+			)
+			if err != nil {
+				return fmt.Errorf("could not get transaction hash: %s", err)
+			}
+
+			log.Info("will approve transaction", "hash", hex.EncodeToString(hash[:]), "address", address)
+
+			tx, err := safe.ApproveHash(&bind.TransactOpts{}, hash)
+			if err != nil {
+				return fmt.Errorf("could not approve hash: %s", err)
+			}
+
+			receipt, err := bind.WaitMined(ctx.Context, clients.L1Client, tx)
+			if err != nil {
+				return fmt.Errorf("could not mine tx: %s", err)
+			}
+
+			if receipt.Status != 1 {
+				return fmt.Errorf("failed receipt status")
+			}
+
+		}
+
+
+		v, r, s := signedTx.RawSignatureValues()
+
+		signatures := []byte{}
+		signatures = append(signatures, r.Bytes()...)
+		signatures = append(signatures, s.Bytes()...)
+		signatures = append(signatures, v.Bytes()...)
+
+
+		log.Info("the signatures are", "s", hex.EncodeToString(s.Bytes()), "r", hex.EncodeToString(r.Bytes()), "v", hex.EncodeToString(v.Bytes()))
 
 		safeTx, err := safe.ExecTransaction(
 			&bind.TransactOpts{},
@@ -313,4 +442,66 @@ func writeJSON(outfile string, input interface{}) error {
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(input)
+}
+
+func debugStorage(ctx context.Context, address common.Address, client *ethclient.Client) error {
+	type bodyJSON struct {
+		Method string `json:"method"`
+		ID int `json:"id"`
+		JSONRPC string `json:"jsonrpc"`
+		Params []string `json:"params"`
+	}
+
+
+	for i := 0 ;; i++ {
+		body := bodyJSON{
+			Method: "eth_getStorageAt",
+			ID: 1,
+			JSONRPC: "2.0",
+			Params: []string{
+				fmt.Sprintf("0x%s", hex.EncodeToString(address.Bytes())),
+				fmt.Sprintf("0x%x", i),
+			},
+		}
+
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("cannot marshal json body: %s", err)
+		}
+
+		// log.Info("will send request body", "body", string(buf))
+
+		resp, err := http.Post("http://localhost:9988", "application/json", bytes.NewBuffer(buf))
+		if err != nil {
+			return fmt.Errorf("could not post request: %s", err)
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("received unexpected status: %d", resp.Status)
+		}
+
+		type response struct {
+			Result string `json:"result"`
+		}
+
+// Read the entire response body into a byte slice
+b, err := io.ReadAll(resp.Body)
+if err != nil {
+	return err
+}
+
+
+		var res response
+		if err := json.Unmarshal(b, &res); err != nil {
+			return err
+		}
+
+
+		if res.Result != "0x0000000000000000000000000000000000000000000000000000000000000000"{
+
+			log.Info("result", "res body", res.Result)
+		}
+	}
 }
