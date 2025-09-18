@@ -12,11 +12,11 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
@@ -219,6 +219,10 @@ func entrypoint(ctx *cli.Context) error {
 		fmt.Println(string(data))
 	}
 
+	if err := impersonateAccount(ctx.Context, ctx.String("l1-rpc-url"), common.HexToAddress("0x0106a4F0acfD98E70BB606Ae4c0C27d012c5c69a")); err != nil {
+		return err
+	}
+
 	for _, tx := range batch.Transactions {
 		dataStr := fmt.Sprintf("0x%s", hex.EncodeToString(tx.Data))
 		log.Info("found transaction", "to", tx.To.String(), "data", dataStr)
@@ -226,13 +230,6 @@ func entrypoint(ctx *cli.Context) error {
 		// fake, used for signing (but we impersonate other accounts too and
 		// still sign with this one)
 		privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-
-		// used to sign multiple?
-		privateKeys := []string{
-			"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-			"59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-			"5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-		}
 
 		dynamicFeeTx := types.DynamicFeeTx{
 			ChainID: l1ChainID,
@@ -293,66 +290,94 @@ func entrypoint(ctx *cli.Context) error {
 			log.Info("an owner is", "address", owner)
 			// now that we have the address, set the user as an owner
 
-			type bodyJSON struct {
-				Method  string   `json:"method"`
-				ID      int      `json:"id"`
-				JSONRPC string   `json:"jsonrpc"`
-				Params  []string `json:"params"`
-			}
+			// if err := impersonateAccount(ctx.Context, ctx.String("l1-rpc-url"), owner); err != nil {
+			// 	return err
+			// }
 
-			body := bodyJSON{
-				Method:  "hardhat_impersonateAccount",
-				ID:      1,
-				JSONRPC: "2.0",
-				Params: []string{
-					owner.Hex(),
-				},
-			}
-
-			buf, err := json.Marshal(body)
-			if err != nil {
-				return fmt.Errorf("cannot marshal json body: %s", err)
-			}
-
-			log.Info("will send request body", "body", string(buf))
-
-			resp, err := http.Post(ctx.String("l1-rpc-url"), "application/json", bytes.NewBuffer(buf))
-			if err != nil {
-				return fmt.Errorf("could not post request: %s", err)
-			}
-
-			// Clayton note: add check for RPC error field failure
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("received unexpected status: %d", resp.Status)
-			}
-
-			defer resp.Body.Close()
-
-			// Read the entire response body into a byte slice
-			b, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return err
-			}
-
-			log.Info("received response body", "body", string(b))
-
-			log.Info("request succeeded", "status", resp.StatusCode)
 			signer := types.NewCancunSigner(l1ChainID)
 
-			for _, pk := range privateKeys {
-				if signedTx == nil {
-					signedTx = txToSign
-				}
+			// for _, pk := range privateKeys {
+			// 	if signedTx == nil {
+			// 		signedTx = txToSign
+			// 	}
 
-				privateKey, err := crypto.HexToECDSA(pk)
-				if err != nil {
-					return fmt.Errorf("could not parse private key: %s", err)
-				}
+			// 	privateKey, err := crypto.HexToECDSA(pk)
+			// 	if err != nil {
+			// 		return fmt.Errorf("could not parse private key: %s", err)
+			// 	}
 
-				signedTx, err = types.SignTx(txToSign, signer, privateKey)
-				if err != nil {
-					return fmt.Errorf("failed to sign tx: %s", err)
-				}
+			// 	publicKey := privateKey.Public()
+
+			// 	publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
+			// 	if !ok {
+			// 		return fmt.Errorf("failed to create ecdsa public key")
+			// 	}
+
+			// 	address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+
+			// 	nonce, err := clients.L1Client.NonceAt(ctx.Context, address, nil)
+			// 	if err != nil {
+			// 		return err
+			// 	}
+			// 	nonce+=99999
+
+			// 	log.Info("going to add owner", "owner", address)
+
+			// 	tx, err := safe.AddOwnerWithThreshold(&bind.TransactOpts{
+			// 		Nonce: big.NewInt(int64(nonce)),
+			// 		From:  common.HexToAddress("0x0106a4F0acfD98E70BB606Ae4c0C27d012c5c69a"),
+			// 		Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+			// 			signedTxTmp, err := types.SignTx(tx, signer, privateKey)
+			// 			if err != nil {
+			// 				return nil, fmt.Errorf("failed to sign tx: %s", err)
+			// 			}
+
+			// 			return signedTxTmp, nil
+			// 		},
+			// 		NoSend: true,
+			// 	}, address, big.NewInt(1))
+			// 	if err != nil {
+			// 		return fmt.Errorf("could not approve hash: %s", err)
+			// 	}
+
+			// 	log.Info("the tx is", "tx", tx)
+
+			// 	contractOwnerAddress := common.HexToAddress("0x0106a4F0acfD98E70BB606Ae4c0C27d012c5c69a")
+
+			// 	 txHash, err := sendTransaction(ctx.Context, ctx.String("l1-rpc-url"), tx.To(), &contractOwnerAddress, tx.Data(), tx.Nonce())
+			// 	 if err != nil {
+			// 		return err
+			// 	}
+
+			// 	for {
+			// 		time.Sleep(1 * time.Second)
+			// 		receipt, err := clients.L1Client.TransactionReceipt(ctx.Context, common.HexToHash(txHash))
+			// 		if err != nil {
+			// 			log.Info("error getting receipt", "error", err)
+			// 		}
+
+			// 		if receipt == nil {
+			// 			continue
+			// 		}
+
+			// 		if receipt.Status != 1 {
+			// 			return fmt.Errorf("failed receipt status")
+			// 		}
+
+			// 		break
+
+			// 	}
+
+			// 	log.Info("succeeded adding owner", "tx", txHash)
+
+			// 	signedTx, err = types.SignTx(txToSign, signer, privateKey)
+			// 	if err != nil {
+			// 		return fmt.Errorf("failed to sign tx: %s", err)
+			// 	}
+			// }
+
+			if err := impersonateAccount(ctx.Context, owner); err != nil {
+				return err
 			}
 
 			hash, err := safeCaller.GetTransactionHash(
@@ -421,7 +446,7 @@ func entrypoint(ctx *cli.Context) error {
 			safeTx, err := safe.ExecTransaction(
 				&bind.TransactOpts{
 					Nonce: big.NewInt(int64(nonce)),
-					From: owner,
+					From:  owner,
 					Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
 						signedTxTmp, err := types.SignTx(tx, signer, privateKey)
 						if err != nil {
@@ -471,7 +496,7 @@ func writeJSON(outfile string, input interface{}) error {
 	return enc.Encode(input)
 }
 
-func debugStorage(ctx context.Context, address common.Address, client *ethclient.Client) error {
+func impersonateAccount(ctx context.Context, rpcUrl string, address common.Address) error {
 	type bodyJSON struct {
 		Method  string   `json:"method"`
 		ID      int      `json:"id"`
@@ -479,53 +504,129 @@ func debugStorage(ctx context.Context, address common.Address, client *ethclient
 		Params  []string `json:"params"`
 	}
 
-	for i := 0; ; i++ {
-		body := bodyJSON{
-			Method:  "eth_getStorageAt",
-			ID:      1,
-			JSONRPC: "2.0",
-			Params: []string{
-				fmt.Sprintf("0x%s", hex.EncodeToString(address.Bytes())),
-				fmt.Sprintf("0x%x", i),
-			},
-		}
-
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("cannot marshal json body: %s", err)
-		}
-
-		// log.Info("will send request body", "body", string(buf))
-
-		resp, err := http.Post("http://localhost:9988", "application/json", bytes.NewBuffer(buf))
-		if err != nil {
-			return fmt.Errorf("could not post request: %s", err)
-		}
-
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("received unexpected status: %d", resp.Status)
-		}
-
-		type response struct {
-			Result string `json:"result"`
-		}
-
-		// Read the entire response body into a byte slice
-		b, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-
-		var res response
-		if err := json.Unmarshal(b, &res); err != nil {
-			return err
-		}
-
-		if res.Result != "0x0000000000000000000000000000000000000000000000000000000000000000" {
-
-			log.Info("result", "res body", res.Result)
-		}
+	body := bodyJSON{
+		Method:  "hardhat_impersonateAccount",
+		ID:      1,
+		JSONRPC: "2.0",
+		Params: []string{
+			address.Hex(),
+		},
 	}
+
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("cannot marshal json body: %s", err)
+	}
+
+	log.Info("will send request body", "body", string(buf))
+
+	resp, err := http.Post(rpcUrl, "application/json", bytes.NewBuffer(buf))
+	if err != nil {
+		return fmt.Errorf("could not post request: %s", err)
+	}
+
+	// Clayton note: add check for RPC error field failure
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("received unexpected status: %d", resp.Status)
+	}
+
+	defer resp.Body.Close()
+
+	// Read the entire response body into a byte slice
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if strings.Contains(string(b), "error") {
+		return fmt.Errorf("error in response: %s", string(b))
+	}
+
+	log.Info("received response body", "body", string(b))
+
+	log.Info("request succeeded", "status", resp.StatusCode)
+
+	return nil
+}
+
+func sendTransaction(ctx context.Context, rpcUrl string, from *common.Address, to *common.Address, input []byte, nonce uint64) (string, error) {
+	type txObject struct {
+		To    string `json:"to"`
+		From  string `json:"from"`
+		Input string `json:"input"`
+		Nonce uint64    `json:"nonce"`
+		MaxFeePerGas string `json:"maxFeePerGas"`
+		MaxPriorityFeePerGas string `json:"maxPriorityFeePerGas"`
+		Gas string `json:"gas"`
+	}
+
+	type bodyJSON struct {
+		Method  string     `json:"method"`
+		ID      int        `json:"id"`
+		JSONRPC string     `json:"jsonrpc"`
+		Params  []txObject `json:"params"`
+	}
+
+	body := bodyJSON{
+		Method:  "eth_sendTransaction",
+		ID:      1,
+		JSONRPC: "2.0",
+		Params: []txObject{
+			txObject{
+				From:  from.Hex(),
+				To:    to.Hex(),
+				Input: hex.EncodeToString(input),
+				Nonce: nonce,
+				MaxFeePerGas: "0x1000",
+				MaxPriorityFeePerGas: "0x1000",
+				Gas: "0x1C9C380",
+			},
+		},
+	}
+
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("cannot marshal json body: %s", err)
+	}
+
+	log.Info("will send request body", "body", string(buf))
+
+	resp, err := http.Post(rpcUrl, "application/json", bytes.NewBuffer(buf))
+	if err != nil {
+		return "", fmt.Errorf("could not post request: %s", err)
+	}
+
+	// Clayton note: add check for RPC error field failure
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("received unexpected status: %d", resp.Status)
+	}
+
+	defer resp.Body.Close()
+
+	// Read the entire response body into a byte slice
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.Contains(string(b), "error") {
+		return "", fmt.Errorf("error in response: %s", string(b))
+	}
+
+	type response struct {
+		Result string `json:"result"`
+	}
+
+	var resParse response
+	if err := json.Unmarshal(b, &resParse); err != nil {
+		return "", err
+	}
+
+	log.Info("received response body", "body", string(b))
+
+	log.Info("request succeeded", "status", resp.StatusCode)
+
+	log.Info("the hash is", "hash", resParse.Result)
+
+	return resParse.Result, nil
 }
