@@ -237,86 +237,89 @@ func entrypoint(ctx *cli.Context) error {
 		log.Info("found transaction", "to", tx.To.String(), "data", dataStr)
 
 		safeContractAddress := common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003")
-
 		// fake, used for signing (but we impersonate other accounts too and
-		// still sign with this one)
-		privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+			// still sign with this one)
+			privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
-		signer := types.NewCancunSigner(l1ChainID)
+			signer := types.NewCancunSigner(l1ChainID)
 
-		safe, err := bindings.NewSafeV130Transactor(
-			safeContractAddress,
-			clients.L1Client,
-		)
-		if err != nil {
-			return fmt.Errorf("could not create safe: %s", err)
-		}
+			safe, err := bindings.NewSafeV130Transactor(
+				safeContractAddress,
+				clients.L1Client,
+			)
+			if err != nil {
+				return fmt.Errorf("could not create safe: %s", err)
+			}
 
-		safeCaller, err := bindings.NewSafeV130Caller(
-			safeContractAddress,
-			clients.L1Client,
-		)
-		if err != nil {
-			return fmt.Errorf("could not create safe: %s", err)
-		}
+			safeCaller, err := bindings.NewSafeV130Caller(
+				safeContractAddress,
+				clients.L1Client,
+			)
+			if err != nil {
+				return fmt.Errorf("could not create safe: %s", err)
+			}
 
-		bigZero := big.NewInt(0)
+			bigZero := big.NewInt(0)
 
-		nonce, err := safeCaller.Nonce(&bind.CallOpts{
-			From: ownerAddress,
-		})
-		if err != nil {
-			return fmt.Errorf("error getting nonce: %s", err)
-		}
+			nonce, err := safeCaller.Nonce(&bind.CallOpts{
+				From: ownerAddress,
+			})
+			if err != nil {
+				return fmt.Errorf("error getting nonce: %s", err)
+			}
 
-		safeTxHash, err := safeCaller.GetTransactionHash(
-			&bind.CallOpts{},
-			tx.To,
-			bigZero,
-			tx.Data,
-			0, /* operation? */
-			big.NewInt(0),
-			big.NewInt(0),
-			big.NewInt(0),
-			common.HexToAddress("0x"),
-			common.HexToAddress("0x"),
-			nonce,
-		)
-		if err != nil {
-			return fmt.Errorf("could not get transaction hash: %s", err)
-		}
+			safeTxHash, err := safeCaller.GetTransactionHash(
+				&bind.CallOpts{},
+				tx.To,
+				bigZero,
+				tx.Data,
+				0, /* operation? */
+				big.NewInt(0),
+				big.NewInt(0),
+				big.NewInt(0),
+				common.HexToAddress("0x"),
+				common.HexToAddress("0x"),
+				nonce,
+			)
+			if err != nil {
+				return fmt.Errorf("could not get transaction hash: %s", err)
+			}
 
-		privateKey, err := crypto.HexToECDSA(privateKeyStr)
-		if err != nil {
-			return fmt.Errorf("could not parse private key: %s", err)
-		}
+			privateKey, err := crypto.HexToECDSA(privateKeyStr)
+			if err != nil {
+				return fmt.Errorf("could not parse private key: %s", err)
+			}
 
-		publicKey := privateKey.Public()
+			publicKey := privateKey.Public()
 
-		publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
-		if !ok {
-			return fmt.Errorf("failed to create ecdsa public key")
-		}
+			publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
+			if !ok {
+				return fmt.Errorf("failed to create ecdsa public key")
+			}
 
-		address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+			address := crypto.PubkeyToAddress(*publicKeyEcdsa)
 
-		log.Info("my info", "public key", publicKey, "address", address)
+			log.Info("my info", "public key", publicKey, "address", address)
 
-		owners, err := safeCaller.GetOwners(nil)
-		if err != nil {
-			return err
-		}
-
-		l1RpcUrl := ctx.String("l1-rpc-url")
-
-		for _, owner := range owners {
-			log.Info("an owner is", "address", owner)
-
-			if err := impersonateAccount(ctx.Context, l1RpcUrl, owner); err != nil {
+			owners, err := safeCaller.GetOwners(nil)
+			if err != nil {
 				return err
 			}
 
-			log.Info("will approve transaction", "hash", hex.EncodeToString(safeTxHash[:]), "address", address)
+			l1RpcUrl := ctx.String("l1-rpc-url")
+
+			if err := impersonateAccount(ctx.Context, l1RpcUrl, safeContractAddress); err != nil {
+				return err
+			}
+
+			for _, owner := range owners[:1] {
+				log.Info("an owner is", "address", owner)
+
+				if err := impersonateAccount(ctx.Context, l1RpcUrl, owner); err != nil {
+					return err
+				}
+
+				log.Info("will approve transaction", "hash", hex.EncodeToString(safeTxHash[:]), "address", address)
 
 			nonce, err := clients.L1Client.NonceAt(ctx.Context, safeContractAddress, nil)
 			if err != nil {
@@ -408,6 +411,11 @@ func entrypoint(ctx *cli.Context) error {
 
 			maybeFrom := common.BytesToAddress(r.Bytes())
 
+			if err := impersonateAccount(ctx.Context, l1RpcUrl, maybeFrom); err != nil {
+				return err
+			}
+
+
 		nonce, err = clients.L1Client.NonceAt(ctx.Context, safeContractAddress, nil)
 		if err != nil {
 			return err
@@ -479,7 +487,7 @@ func entrypoint(ctx *cli.Context) error {
 			return err
 		}
 
-			txHash, err = sendTransaction(ctx.Context, l1RpcUrl, &maybeFrom, signedTx.To(), safeTx.Data(), uint64(nonce))
+			txHash, err = sendTransaction(ctx.Context, l1RpcUrl, &maybeFrom, safeTx.To(), safeTx.Data(), uint64(nonce))
 			if err != nil {
 				return err
 			}
@@ -514,58 +522,73 @@ func impersonateAccount(ctx context.Context, rpcUrl string, address common.Addre
 		Params  []string `json:"params"`
 	}
 
-	body := bodyJSON{
-		Method:  "hardhat_impersonateAccount",
-		ID:      1,
-		JSONRPC: "2.0",
-		Params: []string{
-			address.Hex(),
+	for _, body := range []bodyJSON{
+		bodyJSON{
+			Method:  "hardhat_impersonateAccount",
+			ID:      1,
+			JSONRPC: "2.0",
+			Params: []string{
+				address.Hex(),
+			},
 		},
+		bodyJSON{
+			Method:  "hardhat_setBalance",
+			ID:      1,
+			JSONRPC: "2.0",
+			Params: []string{
+				address.Hex(),
+				"0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+			},
+		},
+	} {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("cannot marshal json body: %s", err)
+		}
+
+		log.Info("will send request body", "body", string(buf))
+
+		resp, err := http.Post(rpcUrl, "application/json", bytes.NewBuffer(buf))
+		if err != nil {
+			return fmt.Errorf("could not post request: %s", err)
+		}
+
+		// Clayton note: add check for RPC error field failure
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("received unexpected status: %d", resp.Status)
+		}
+
+		defer resp.Body.Close()
+
+		// Read the entire response body into a byte slice
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+
+		if strings.Contains(string(b), "error") {
+			return fmt.Errorf("error in response: %s", string(b))
+		}
+
+		log.Info("received response body", "body", string(b))
+
+		log.Info("request succeeded", "status", resp.StatusCode)
 	}
-
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("cannot marshal json body: %s", err)
-	}
-
-	log.Info("will send request body", "body", string(buf))
-
-	resp, err := http.Post(rpcUrl, "application/json", bytes.NewBuffer(buf))
-	if err != nil {
-		return fmt.Errorf("could not post request: %s", err)
-	}
-
-	// Clayton note: add check for RPC error field failure
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("received unexpected status: %d", resp.Status)
-	}
-
-	defer resp.Body.Close()
-
-	// Read the entire response body into a byte slice
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	if strings.Contains(string(b), "error") {
-		return fmt.Errorf("error in response: %s", string(b))
-	}
-
-	log.Info("received response body", "body", string(b))
-
-	log.Info("request succeeded", "status", resp.StatusCode)
 
 	return nil
 }
 
 func waitForTransactionHash(ctx context.Context, client *ethclient.Client, hash common.Hash) error {
+	log.Info("will wait for transaction receipt...")
 	for {
 		time.Sleep(1*time.Second)
 		receipt, err := client.TransactionReceipt(ctx, hash)
 		if err != nil {
-			log.Info("error getting transaction receipt", "error", err)
-			continue
+			if strings.Contains(err.Error(), "not found") {
+				continue
+			} else {
+				return fmt.Errorf("error getting transaction receipt: %s", err)
+			}
 		}
 
 		if receipt.Status != 1 {
@@ -585,7 +608,6 @@ func sendTransaction(ctx context.Context, rpcUrl string, from *common.Address, t
 		From  string `json:"from"`
 		Input string `json:"input"`
 		Nonce uint64    `json:"nonce"`
-		Gas string `json:"gas"`
 	}
 
 	type bodyJSON struct {
@@ -605,7 +627,6 @@ func sendTransaction(ctx context.Context, rpcUrl string, from *common.Address, t
 				To:    to.Hex(),
 				Input: hex.EncodeToString(input),
 				Nonce: nonce,
-				Gas: "0x1C9C380",
 			},
 		},
 	}
