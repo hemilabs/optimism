@@ -203,9 +203,8 @@ func entrypoint(ctx *cli.Context) error {
 		return fmt.Errorf("cannot build L1 upgrade batch: %w", err)
 	}
 
-	// fake, used for signing (but we impersonate other accounts too and
-	// still sign with this one)
-	privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+	privateKeyStr := ctx.String("private-key")
+
 	privateKey, err := crypto.HexToECDSA(privateKeyStr)
 	if err != nil {
 		return fmt.Errorf("could not parse private key: %s", err)
@@ -220,19 +219,13 @@ func entrypoint(ctx *cli.Context) error {
 
 	address := crypto.PubkeyToAddress(*publicKeyEcdsa)
 
+	// Clayton note: this is the sepolia safe address.  When using mainnet
+	// ensure that you update this (as well as the other addresses)
 	safeContractAddress := common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003")
 
 	signer := types.NewCancunSigner(l1ChainID)
 
 	safe, err := bindings.NewSafeV130Transactor(
-		safeContractAddress,
-		clients.L1Client,
-	)
-	if err != nil {
-		return fmt.Errorf("could not create safe: %s", err)
-	}
-
-	safeCaller, err := bindings.NewSafeV130Caller(
 		safeContractAddress,
 		clients.L1Client,
 	)
@@ -253,63 +246,8 @@ func entrypoint(ctx *cli.Context) error {
 		l1RpcUrl := ctx.String("l1-rpc-url")
 
 		// impersonate the safe to add an owner during simulation.  this owner
-		// is the aforementioned private key, we will use them to approve of
-		// the safe tx
+		// is derived from the private key signature r value
 		if err := impersonateAccount(ctx.Context, l1RpcUrl, safeContractAddress); err != nil {
-			return err
-		}
-
-		safeTxHash, err := safeCaller.GetTransactionHash(
-			&bind.CallOpts{},
-			tx.To,
-			big.NewInt(0),
-			tx.Data,
-			0, /* operation? */
-			big.NewInt(0),
-			big.NewInt(0),
-			big.NewInt(0),
-			common.HexToAddress("0x"),
-			common.HexToAddress("0x"),
-			big.NewInt(0),
-		)
-		if err != nil {
-			return fmt.Errorf("could not get transaction hash: %s", err)
-		}
-
-		if err := addOwnerWithThreshold(ctx.Context, l1RpcUrl, safeContractAddress, address, privateKey, signer, safe); err != nil {
-			return err
-		}
-
-		nonce, err := clients.L1Client.NonceAt(ctx.Context, address, nil)
-		if err != nil {
-			return err
-		}
-
-		log.Info("will approve transaction", "hash", hex.EncodeToString(safeTxHash[:]), "approver address", address)
-
-		approvedTx, err := safe.ApproveHash(&bind.TransactOpts{
-			Nonce: big.NewInt(int64(nonce)),
-			From:  address,
-			Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
-				signedTxTmp, err := types.SignTx(tx, signer, privateKey)
-				if err != nil {
-					return nil, fmt.Errorf("failed to sign tx: %s", err)
-				}
-
-				return signedTxTmp, nil
-			},
-			NoSend: true,
-		}, safeTxHash)
-		if err != nil {
-			return fmt.Errorf("could not approve hash: %s", err)
-		}
-
-		txHash, err := sendTransaction(ctx.Context, l1RpcUrl, &address, approvedTx.To(), approvedTx.Data(), uint64(nonce))
-		if err != nil {
-			return err
-		}
-
-		if err := waitForTransactionHash(ctx.Context, clients.L1Client, common.HexToHash(txHash)); err != nil {
 			return err
 		}
 
@@ -323,29 +261,32 @@ func entrypoint(ctx *cli.Context) error {
 		signatures := []byte{}
 		signatures = append(signatures, r.Bytes()...)
 		signatures = append(signatures, s.Bytes()...)
-		signatures = append(signatures, v.Bytes()...)
+		signatures = append(signatures, v.Bytes()[0])
 
-		log.Info("the signatures are", "s", hex.EncodeToString(s.Bytes()), "r", hex.EncodeToString(r.Bytes()), "v", hex.EncodeToString(v.Bytes()))
+		// this simulation expects the v byte to be 0x01, otherwise there is no
+		// guarantee it will work
+		if v.Bytes()[0] != 0x01 {
+			return fmt.Errorf("received unexpected value for signature value v", v, v.Bytes()[0])
+		}
 
-		nonce, err = clients.L1Client.NonceAt(ctx.Context, address, nil)
+		log.Info("the signature values are", "s", hex.EncodeToString(s.Bytes()), "r", hex.EncodeToString(r.Bytes()), "v", hex.EncodeToString(v.Bytes()))
+
+		nonce, err := clients.L1Client.NonceAt(ctx.Context, address, nil)
 		if err != nil {
 			return err
 		}
 
-		// Clayton note: where does r come from? why is a new address created?
-		// what happens in production?
+		signatureFrom := common.BytesToAddress(r.Bytes())
 
-		maybeFrom := common.BytesToAddress(r.Bytes())
-
-		if err := impersonateAccount(ctx.Context, l1RpcUrl, maybeFrom); err != nil {
+		if err := impersonateAccount(ctx.Context, l1RpcUrl, signatureFrom); err != nil {
 			return err
 		}
 
-		if err := addOwnerWithThreshold(ctx.Context, l1RpcUrl, safeContractAddress, maybeFrom, privateKey, signer, safe); err != nil {
+		if err := addOwnerWithThreshold(ctx.Context, l1RpcUrl, safeContractAddress, signatureFrom, privateKey, signer, safe); err != nil {
 			return err
 		}
 
-		nonce, err = clients.L1Client.NonceAt(ctx.Context, maybeFrom, nil)
+		nonce, err = clients.L1Client.NonceAt(ctx.Context, signatureFrom, nil)
 		if err != nil {
 			return err
 		}
@@ -379,7 +320,7 @@ func entrypoint(ctx *cli.Context) error {
 			return fmt.Errorf("could not create safe.ExecTransaction: %s", err)
 		}
 
-		txHash, err = sendTransaction(ctx.Context, l1RpcUrl, &maybeFrom, safeTx.To(), safeTx.Data(), uint64(nonce))
+		txHash, err := sendTransaction(ctx.Context, l1RpcUrl, &signatureFrom, safeTx.To(), safeTx.Data(), uint64(nonce))
 		if err != nil {
 			return err
 		}
