@@ -18,8 +18,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
 
@@ -229,7 +229,7 @@ func entrypoint(ctx *cli.Context) error {
 
 	for _, tx := range batch.Transactions {
 		txToSign := types.NewTx(&types.LegacyTx{
-			To: &tx.To,
+			To:   &tx.To,
 			Data: tx.Data,
 		})
 
@@ -238,88 +238,88 @@ func entrypoint(ctx *cli.Context) error {
 
 		safeContractAddress := common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003")
 		// fake, used for signing (but we impersonate other accounts too and
-			// still sign with this one)
-			privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+		// still sign with this one)
+		privateKeyStr := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
-			signer := types.NewCancunSigner(l1ChainID)
+		signer := types.NewCancunSigner(l1ChainID)
 
-			safe, err := bindings.NewSafeV130Transactor(
-				safeContractAddress,
-				clients.L1Client,
-			)
-			if err != nil {
-				return fmt.Errorf("could not create safe: %s", err)
-			}
+		safe, err := bindings.NewSafeV130Transactor(
+			safeContractAddress,
+			clients.L1Client,
+		)
+		if err != nil {
+			return fmt.Errorf("could not create safe: %s", err)
+		}
 
-			safeCaller, err := bindings.NewSafeV130Caller(
-				safeContractAddress,
-				clients.L1Client,
-			)
-			if err != nil {
-				return fmt.Errorf("could not create safe: %s", err)
-			}
+		safeCaller, err := bindings.NewSafeV130Caller(
+			safeContractAddress,
+			clients.L1Client,
+		)
+		if err != nil {
+			return fmt.Errorf("could not create safe: %s", err)
+		}
 
-			bigZero := big.NewInt(0)
+		bigZero := big.NewInt(0)
 
-			nonce, err := safeCaller.Nonce(&bind.CallOpts{
-				From: ownerAddress,
-			})
-			if err != nil {
-				return fmt.Errorf("error getting nonce: %s", err)
-			}
+		nonce, err := safeCaller.Nonce(&bind.CallOpts{
+			From: ownerAddress,
+		})
+		if err != nil {
+			return fmt.Errorf("error getting nonce: %s", err)
+		}
 
-			safeTxHash, err := safeCaller.GetTransactionHash(
-				&bind.CallOpts{},
-				tx.To,
-				bigZero,
-				tx.Data,
-				0, /* operation? */
-				big.NewInt(0),
-				big.NewInt(0),
-				big.NewInt(0),
-				common.HexToAddress("0x"),
-				common.HexToAddress("0x"),
-				nonce,
-			)
-			if err != nil {
-				return fmt.Errorf("could not get transaction hash: %s", err)
-			}
+		safeTxHash, err := safeCaller.GetTransactionHash(
+			&bind.CallOpts{},
+			tx.To,
+			bigZero,
+			tx.Data,
+			0, /* operation? */
+			big.NewInt(0),
+			big.NewInt(0),
+			big.NewInt(0),
+			common.HexToAddress("0x"),
+			common.HexToAddress("0x"),
+			nonce,
+		)
+		if err != nil {
+			return fmt.Errorf("could not get transaction hash: %s", err)
+		}
 
-			privateKey, err := crypto.HexToECDSA(privateKeyStr)
-			if err != nil {
-				return fmt.Errorf("could not parse private key: %s", err)
-			}
+		privateKey, err := crypto.HexToECDSA(privateKeyStr)
+		if err != nil {
+			return fmt.Errorf("could not parse private key: %s", err)
+		}
 
-			publicKey := privateKey.Public()
+		publicKey := privateKey.Public()
 
-			publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
-			if !ok {
-				return fmt.Errorf("failed to create ecdsa public key")
-			}
+		publicKeyEcdsa, ok := publicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("failed to create ecdsa public key")
+		}
 
-			address := crypto.PubkeyToAddress(*publicKeyEcdsa)
+		address := crypto.PubkeyToAddress(*publicKeyEcdsa)
 
-			log.Info("my info", "public key", publicKey, "address", address)
+		log.Info("my info", "public key", publicKey, "address", address)
 
-			owners, err := safeCaller.GetOwners(nil)
-			if err != nil {
+		owners, err := safeCaller.GetOwners(nil)
+		if err != nil {
+			return err
+		}
+
+		l1RpcUrl := ctx.String("l1-rpc-url")
+
+		if err := impersonateAccount(ctx.Context, l1RpcUrl, safeContractAddress); err != nil {
+			return err
+		}
+
+		for _, owner := range owners[:1] {
+			log.Info("an owner is", "address", owner)
+
+			if err := impersonateAccount(ctx.Context, l1RpcUrl, owner); err != nil {
 				return err
 			}
 
-			l1RpcUrl := ctx.String("l1-rpc-url")
-
-			if err := impersonateAccount(ctx.Context, l1RpcUrl, safeContractAddress); err != nil {
-				return err
-			}
-
-			for _, owner := range owners[:1] {
-				log.Info("an owner is", "address", owner)
-
-				if err := impersonateAccount(ctx.Context, l1RpcUrl, owner); err != nil {
-					return err
-				}
-
-				log.Info("will approve transaction", "hash", hex.EncodeToString(safeTxHash[:]), "address", address)
+			log.Info("will approve transaction", "hash", hex.EncodeToString(safeTxHash[:]), "address", address)
 
 			nonce, err := clients.L1Client.NonceAt(ctx.Context, safeContractAddress, nil)
 			if err != nil {
@@ -396,7 +396,6 @@ func entrypoint(ctx *cli.Context) error {
 
 			v, r, s := signedTx.RawSignatureValues()
 
-
 			signatures := []byte{}
 			signatures = append(signatures, r.Bytes()...)
 			signatures = append(signatures, s.Bytes()...)
@@ -415,43 +414,42 @@ func entrypoint(ctx *cli.Context) error {
 				return err
 			}
 
-
-		nonce, err = clients.L1Client.NonceAt(ctx.Context, safeContractAddress, nil)
-		if err != nil {
-			return err
-		}
-
-		thresholdTx, err = safe.AddOwnerWithThreshold(&bind.TransactOpts{
-			Nonce: big.NewInt(int64(nonce)),
-			From:  safeContractAddress,
-			Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
-				signedTxTmp, err := types.SignTx(tx, signer, privateKey)
-				if err != nil {
-					return nil, fmt.Errorf("failed to sign tx: %s", err)
-				}
-
-				return signedTxTmp, nil
-			},
-			NoSend: true,
-		}, maybeFrom, big.NewInt(1))
-		if err != nil {
-			if strings.Contains(err.Error(), "GS204") {
-				log.Info("owner already added")
-			} else {
-				return fmt.Errorf("could not add owner: %s", err)
-			}
-		}
-
-		if thresholdTx != nil {
-			txHash, err := sendTransaction(ctx.Context, l1RpcUrl, &safeContractAddress, thresholdTx.To(), thresholdTx.Data(), uint64(nonce))
+			nonce, err = clients.L1Client.NonceAt(ctx.Context, safeContractAddress, nil)
 			if err != nil {
 				return err
 			}
 
-			if err := waitForTransactionHash(ctx.Context, clients.L1Client, common.HexToHash(txHash)); err != nil {
-				return err
+			thresholdTx, err = safe.AddOwnerWithThreshold(&bind.TransactOpts{
+				Nonce: big.NewInt(int64(nonce)),
+				From:  safeContractAddress,
+				Signer: func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+					signedTxTmp, err := types.SignTx(tx, signer, privateKey)
+					if err != nil {
+						return nil, fmt.Errorf("failed to sign tx: %s", err)
+					}
+
+					return signedTxTmp, nil
+				},
+				NoSend: true,
+			}, maybeFrom, big.NewInt(1))
+			if err != nil {
+				if strings.Contains(err.Error(), "GS204") {
+					log.Info("owner already added")
+				} else {
+					return fmt.Errorf("could not add owner: %s", err)
+				}
 			}
-		}
+
+			if thresholdTx != nil {
+				txHash, err := sendTransaction(ctx.Context, l1RpcUrl, &safeContractAddress, thresholdTx.To(), thresholdTx.Data(), uint64(nonce))
+				if err != nil {
+					return err
+				}
+
+				if err := waitForTransactionHash(ctx.Context, clients.L1Client, common.HexToHash(txHash)); err != nil {
+					return err
+				}
+			}
 
 			safeTx, err := safe.ExecTransaction(
 				&bind.TransactOpts{
@@ -483,9 +481,9 @@ func entrypoint(ctx *cli.Context) error {
 			}
 
 			nonce, err = clients.L1Client.NonceAt(ctx.Context, maybeFrom, nil)
-		if err != nil {
-			return err
-		}
+			if err != nil {
+				return err
+			}
 
 			txHash, err = sendTransaction(ctx.Context, l1RpcUrl, &maybeFrom, safeTx.To(), safeTx.Data(), uint64(nonce))
 			if err != nil {
@@ -581,7 +579,7 @@ func impersonateAccount(ctx context.Context, rpcUrl string, address common.Addre
 func waitForTransactionHash(ctx context.Context, client *ethclient.Client, hash common.Hash) error {
 	log.Info("will wait for transaction receipt...")
 	for {
-		time.Sleep(1*time.Second)
+		time.Sleep(1 * time.Second)
 		receipt, err := client.TransactionReceipt(ctx, hash)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
@@ -607,7 +605,7 @@ func sendTransaction(ctx context.Context, rpcUrl string, from *common.Address, t
 		To    string `json:"to"`
 		From  string `json:"from"`
 		Input string `json:"input"`
-		Nonce uint64    `json:"nonce"`
+		Nonce uint64 `json:"nonce"`
 	}
 
 	type bodyJSON struct {
