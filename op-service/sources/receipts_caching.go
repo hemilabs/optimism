@@ -30,8 +30,8 @@ func NewCachingReceiptsProvider(inner ReceiptsProvider, m caching.Metrics, cache
 	}
 }
 
-func NewCachingRPCReceiptsProvider(client rpcClient, log log.Logger, config RPCReceiptsConfig, m caching.Metrics, cacheSize int) *CachingReceiptsProvider {
-	return NewCachingReceiptsProvider(NewRPCReceiptsFetcher(client, log, config), m, cacheSize)
+func NewCachingRPCReceiptsProvider(client rpcClient, log log.Logger, config RPCReceiptsConfig, m caching.Metrics, cacheSize int, hemitrapEnabled bool) *CachingReceiptsProvider {
+	return NewCachingReceiptsProvider(NewRPCReceiptsFetcher(client, log, config, hemitrapEnabled), m, cacheSize)
 }
 
 func (p *CachingReceiptsProvider) getOrCreateFetchingLock(blockHash common.Hash) *sync.Mutex {

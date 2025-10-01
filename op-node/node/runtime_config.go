@@ -55,6 +55,8 @@ type RuntimeConfig struct {
 	l1Ref eth.L1BlockRef
 
 	runtimeConfigData
+
+	hemitrapEnabled bool
 }
 
 // runtimeConfigData is a flat bundle of configurable data, easy and light to copy around.
@@ -68,11 +70,12 @@ type runtimeConfigData struct {
 
 var _ p2p.GossipRuntimeConfig = (*RuntimeConfig)(nil)
 
-func NewRuntimeConfig(log log.Logger, l1Client RuntimeCfgL1Source, rollupCfg *rollup.Config) *RuntimeConfig {
+func NewRuntimeConfig(log log.Logger, l1Client RuntimeCfgL1Source, rollupCfg *rollup.Config, hemitrapEnabled bool) *RuntimeConfig {
 	return &RuntimeConfig{
-		log:       log,
-		l1Client:  l1Client,
-		rollupCfg: rollupCfg,
+		log:             log,
+		l1Client:        l1Client,
+		rollupCfg:       rollupCfg,
+		hemitrapEnabled: hemitrapEnabled,
 	}
 }
 
@@ -102,6 +105,7 @@ func (r *RuntimeConfig) Load(ctx context.Context, l1Ref eth.L1BlockRef) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch unsafe block signing address from system config: %w", err)
 	}
+
 	// The superchain protocol version data is optional; only applicable to rollup configs that specify a ProtocolVersions address.
 	var requiredProtVersion, recommendedProtoVersion params.ProtocolVersion
 	if r.rollupCfg.ProtocolVersionsAddress != (common.Address{}) {

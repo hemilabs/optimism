@@ -196,6 +196,8 @@ func (n *OpNode) initL1(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("failed to get L1 RPC client: %w", err)
 	}
 
+	l1Cfg.HemitrapEnabled = cfg.HemitrapEnabled
+
 	n.l1Source, err = sources.NewL1Client(l1RPC, n.log, n.metrics.L1SourceCache, l1Cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create L1 source: %w", err)
@@ -231,7 +233,7 @@ func (n *OpNode) initL1(ctx context.Context, cfg *Config) error {
 
 func (n *OpNode) initRuntimeConfig(ctx context.Context, cfg *Config) error {
 	// attempt to load runtime config, repeat N times
-	n.runCfg = NewRuntimeConfig(n.log, n.l1Source, &cfg.Rollup)
+	n.runCfg = NewRuntimeConfig(n.log, n.l1Source, &cfg.Rollup, cfg.HemitrapEnabled)
 
 	confDepth := cfg.Driver.VerifierConfDepth
 	reload := func(ctx context.Context) (eth.L1BlockRef, error) {
@@ -438,7 +440,7 @@ func (n *OpNode) initL2(ctx context.Context, cfg *Config) error {
 		n.safeDB = safedb.Disabled
 	}
 	n.l2Driver = driver.NewDriver(n.eventSys, n.eventDrain, &cfg.Driver, &cfg.Rollup, n.l2Source, n.l1Source,
-		n.beacon, n, n, n.log, n.metrics, cfg.ConfigPersistence, n.safeDB, &cfg.Sync, sequencerConductor, altDA, managedMode)
+		n.beacon, n, n, n.log, n.metrics, cfg.ConfigPersistence, n.safeDB, &cfg.Sync, sequencerConductor, altDA, managedMode, cfg.HemitrapEnabled)
 	return nil
 }
 

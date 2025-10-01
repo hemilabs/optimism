@@ -78,6 +78,8 @@ type Config struct {
 
 	IgnoreMissingPectraBlobSchedule bool
 	FetchWithdrawalRootFromState    bool
+
+	HemitrapEnabled bool
 }
 
 // ConductorRPCFunc retrieves the endpoint. The RPC may not immediately be available.
