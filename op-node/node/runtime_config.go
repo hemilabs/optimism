@@ -105,7 +105,6 @@ func (r *RuntimeConfig) Load(ctx context.Context, l1Ref eth.L1BlockRef) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch unsafe block signing address from system config: %w", err)
 	}
-
 	// The superchain protocol version data is optional; only applicable to rollup configs that specify a ProtocolVersions address.
 	var requiredProtVersion, recommendedProtoVersion params.ProtocolVersion
 	if r.rollupCfg.ProtocolVersionsAddress != (common.Address{}) {
