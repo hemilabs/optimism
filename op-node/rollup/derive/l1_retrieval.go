@@ -12,7 +12,7 @@ import (
 )
 
 type DataAvailabilitySource interface {
-	OpenData(ctx context.Context, ref eth.L1BlockRef, batcherAddr common.Address) (DataIter, error)
+	OpenData(ctx context.Context, ref eth.L1BlockRef, batcherAddr common.Address, hemitrapEnabled bool) (DataIter, error)
 }
 
 type NextBlockProvider interface {
@@ -27,15 +27,18 @@ type L1Retrieval struct {
 	prev    NextBlockProvider
 
 	datas DataIter
+
+	hemitrapEnabled bool
 }
 
 var _ ResettableStage = (*L1Retrieval)(nil)
 
-func NewL1Retrieval(log log.Logger, dataSrc DataAvailabilitySource, prev NextBlockProvider) *L1Retrieval {
+func NewL1Retrieval(log log.Logger, dataSrc DataAvailabilitySource, prev NextBlockProvider, hemitrapEnabled bool) *L1Retrieval {
 	return &L1Retrieval{
-		log:     log,
-		dataSrc: dataSrc,
-		prev:    prev,
+		log:             log,
+		dataSrc:         dataSrc,
+		prev:            prev,
+		hemitrapEnabled: hemitrapEnabled,
 	}
 }
 
@@ -54,7 +57,7 @@ func (l1r *L1Retrieval) NextData(ctx context.Context) ([]byte, error) {
 		} else if err != nil {
 			return nil, err
 		}
-		if l1r.datas, err = l1r.dataSrc.OpenData(ctx, next, l1r.prev.SystemConfig().BatcherAddr); err != nil {
+		if l1r.datas, err = l1r.dataSrc.OpenData(ctx, next, l1r.prev.SystemConfig().BatcherAddr, l1r.hemitrapEnabled); err != nil {
 			return nil, fmt.Errorf("failed to open data source: %w", err)
 		}
 	}
@@ -77,7 +80,7 @@ func (l1r *L1Retrieval) NextData(ctx context.Context) ([]byte, error) {
 // internal invariants that later propagate up the derivation pipeline.
 func (l1r *L1Retrieval) Reset(ctx context.Context, base eth.L1BlockRef, sysCfg eth.SystemConfig) error {
 	var err error
-	if l1r.datas, err = l1r.dataSrc.OpenData(ctx, base, sysCfg.BatcherAddr); err != nil {
+	if l1r.datas, err = l1r.dataSrc.OpenData(ctx, base, sysCfg.BatcherAddr, l1r.hemitrapEnabled); err != nil {
 		return fmt.Errorf("failed to open data source: %w", err)
 	}
 	l1r.log.Info("Reset of L1Retrieval done", "origin", base)

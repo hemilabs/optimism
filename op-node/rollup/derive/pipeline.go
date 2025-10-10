@@ -96,7 +96,7 @@ type DerivationPipeline struct {
 
 // NewDerivationPipeline creates a DerivationPipeline, to turn L1 data into L2 block-inputs.
 func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L1Fetcher, l1Blobs L1BlobsFetcher,
-	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics, managedMode bool,
+	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics, managedMode bool, hemitrapEnabled bool,
 ) *DerivationPipeline {
 	spec := rollup.NewChainSpec(rollupCfg)
 	// Stages are strung together into a pipeline,
@@ -108,7 +108,7 @@ func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L
 		l1Traversal = NewL1Traversal(log, rollupCfg, l1Fetcher)
 	}
 	dataSrc := NewDataSourceFactory(log, rollupCfg, l1Fetcher, l1Blobs, altDA) // auxiliary stage for L1Retrieval
-	l1Src := NewL1Retrieval(log, dataSrc, l1Traversal)
+	l1Src := NewL1Retrieval(log, dataSrc, l1Traversal, hemitrapEnabled)
 	frameQueue := NewFrameQueue(log, rollupCfg, l1Src)
 	channelMux := NewChannelMux(log, spec, frameQueue, metrics)
 	chInReader := NewChannelInReader(rollupCfg, log, channelMux, metrics)
@@ -213,7 +213,7 @@ func (dp *DerivationPipeline) Step(ctx context.Context, pendingSafeHead eth.L2Bl
 
 	if attrib, err := dp.attrib.NextAttributes(ctx, pendingSafeHead); err == nil {
 		return attrib, nil
-	} else if err == io.EOF {
+	} else if errors.Is(err, io.EOF) {
 		// If every stage has returned io.EOF, try to advance the L1 Origin
 		return nil, dp.traversal.AdvanceL1Block(ctx)
 	} else if errors.Is(err, EngineELSyncing) {

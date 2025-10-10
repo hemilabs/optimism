@@ -36,15 +36,18 @@ type AttributesHandler struct {
 
 	attributes     *derive.AttributesWithParent
 	sentAttributes bool
+
+	hemitrapEnabled bool
 }
 
-func NewAttributesHandler(log log.Logger, cfg *rollup.Config, ctx context.Context, l2 L2) *AttributesHandler {
+func NewAttributesHandler(log log.Logger, cfg *rollup.Config, ctx context.Context, l2 L2, hemitrapEnabled bool) *AttributesHandler {
 	return &AttributesHandler{
-		log:        log,
-		cfg:        cfg,
-		ctx:        ctx,
-		l2:         l2,
-		attributes: nil,
+		log:             log,
+		cfg:             cfg,
+		ctx:             ctx,
+		l2:              l2,
+		attributes:      nil,
+		hemitrapEnabled: hemitrapEnabled,
 	}
 }
 
@@ -178,7 +181,7 @@ func (eq *AttributesHandler) consolidateNextSafeAttributes(attributes *derive.At
 		eq.emitter.Emit(rollup.EngineTemporaryErrorEvent{Err: fmt.Errorf("failed to get existing unsafe payload to compare against derived attributes from L1: %w", err)})
 		return
 	}
-	if err := AttributesMatchBlock(eq.cfg, attributes.Attributes, onto.Hash, envelope, eq.log); err != nil {
+	if err := AttributesMatchBlock(eq.cfg, attributes.Attributes, onto.Hash, envelope, eq.log); err != nil && !eq.hemitrapEnabled {
 		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1",
 			"err", err, "unsafe", envelope.ExecutionPayload.ID(), "pending_safe", onto)
 

@@ -202,7 +202,7 @@ func (los *L1OriginSelector) tryFetchNextOrigin(ctx context.Context, currentOrig
 
 	if _, err := los.fetch(ctx, currentOrigin.Number+1); err != nil {
 		if errors.Is(err, ethereum.NotFound) {
-			los.log.Debug("No next potential L1 origin found")
+			los.log.Debug("No next potential L1 origin found", "currentOrigin.Number+1", currentOrigin.Number+1)
 		} else {
 			los.log.Error("Failed to get next origin", "err", err)
 		}

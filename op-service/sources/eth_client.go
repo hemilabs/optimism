@@ -69,6 +69,8 @@ type EthClientConfig struct {
 	// till we re-attempt the user-preferred methods.
 	// If this is 0 then the client does not fall back to less optimal but available methods.
 	MethodResetDuration time.Duration
+
+	HemitrapEnabled bool
 }
 
 // DefaultEthClientConfig creates a new eth client config,

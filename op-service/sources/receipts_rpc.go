@@ -22,7 +22,7 @@ func newRPCRecProviderFromConfig(client client.RPC, log log.Logger, metrics cach
 		ProviderKind:        config.RPCProviderKind,
 		MethodResetDuration: config.MethodResetDuration,
 	}
-	return NewCachingRPCReceiptsProvider(client, log, recCfg, metrics, config.ReceiptsCacheSize)
+	return NewCachingRPCReceiptsProvider(client, log, recCfg, metrics, config.ReceiptsCacheSize, config.HemitrapEnabled)
 }
 
 type rpcClient interface {
@@ -50,6 +50,8 @@ type RPCReceiptsFetcher struct {
 
 	// methodResetDuration defines how long we take till we reset lastMethodsReset
 	methodResetDuration time.Duration
+
+	hemitrapEnabled bool
 }
 
 type RPCReceiptsConfig struct {
@@ -58,7 +60,7 @@ type RPCReceiptsConfig struct {
 	MethodResetDuration time.Duration
 }
 
-func NewRPCReceiptsFetcher(client rpcClient, log log.Logger, config RPCReceiptsConfig) *RPCReceiptsFetcher {
+func NewRPCReceiptsFetcher(client rpcClient, log log.Logger, config RPCReceiptsConfig, hemitrapEnabled bool) *RPCReceiptsFetcher {
 	return &RPCReceiptsFetcher{
 		client:                  client,
 		basic:                   NewBasicRPCReceiptsFetcher(client, config.MaxBatchSize),
@@ -67,6 +69,7 @@ func NewRPCReceiptsFetcher(client rpcClient, log log.Logger, config RPCReceiptsC
 		availableReceiptMethods: AvailableReceiptsFetchingMethods(config.ProviderKind),
 		lastMethodsReset:        time.Now(),
 		methodResetDuration:     config.MethodResetDuration,
+		hemitrapEnabled:         hemitrapEnabled,
 	}
 }
 
@@ -105,8 +108,10 @@ func (f *RPCReceiptsFetcher) FetchReceipts(ctx context.Context, blockInfo eth.Bl
 		return nil, err
 	}
 
-	if err = validateReceipts(block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
-		return nil, err
+	if !f.hemitrapEnabled {
+		if err = validateReceipts(block, blockInfo.ReceiptHash(), txHashes, result); err != nil {
+			return nil, err
+		}
 	}
 
 	return
