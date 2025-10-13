@@ -157,8 +157,8 @@ github.com/cpuguy83/go-md2man/v2 v2.0.0-20190314233015-f79a8a8ca69d/go.mod h1:ma
 github.com/cpuguy83/go-md2man/v2 v2.0.0/go.mod h1:maD7wRr/U5Z6m/iR4s+kqSMx2CaBsrgA7czyZG/E6dU=
 github.com/cpuguy83/go-md2man/v2 v2.0.5 h1:ZtcqGrnekaHpVLArFSe4HK5DoKx1T0rq2DwVB0alcyc=
 github.com/cpuguy83/go-md2man/v2 v2.0.5/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
-github.com/crate-crypto/go-eth-kzg v1.4.0 h1:WzDGjHk4gFg6YzV0rJOAsTK4z3Qkz5jd4RE3DAvPFkg=
-github.com/crate-crypto/go-eth-kzg v1.4.0/go.mod h1:J9/u5sWfznSObptgfa92Jq8rTswn6ahQWEuiLHOjCUI=
+github.com/crate-crypto/go-eth-kzg v1.3.0 h1:05GrhASN9kDAidaFJOda6A4BEvgvuXbazXg/0E3OOdI=
+github.com/crate-crypto/go-eth-kzg v1.3.0/go.mod h1:J9/u5sWfznSObptgfa92Jq8rTswn6ahQWEuiLHOjCUI=
 github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a h1:W8mUrRp6NOVl3J+MYp5kPMoUZPp7aOYHtaua31lwRHg=
 github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a/go.mod h1:sTwzHBvIzm2RfVCGNEBZgRyjwK40bVoun3ZnGOCafNM=
 github.com/crate-crypto/go-kzg-4844 v1.1.0 h1:EN/u9k2TF6OWSHrCCDBBU6GLNMq88OspHHlMnHfoyU4=
@@ -224,8 +224,8 @@ github.com/ethereum-optimism/optimism/op-bindings v0.10.14 h1:SMMnMdNb1QIhJDyvk7
 github.com/ethereum-optimism/optimism/op-bindings v0.10.14/go.mod h1:9ZSUq/rjlzp3uYyBN4sZmhTc3oZgDVqJ4wrUja7vj6c=
 github.com/ethereum-optimism/superchain-registry/validation v0.0.0-20250314162817-2c60e5723c64 h1:teDhU4h4ryaE8rSBl+vJJiwKHjxdnnHPkKZ9iNr2R8k=
 github.com/ethereum-optimism/superchain-registry/validation v0.0.0-20250314162817-2c60e5723c64/go.mod h1:NZ816PzLU1TLv1RdAvYAb6KWOj4Zm5aInT0YpDVml2Y=
-github.com/ethereum/c-kzg-4844/v2 v2.1.5 h1:aVtoLK5xwJ6c5RiqO8g8ptJ5KU+2Hdquf6G3aXiHh5s=
-github.com/ethereum/c-kzg-4844/v2 v2.1.5/go.mod h1:u59hRTTah4Co6i9fDWtiCjTrblJv0UwsqZKCc0GfgUs=
+github.com/ethereum/c-kzg-4844/v2 v2.1.0 h1:gQropX9YFBhl3g4HYhwE70zq3IHFRgbbNPw0Shwzf5w=
+github.com/ethereum/c-kzg-4844/v2 v2.1.0/go.mod h1:TC48kOKjJKPbN7C++qIgt0TJzZ70QznYR7Ob+WXl57E=
 github.com/ethereum/go-verkle v0.2.2 h1:I2W0WjnrFUIzzVPwm8ykY+7pL2d4VhlsePn4j7cnFk8=
 github.com/ethereum/go-verkle v0.2.2/go.mod h1:M3b90YRnzqKyyzBEWJGqj8Qff4IDeXnzFw0P9bFw3uk=
 github.com/fatih/color v1.13.0/go.mod h1:kLAiJbzzSOZDVNGyDpeOxJ47H46qBXwg5ILebYFFOfk=
@@ -413,8 +413,8 @@ github.com/hashicorp/raft-boltdb/v2 v2.3.1 h1:ackhdCNPKblmOhjEU9+4lHSJYFkJd6Jqyv
 github.com/hashicorp/raft-boltdb/v2 v2.3.1/go.mod h1:n4S+g43dXF1tqDT+yzcXHhXM6y7MrlUd3TTwGRcUvQE=
 github.com/hemilabs/heminetwork v1.0.0 h1:JmzdRWAUdhcGz0BIkUQevs8jYHSyWucdDf3nciAGUPQ=
 github.com/hemilabs/heminetwork v1.0.0/go.mod h1:YJSH7ONjPn95FKzL8Zl8gVQYxzhwLeoWg6lQXR477QU=
-github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251013161806-d5f6fa1178d9 h1:wf43CB1/OBgspX/7j0MHHNjx0VrMlqjs9baxWW1lXX8=
-github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251013161806-d5f6fa1178d9/go.mod h1:VbVvK5g0O4JlJ71Zbwiq0xUwE6TDu7y+thUbzA+Grgw=
+github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251013192146-157cd4b03a3f h1:S8YzRBWqYOifU+qmKZpxmQ3DJLOGi13bsvirFgY1kPs=
+github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251013192146-157cd4b03a3f/go.mod h1:4KDSnqF/lbW9Nexc+YjAqiOyJ7tKXCQEic5obVjSYbc=
 github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4 h1:X4egAf/gcS1zATw6wn4Ej8vjuVGxeHdan+bRb2ebyv4=
 github.com/holiman/billy v0.0.0-20240216141850-2abb0c79d3c4/go.mod h1:5GuXa7vkL8u9FkFuWdVvfR5ix8hRB7DbOAaYULamFpc=
 github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZKVu0fao=
