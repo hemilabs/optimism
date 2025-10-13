@@ -308,8 +308,10 @@ func NewL1ChainConfig(chainId *big.Int, ctx *cli.Context, log log.Logger) (*para
 	}
 
 	if cfg := eth.L1ChainConfigByChainID(eth.ChainIDFromBig(chainId)); cfg != nil {
+		log.Info("Chain config for L1 found!", "chainId", chainId)
 		return cfg, nil
 	}
+	log.Info("Unable to find chain config for L1!", "chainId", chainId)
 
 	// if the chain id is not known, we fallback to the CLI config
 	cf, err := NewL1ChainConfigFromCLI(log, ctx)
