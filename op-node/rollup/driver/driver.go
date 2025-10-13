@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-service/client"
 
@@ -162,6 +163,7 @@ func NewDriver(
 	drain Drain,
 	driverCfg *Config,
 	cfg *rollup.Config,
+	l1ChainConfig *params.ChainConfig,
 	l2 L2Chain,
 	l1 L1Chain,
 	l1Blobs derive.L1BlobsFetcher,
@@ -210,7 +212,7 @@ func NewDriver(
 	sys.Register("attributes-handler",
 		attributes.NewAttributesHandler(log, cfg, driverCtx, l2), opts)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l1Blobs, altDA, l2, metrics, managedMode, bssClient)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l1Blobs, altDA, l2, metrics, managedMode, bssClient, l1ChainConfig)
 
 	sys.Register("pipeline",
 		derive.NewPipelineDeriver(driverCtx, derivationPipeline), opts)
@@ -239,7 +241,7 @@ func NewDriver(
 	var sequencer sequencing.SequencerIface
 	if driverCfg.SequencerEnabled {
 		asyncGossiper := async.NewAsyncGossiper(driverCtx, network, log, metrics)
-		attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, l2)
+		attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1ChainConfig, l1, l2)
 		sequencerConfDepth := confdepth.NewConfDepth(driverCfg.SequencerConfDepth, statusTracker.L1Head, l1)
 		findL1Origin := sequencing.NewL1OriginSelector(driverCtx, log, cfg, sequencerConfDepth)
 		sys.Register("origin-selector", findL1Origin, opts)
