@@ -215,7 +215,10 @@ func (s *EthClient) headerCall(ctx context.Context, method string, id rpcBlockID
 	var header *RPCHeader
 	err := s.client.CallContext(ctx, &header, method, id.Arg(), false) // headers are just blocks without txs
 	if err != nil {
+		log.Info("Error getting header", "err", err)
 		return nil, err
+	} else {
+		log.Info("Got header", "header", header)
 	}
 	if header == nil {
 		return nil, ethereum.NotFound

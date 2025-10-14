@@ -133,6 +133,7 @@ func (hdr *RPCHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo
 	}
 	if !trustCache {
 		if computed := hdr.computeBlockHash(); computed != hdr.Hash {
+			fmt.Printf("Computed block hash does not match expected hash: %s, %s\n", computed, hdr.Hash)
 			return nil, fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, hdr.Hash)
 		}
 	}

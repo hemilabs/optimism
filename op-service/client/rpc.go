@@ -231,6 +231,7 @@ func (b *BaseRPCClient) Close() {
 }
 
 func (b *BaseRPCClient) CallContext(ctx context.Context, result any, method string, args ...any) error {
+	log.Info("Base RPC call context", "method", method, "args", args)
 	cCtx, cancel := context.WithTimeout(ctx, b.callTimeout)
 	defer cancel()
 	return b.c.CallContext(cCtx, result, method, args...)
