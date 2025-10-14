@@ -111,6 +111,8 @@ func WithRPCRecorder(recorder rpc.Recorder) RPCOption {
 func NewRPC(ctx context.Context, lgr log.Logger, addr string, opts ...RPCOption) (RPC, error) {
 	cfg := applyOptions(opts)
 
+	log.Info("NewRPC", "addr", addr, "lazy", cfg.lazy, "opts", opts)
+
 	var wrapped RPC
 	if cfg.lazy {
 		wrapped = newLazyRPC(addr, cfg)

@@ -155,6 +155,8 @@ func (cfg *L1EndpointConfig) Check() error {
 }
 
 func (cfg *L1EndpointConfig) Setup(ctx context.Context, log log.Logger, rollupCfg *rollup.Config, metrics opmetrics.RPCMetricer) (client.RPC, *sources.L1ClientConfig, error) {
+	log.Info("Setup L1 Endpoint", "config", rollupCfg)
+
 	opts := []client.RPCOption{
 		client.WithHttpPollInterval(cfg.HttpPollInterval),
 		client.WithDialAttempts(10),

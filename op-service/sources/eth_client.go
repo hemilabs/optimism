@@ -456,10 +456,14 @@ func (s *EthClient) BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (
 // Notice, we cannot cache a block reference by number because L1 re-orgs can invalidate the cached block reference.
 func (s *EthClient) BlockRefByNumber(ctx context.Context, num uint64) (eth.BlockRef, error) {
 	info, err := s.InfoByNumber(ctx, num)
+	log.Info("Got block ref by number", "number", num, "info", info)
 	if err != nil {
 		return eth.L1BlockRef{}, fmt.Errorf("failed to fetch header by num %d: %w", num, err)
 	}
+	log.Info("Converting to L1 block ref")
 	ref := eth.InfoToL1BlockRef(info)
+
+	log.Info("Ref", "ref", ref)
 	s.blockRefsCache.Add(ref.Hash, ref)
 	return ref, nil
 }
@@ -467,6 +471,7 @@ func (s *EthClient) BlockRefByNumber(ctx context.Context, num uint64) (eth.Block
 // BlockRefByHash returns the [eth.BlockRef] for the given block hash.
 // We cache the block reference by hash as it is safe to assume collision will not occur.
 func (s *EthClient) BlockRefByHash(ctx context.Context, hash common.Hash) (eth.BlockRef, error) {
+	log.Info("BlockRefByHash called", "hash", hash)
 	if v, ok := s.blockRefsCache.Get(hash); ok {
 		return v, nil
 	}
