@@ -12,15 +12,14 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
-// Used only for feature propagation (serde-bincode-compat workaround).
-#[cfg(feature = "serde-bincode-compat")]
-use reth_ethereum_primitives as _;
-
 pub mod api;
-pub use api::{BlockStateDiff, OpProofsInitialStateStore, OpProofsStore};
+pub use api::{
+    BlockStateDiff, OpProofsHashedCursor, OpProofsStorage, OpProofsStorageError,
+    OpProofsStorageResult, OpProofsTrieCursor,
+};
 
-pub mod initialize;
-pub use initialize::InitializationJob;
+pub mod backfill;
+pub use backfill::BackfillJob;
 
 pub mod in_memory;
 pub use in_memory::{
@@ -28,38 +27,3 @@ pub use in_memory::{
 };
 
 pub mod db;
-pub use db::{MdbxAccountCursor, MdbxProofsStorage, MdbxStorageCursor, MdbxTrieCursor};
-
-#[cfg(feature = "metrics")]
-pub mod metrics;
-#[cfg(feature = "metrics")]
-pub use metrics::{
-    OpProofsHashedAccountCursor, OpProofsHashedStorageCursor, OpProofsStorage, OpProofsTrieCursor,
-    StorageMetrics,
-};
-
-#[cfg(not(feature = "metrics"))]
-/// Alias for [`OpProofsStore`] type without metrics (`metrics` feature is disabled).
-pub type OpProofsStorage<S> = S;
-
-pub mod proof;
-
-pub mod provider;
-
-pub mod live;
-
-pub mod cursor;
-#[cfg(not(feature = "metrics"))]
-pub use cursor::{OpProofsHashedAccountCursor, OpProofsHashedStorageCursor, OpProofsTrieCursor};
-
-pub mod cursor_factory;
-pub use cursor_factory::{OpProofsHashedAccountCursorFactory, OpProofsTrieCursorFactory};
-
-pub mod error;
-pub use error::{OpProofsStorageError, OpProofsStorageResult};
-
-mod prune;
-pub use prune::{
-    OpProofStoragePruner, OpProofStoragePrunerResult, OpProofStoragePrunerTask, PrunerError,
-    PrunerOutput,
-};

@@ -1,32 +1,31 @@
-use alloy_primitives::{B256, U256};
-use derive_more::{Constructor, From, Into};
+use alloy_primitives::B256;
 use reth_db::{
+    table::{Decode, Encode},
     DatabaseError,
-    table::{Compress, Decode, Decompress, Encode},
 };
-use reth_trie_common::StoredNibbles;
+use reth_trie::StoredNibbles;
 use serde::{Deserialize, Serialize};
 
 /// Composite key: `(hashed-address, path)` for storage trie branches
 ///
 /// Used to efficiently index storage branches by both account address and trie path.
 /// The encoding ensures lexicographic ordering: first by address, then by path.
-#[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct StorageTrieKey {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct StorageTrieSubKey {
     /// Hashed account address
     pub hashed_address: B256,
     /// Trie path as nibbles
     pub path: StoredNibbles,
 }
 
-impl StorageTrieKey {
+impl StorageTrieSubKey {
     /// Create a new storage branch key
     pub const fn new(hashed_address: B256, path: StoredNibbles) -> Self {
         Self { hashed_address, path }
     }
 }
 
-impl Encode for StorageTrieKey {
+impl Encode for StorageTrieSubKey {
     type Encoded = Vec<u8>;
 
     fn encode(self) -> Self::Encoded {
@@ -39,7 +38,7 @@ impl Encode for StorageTrieKey {
     }
 }
 
-impl Decode for StorageTrieKey {
+impl Decode for StorageTrieSubKey {
     fn decode(value: &[u8]) -> Result<Self, DatabaseError> {
         if value.len() < 32 {
             return Err(DatabaseError::Decode);
@@ -59,22 +58,22 @@ impl Decode for StorageTrieKey {
 ///
 /// Used to efficiently index storage values by both account address and storage key.
 /// The encoding ensures lexicographic ordering: first by address, then by storage key.
-#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct HashedStorageKey {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct HashedStorageSubKey {
     /// Hashed account address
     pub hashed_address: B256,
     /// Hashed storage key
     pub hashed_storage_key: B256,
 }
 
-impl HashedStorageKey {
+impl HashedStorageSubKey {
     /// Create a new hashed storage key
     pub const fn new(hashed_address: B256, hashed_storage_key: B256) -> Self {
         Self { hashed_address, hashed_storage_key }
     }
 }
 
-impl Encode for HashedStorageKey {
+impl Encode for HashedStorageSubKey {
     type Encoded = [u8; 64];
 
     fn encode(self) -> Self::Encoded {
@@ -87,7 +86,7 @@ impl Encode for HashedStorageKey {
     }
 }
 
-impl Decode for HashedStorageKey {
+impl Decode for HashedStorageSubKey {
     fn decode(value: &[u8]) -> Result<Self, DatabaseError> {
         if value.len() != 64 {
             return Err(DatabaseError::Decode);
@@ -97,29 +96,6 @@ impl Decode for HashedStorageKey {
         let hashed_storage_key = B256::from_slice(&value[32..64]);
 
         Ok(Self { hashed_address, hashed_storage_key })
-    }
-}
-
-/// Storage value wrapper for U256 values
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, From, Into, Constructor)]
-pub struct StorageValue(pub U256);
-
-impl Compress for StorageValue {
-    type Compressed = Vec<u8>;
-
-    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
-        let be: [u8; 32] = self.0.to_be_bytes::<32>();
-        buf.put_slice(&be);
-    }
-}
-
-impl Decompress for StorageValue {
-    fn decompress(value: &[u8]) -> Result<Self, DatabaseError> {
-        if value.len() != 32 {
-            return Err(DatabaseError::Decode);
-        }
-        let bytes: [u8; 32] = value.try_into().map_err(|_| DatabaseError::Decode)?;
-        Ok(Self(U256::from_be_bytes(bytes)))
     }
 }
 
@@ -133,8 +109,6 @@ pub enum ProofWindowKey {
     EarliestBlock = 0,
     /// Latest block number stored in external storage
     LatestBlock = 1,
-    /// Anchor block from where the  initial state initialization started
-    InitialStateAnchor = 2,
 }
 
 impl Encode for ProofWindowKey {
@@ -150,7 +124,6 @@ impl Decode for ProofWindowKey {
         match value.first() {
             Some(&0) => Ok(Self::EarliestBlock),
             Some(&1) => Ok(Self::LatestBlock),
-            Some(&2) => Ok(Self::InitialStateAnchor),
             _ => Err(DatabaseError::Decode),
         }
     }
@@ -165,10 +138,10 @@ mod tests {
     fn test_storage_branch_subkey_encode_decode() {
         let addr = B256::from([1u8; 32]);
         let path = StoredNibbles(Nibbles::from_nibbles_unchecked([1, 2, 3, 4]));
-        let key = StorageTrieKey::new(addr, path.clone());
+        let key = StorageTrieSubKey::new(addr, path.clone());
 
         let encoded = key.clone().encode();
-        let decoded = StorageTrieKey::decode(&encoded).unwrap();
+        let decoded = StorageTrieSubKey::decode(&encoded).unwrap();
 
         assert_eq!(key, decoded);
         assert_eq!(decoded.hashed_address, addr);
@@ -182,9 +155,9 @@ mod tests {
         let path1 = StoredNibbles(Nibbles::from_nibbles_unchecked([1, 2]));
         let path2 = StoredNibbles(Nibbles::from_nibbles_unchecked([1, 3]));
 
-        let key1 = StorageTrieKey::new(addr1, path1.clone());
-        let key2 = StorageTrieKey::new(addr1, path2);
-        let key3 = StorageTrieKey::new(addr2, path1);
+        let key1 = StorageTrieSubKey::new(addr1, path1.clone());
+        let key2 = StorageTrieSubKey::new(addr1, path2);
+        let key3 = StorageTrieSubKey::new(addr2, path1);
 
         // Encoded bytes should be sortable: first by address, then by path
         let enc1 = key1.encode();
@@ -200,10 +173,10 @@ mod tests {
     fn test_hashed_storage_subkey_encode_decode() {
         let addr = B256::from([1u8; 32]);
         let storage_key = B256::from([2u8; 32]);
-        let key = HashedStorageKey::new(addr, storage_key);
+        let key = HashedStorageSubKey::new(addr, storage_key);
 
         let encoded = key.clone().encode();
-        let decoded = HashedStorageKey::decode(&encoded).unwrap();
+        let decoded = HashedStorageSubKey::decode(&encoded).unwrap();
 
         assert_eq!(key, decoded);
         assert_eq!(decoded.hashed_address, addr);
@@ -217,9 +190,9 @@ mod tests {
         let storage1 = B256::from([10u8; 32]);
         let storage2 = B256::from([20u8; 32]);
 
-        let key1 = HashedStorageKey::new(addr1, storage1);
-        let key2 = HashedStorageKey::new(addr1, storage2);
-        let key3 = HashedStorageKey::new(addr2, storage1);
+        let key1 = HashedStorageSubKey::new(addr1, storage1);
+        let key2 = HashedStorageSubKey::new(addr1, storage2);
+        let key3 = HashedStorageSubKey::new(addr2, storage1);
 
         // Encoded bytes should be sortable: first by address, then by storage key
         let enc1 = key1.encode();
@@ -235,7 +208,7 @@ mod tests {
     fn test_hashed_storage_subkey_size() {
         let addr = B256::from([1u8; 32]);
         let storage_key = B256::from([2u8; 32]);
-        let key = HashedStorageKey::new(addr, storage_key);
+        let key = HashedStorageSubKey::new(addr, storage_key);
 
         let encoded = key.encode();
         assert_eq!(encoded.len(), 64, "Encoded size should be exactly 64 bytes");

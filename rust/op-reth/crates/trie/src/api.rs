@@ -1,64 +1,66 @@
 //! Storage API for external storage of intermediary trie nodes.
 
-use crate::{
-    OpProofsStorageResult,
-    db::{HashedStorageKey, StorageTrieKey},
-};
-use alloy_eips::{BlockNumHash, eip1898::BlockWithParent};
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{map::HashMap, B256, U256};
 use auto_impl::auto_impl;
-use derive_more::{AddAssign, Constructor};
 use reth_primitives_traits::Account;
-use reth_trie::{
-    hashed_cursor::{HashedCursor, HashedStorageCursor},
-    trie_cursor::{TrieCursor, TrieStorageCursor},
-};
-use reth_trie_common::{
-    BranchNodeCompact, HashedPostStateSorted, Nibbles, StoredNibbles, updates::TrieUpdatesSorted,
-};
-use std::{fmt::Debug, time::Duration};
+use reth_trie::{updates::TrieUpdates, BranchNodeCompact, HashedPostState, Nibbles};
+use std::fmt::Debug;
+use thiserror::Error;
+
+/// Error type for storage operations
+#[derive(Debug, Error)]
+pub enum OpProofsStorageError {
+    // TODO: add more errors once we know what they are
+    /// Other error
+    #[error("Other error: {0}")]
+    Other(eyre::Error),
+}
+
+/// Result type for storage operations
+pub type OpProofsStorageResult<T> = Result<T, OpProofsStorageError>;
+
+/// Seeks and iterates over trie nodes in the database by path (lexicographical order)
+pub trait OpProofsTrieCursor: Send + Sync {
+    /// Seek to an exact path, otherwise return None if not found.
+    fn seek_exact(
+        &mut self,
+        path: Nibbles,
+    ) -> OpProofsStorageResult<Option<(Nibbles, BranchNodeCompact)>>;
+
+    /// Seek to a path, otherwise return the first path greater than the given path
+    /// lexicographically.
+    fn seek(
+        &mut self,
+        path: Nibbles,
+    ) -> OpProofsStorageResult<Option<(Nibbles, BranchNodeCompact)>>;
+
+    /// Move the cursor to the next path and return it.
+    fn next(&mut self) -> OpProofsStorageResult<Option<(Nibbles, BranchNodeCompact)>>;
+
+    /// Get the current path.
+    fn current(&mut self) -> OpProofsStorageResult<Option<Nibbles>>;
+}
+
+/// Seeks and iterates over hashed entries in the database by key.
+pub trait OpProofsHashedCursor: Send + Sync {
+    /// Value returned by the cursor.
+    type Value: Debug;
+
+    /// Seek an entry greater or equal to the given key and position the cursor there.
+    /// Returns the first entry with the key greater or equal to the sought key.
+    fn seek(&mut self, key: B256) -> OpProofsStorageResult<Option<(B256, Self::Value)>>;
+
+    /// Move the cursor to the next entry and return it.
+    fn next(&mut self) -> OpProofsStorageResult<Option<(B256, Self::Value)>>;
+}
 
 /// Diff of trie updates and post state for a block.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BlockStateDiff {
     /// Trie updates for branch nodes
-    pub sorted_trie_updates: TrieUpdatesSorted,
+    pub trie_updates: TrieUpdates,
     /// Post state for leaf nodes (accounts and storage)
-    pub sorted_post_state: HashedPostStateSorted,
-}
-
-impl BlockStateDiff {
-    /// Extend the [` BlockStateDiff`] from other latest [`BlockStateDiff`]
-    pub fn extend_ref(&mut self, other: &Self) {
-        self.sorted_trie_updates.extend_ref_and_sort(&other.sorted_trie_updates);
-        self.sorted_post_state.extend_ref_and_sort(&other.sorted_post_state);
-    }
-}
-
-/// Counts of trie updates written to storage.
-#[derive(Debug, Clone, Default, AddAssign, Constructor, Eq, PartialEq)]
-pub struct WriteCounts {
-    /// Number of account trie updates written
-    pub account_trie_updates_written_total: u64,
-    /// Number of storage trie updates written
-    pub storage_trie_updates_written_total: u64,
-    /// Number of hashed accounts written
-    pub hashed_accounts_written_total: u64,
-    /// Number of hashed storages written
-    pub hashed_storages_written_total: u64,
-}
-
-/// Duration metrics for block processing.
-#[derive(Debug, Default, Clone)]
-pub struct OperationDurations {
-    /// Total time to process a block (end-to-end) in seconds
-    pub total_duration_seconds: Duration,
-    /// Time spent executing the block (EVM) in seconds
-    pub execution_duration_seconds: Duration,
-    /// Time spent calculating state root in seconds
-    pub state_root_duration_seconds: Duration,
-    /// Time spent writing trie updates to storage in seconds
-    pub write_duration_seconds: Duration,
+    pub post_state: HashedPostState,
 }
 
 /// Trait for reading trie nodes from the database.
@@ -66,61 +68,79 @@ pub struct OperationDurations {
 /// Only leaf nodes and some branch nodes are stored. The bottom layer of branch nodes
 /// are not stored to reduce write amplification. This matches Reth's non-historical trie storage.
 #[auto_impl(Arc)]
-pub trait OpProofsStore: Send + Sync + Debug {
+pub trait OpProofsStorage: Send + Sync + Debug {
     /// Cursor for iterating over trie branches.
-    type StorageTrieCursor<'tx>: TrieStorageCursor + 'tx
-    where
-        Self: 'tx;
-
-    /// Cursor for iterating over account trie branches.
-    type AccountTrieCursor<'tx>: TrieCursor + 'tx
-    where
-        Self: 'tx;
+    type TrieCursor: OpProofsTrieCursor;
 
     /// Cursor for iterating over storage leaves.
-    type StorageCursor<'tx>: HashedStorageCursor<Value = U256> + Send + Sync + 'tx
-    where
-        Self: 'tx;
+    type StorageCursor: OpProofsHashedCursor<Value = U256>;
 
     /// Cursor for iterating over account leaves.
-    type AccountHashedCursor<'tx>: HashedCursor<Value = Account> + Send + Sync + 'tx
-    where
-        Self: 'tx;
+    type AccountHashedCursor: OpProofsHashedCursor<Value = Account>;
+
+    /// Store a batch of account trie branches. Used for saving existing state. For live state
+    /// capture, use [store_trie_updates](OpProofsStorage::store_trie_updates).
+    fn store_account_branches(
+        &self,
+        block_number: u64,
+        updates: Vec<(Nibbles, Option<BranchNodeCompact>)>,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
+
+    /// Store a batch of storage trie branches. Used for saving existing state.
+    fn store_storage_branches(
+        &self,
+        block_number: u64,
+        hashed_address: B256,
+        items: Vec<(Nibbles, Option<BranchNodeCompact>)>,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
+
+    /// Store a batch of account trie leaf nodes. Used for saving existing state.
+    fn store_hashed_accounts(
+        &self,
+        accounts: Vec<(B256, Option<Account>)>,
+        block_number: u64,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
+
+    /// Store a batch of storage trie leaf nodes. Used for saving existing state.
+    fn store_hashed_storages(
+        &self,
+        hashed_address: B256,
+        storages: Vec<(B256, U256)>,
+        block_number: u64,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
 
     /// Get the earliest block number and hash that has been stored
     ///
     /// This is used to determine the block number of trie nodes with block number 0.
     /// All earliest block numbers are stored in 0 to reduce updates required to prune trie nodes.
-    fn get_earliest_block_number(&self) -> OpProofsStorageResult<Option<(u64, B256)>>;
+    fn get_earliest_block_number(
+        &self,
+    ) -> impl Future<Output = OpProofsStorageResult<Option<(u64, B256)>>> + Send;
 
     /// Get the latest block number and hash that has been stored
-    fn get_latest_block_number(&self) -> OpProofsStorageResult<Option<(u64, B256)>>;
+    fn get_latest_block_number(
+        &self,
+    ) -> impl Future<Output = OpProofsStorageResult<Option<(u64, B256)>>> + Send;
 
     /// Get a trie cursor for the storage backend
-    fn storage_trie_cursor<'tx>(
+    fn trie_cursor(
         &self,
-        hashed_address: B256,
+        hashed_address: Option<B256>,
         max_block_number: u64,
-    ) -> OpProofsStorageResult<Self::StorageTrieCursor<'tx>>;
-
-    /// Get a trie cursor for the account backend
-    fn account_trie_cursor<'tx>(
-        &self,
-        max_block_number: u64,
-    ) -> OpProofsStorageResult<Self::AccountTrieCursor<'tx>>;
+    ) -> OpProofsStorageResult<Self::TrieCursor>;
 
     /// Get a storage cursor for the storage backend
-    fn storage_hashed_cursor<'tx>(
+    fn storage_hashed_cursor(
         &self,
         hashed_address: B256,
         max_block_number: u64,
-    ) -> OpProofsStorageResult<Self::StorageCursor<'tx>>;
+    ) -> OpProofsStorageResult<Self::StorageCursor>;
 
     /// Get an account hashed cursor for the storage backend
-    fn account_hashed_cursor<'tx>(
+    fn account_hashed_cursor(
         &self,
         max_block_number: u64,
-    ) -> OpProofsStorageResult<Self::AccountHashedCursor<'tx>>;
+    ) -> OpProofsStorageResult<Self::AccountHashedCursor>;
 
     /// Store a batch of trie updates.
     ///
@@ -128,104 +148,35 @@ pub trait OpProofsStore: Send + Sync + Debug {
     /// so should only happen for legacy reasons.
     fn store_trie_updates(
         &self,
-        block_ref: BlockWithParent,
+        block_number: u64,
         block_state_diff: BlockStateDiff,
-    ) -> OpProofsStorageResult<WriteCounts>;
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
 
     /// Fetch all updates for a given block number.
-    fn fetch_trie_updates(&self, block_number: u64) -> OpProofsStorageResult<BlockStateDiff>;
+    fn fetch_trie_updates(
+        &self,
+        block_number: u64,
+    ) -> impl Future<Output = OpProofsStorageResult<BlockStateDiff>> + Send;
 
-    /// Applies [`BlockStateDiff`] to the earliest state (updating/deleting nodes) and updates the
+    /// Applies `BlockStateDiff` to the earliest state (updating/deleting nodes) and updates the
     /// earliest block number.
     fn prune_earliest_state(
         &self,
-        new_earliest_block_ref: BlockWithParent,
-    ) -> OpProofsStorageResult<WriteCounts>;
+        new_earliest_block_number: u64,
+        diff: BlockStateDiff,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
 
-    /// Remove account, storage and trie updates from historical storage for all blocks till
-    /// the specified block (inclusive).
-    fn unwind_history(&self, to: BlockWithParent) -> OpProofsStorageResult<()>;
-
-    /// Deletes all updates > `latest_common_block` and replaces them with the new updates.
+    /// Deletes all updates > `latest_common_block_number` and replaces them with the new updates.
     fn replace_updates(
         &self,
-        latest_common_block: BlockNumHash,
-        blocks_to_add: Vec<(BlockWithParent, BlockStateDiff)>,
-    ) -> OpProofsStorageResult<()>;
+        latest_common_block_number: u64,
+        blocks_to_add: HashMap<u64, BlockStateDiff>,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
 
     /// Set the earliest block number and hash that has been stored
-    fn set_earliest_block_number(&self, block_number: u64, hash: B256)
-    -> OpProofsStorageResult<()>;
-}
-
-/// Status of the initial state anchor.
-#[derive(Debug, Clone, Copy, Default)]
-pub enum InitialStateStatus {
-    /// Init isn't yet started
-    #[default]
-    NotStarted,
-    /// Init is in progress (some tables may already be populated)
-    InProgress,
-    /// Init completed successfully (all tables done + earliest block set)
-    Completed,
-}
-
-/// Anchor for the initial state.
-#[derive(Debug, Clone, Default)]
-pub struct InitialStateAnchor {
-    /// The block for which the initial state is being initialized. None if initialization is not
-    /// yet started.
-    pub block: Option<BlockNumHash>,
-    /// Whether initialization is still running or completed.
-    pub status: InitialStateStatus,
-    /// The latest key stored for `AccountTrieHistory`.
-    pub latest_account_trie_key: Option<StoredNibbles>,
-    /// The latest key stored for `StorageTrieHistory`.
-    pub latest_storage_trie_key: Option<StorageTrieKey>,
-    /// The latest key stored for `HashedAccountHistory`.
-    pub latest_hashed_account_key: Option<B256>,
-    /// The latest key stored for `HashedStorageHistory`.
-    pub latest_hashed_storage_key: Option<HashedStorageKey>,
-}
-
-/// Trait for storing and retrieving the initial state anchor.
-#[auto_impl(Arc)]
-pub trait OpProofsInitialStateStore: Send + Sync + Debug {
-    /// Read the current anchor.
-    fn initial_state_anchor(&self) -> OpProofsStorageResult<InitialStateAnchor>;
-
-    /// Create the anchor if it doesn't exist.
-    /// Returns `Err` if an anchor already exists (prevents accidental overwrite).
-    fn set_initial_state_anchor(&self, anchor: BlockNumHash) -> OpProofsStorageResult<()>;
-
-    /// Store a batch of account trie branches. Used for saving existing state. For live state
-    /// capture, use [store_trie_updates](OpProofsStore::store_trie_updates).
-    fn store_account_branches(
+    fn set_earliest_block_number(
         &self,
-        account_nodes: Vec<(Nibbles, Option<BranchNodeCompact>)>,
-    ) -> OpProofsStorageResult<()>;
-
-    /// Store a batch of storage trie branches. Used for saving existing state.
-    fn store_storage_branches(
-        &self,
-        hashed_address: B256,
-        storage_nodes: Vec<(Nibbles, Option<BranchNodeCompact>)>,
-    ) -> OpProofsStorageResult<()>;
-
-    /// Store a batch of account trie leaf nodes. Used for saving existing state.
-    fn store_hashed_accounts(
-        &self,
-        accounts: Vec<(B256, Option<Account>)>,
-    ) -> OpProofsStorageResult<()>;
-
-    /// Store a batch of storage trie leaf nodes. Used for saving existing state.
-    fn store_hashed_storages(
-        &self,
-        hashed_address: B256,
-        storages: Vec<(B256, U256)>,
-    ) -> OpProofsStorageResult<()>;
-
-    /// Commit the initial state - mark the anchor as completed and also set the earliest block
-    /// number to anchor.
-    fn commit_initial_state(&self) -> OpProofsStorageResult<BlockNumHash>;
+        block_number: u64,
+        hash: B256,
+    ) -> impl Future<Output = OpProofsStorageResult<()>> + Send;
 }
