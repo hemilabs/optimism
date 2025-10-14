@@ -1,12 +1,11 @@
 use bytes::{Buf, BufMut};
 use reth_db::{
-    DatabaseError,
     table::{Compress, Decompress},
+    DatabaseError,
 };
-use reth_primitives_traits::ValueWithSubKey;
 use serde::{Deserialize, Serialize};
 
-/// Wrapper type for `Option<T>` that implements [`Compress`] and [`Decompress`]
+/// Wrapper type for `Option<T>` that implements `Compress` and `Decompress`
 ///
 /// Encoding:
 /// - `None` => empty byte array (length 0)
@@ -57,21 +56,13 @@ impl<T: Decompress> Decompress for MaybeDeleted<T> {
     }
 }
 
-/// Versioned value wrapper for [`DupSort`] tables
+/// Versioned value wrapper for `DupSort` tables
 ///
-/// For [`DupSort`] tables in MDBX, the Value type must contain the [`DupSort::SubKey`] as a field.
-/// This wrapper combines a [`block_number`] (the [`DupSort::SubKey`]) with
-/// the actual value.
-///
-/// [`DupSort`]: reth_db::table::DupSort
-/// [`DupSort::SubKey`]: reth_db::table::DupSort::SubKey
-/// [`block_number`]: Self::block_number
+/// For `DupSort` tables in MDBX, the Value type must contain the `SubKey` as a field.
+/// This wrapper combines a `block_number` (the `SubKey`) with the actual value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VersionedValue<T> {
-    /// Block number ([`DupSort::SubKey`] for [`DupSort`])
-    ///
-    /// [`DupSort`]: reth_db::table::DupSort
-    /// [`DupSort::SubKey`]: reth_db::table::DupSort::SubKey
+    /// Block number (`SubKey` for `DupSort`)
     pub block_number: u64,
     /// The actual value (may be deleted)
     pub value: MaybeDeleted<T>,
@@ -106,14 +97,6 @@ impl<T: Decompress> Decompress for VersionedValue<T> {
         let value = MaybeDeleted::<T>::decompress(&value[8..])?;
 
         Ok(Self { block_number, value })
-    }
-}
-
-impl<T> ValueWithSubKey for VersionedValue<T> {
-    type SubKey = u64;
-
-    fn get_subkey(&self) -> Self::SubKey {
-        self.block_number
     }
 }
 
