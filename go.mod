@@ -294,4 +294,4 @@ exclude (
 
 )
 
-replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251021060027-2c12ed4d532c
+replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251021064858-fe61c4552ad0
