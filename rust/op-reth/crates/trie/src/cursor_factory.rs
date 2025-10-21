@@ -1,4 +1,4 @@
-//! Implements [`TrieCursorFactory`] and [`HashedCursorFactory`] for [`OpProofsStore`] types.
+//! Provides proof operation implementations for [`OpProofsStore`].
 
 use crate::{
     OpProofsHashedAccountCursor, OpProofsHashedStorageCursor, OpProofsStorage, OpProofsStore,
@@ -26,18 +26,12 @@ impl<'tx, S: OpProofsStore> OpProofsTrieCursorFactory<'tx, S> {
 
 impl<'tx, S> TrieCursorFactory for OpProofsTrieCursorFactory<'tx, S>
 where
-    for<'a> S: OpProofsStore + 'tx,
+    S: OpProofsStore + 'tx,
 {
-    type AccountTrieCursor<'a>
-        = OpProofsTrieCursor<S::AccountTrieCursor<'a>>
-    where
-        Self: 'a;
-    type StorageTrieCursor<'a>
-        = OpProofsTrieCursor<S::StorageTrieCursor<'a>>
-    where
-        Self: 'a;
+    type AccountTrieCursor = OpProofsTrieCursor<S::AccountTrieCursor<'tx>>;
+    type StorageTrieCursor = OpProofsTrieCursor<S::StorageTrieCursor<'tx>>;
 
-    fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor<'_>, DatabaseError> {
+    fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor, DatabaseError> {
         Ok(OpProofsTrieCursor::new(
             self.storage
                 .account_trie_cursor(self.block_number)
@@ -48,7 +42,7 @@ where
     fn storage_trie_cursor(
         &self,
         hashed_address: B256,
-    ) -> Result<Self::StorageTrieCursor<'_>, DatabaseError> {
+    ) -> Result<Self::StorageTrieCursor, DatabaseError> {
         Ok(OpProofsTrieCursor::new(
             self.storage
                 .storage_trie_cursor(hashed_address, self.block_number)
@@ -76,23 +70,17 @@ impl<'tx, S> HashedCursorFactory for OpProofsHashedAccountCursorFactory<'tx, S>
 where
     S: OpProofsStore + 'tx,
 {
-    type AccountCursor<'a>
-        = OpProofsHashedAccountCursor<S::AccountHashedCursor<'a>>
-    where
-        Self: 'a;
-    type StorageCursor<'a>
-        = OpProofsHashedStorageCursor<S::StorageCursor<'a>>
-    where
-        Self: 'a;
+    type AccountCursor = OpProofsHashedAccountCursor<S::AccountHashedCursor<'tx>>;
+    type StorageCursor = OpProofsHashedStorageCursor<S::StorageCursor<'tx>>;
 
-    fn hashed_account_cursor(&self) -> Result<Self::AccountCursor<'_>, DatabaseError> {
+    fn hashed_account_cursor(&self) -> Result<Self::AccountCursor, DatabaseError> {
         Ok(OpProofsHashedAccountCursor::new(self.storage.account_hashed_cursor(self.block_number)?))
     }
 
     fn hashed_storage_cursor(
         &self,
         hashed_address: B256,
-    ) -> Result<Self::StorageCursor<'_>, DatabaseError> {
+    ) -> Result<Self::StorageCursor, DatabaseError> {
         Ok(OpProofsHashedStorageCursor::new(
             self.storage.storage_hashed_cursor(hashed_address, self.block_number)?,
         ))
