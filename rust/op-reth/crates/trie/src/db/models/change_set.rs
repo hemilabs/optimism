@@ -1,14 +1,14 @@
 use crate::db::{HashedStorageKey, StorageTrieKey};
 use alloy_primitives::B256;
 use reth_db::{
-    DatabaseError,
     table::{self, Decode, Encode},
+    DatabaseError,
 };
-use reth_trie_common::StoredNibbles;
+use reth_trie::StoredNibbles;
 use serde::{Deserialize, Serialize};
 
 /// The keys of the entries in the history tables.
-#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ChangeSet {
     /// Keys changed in [`AccountTrieHistory`](super::AccountTrieHistory) table.
     pub account_trie_keys: Vec<StoredNibbles>,
@@ -24,16 +24,13 @@ impl table::Encode for ChangeSet {
     type Encoded = Vec<u8>;
 
     fn encode(self) -> Self::Encoded {
-        bincode::serde::encode_to_vec(&self, bincode::config::standard())
-            .expect("ChangeSet serialization should not fail")
+        bincode::serialize(&self).expect("ChangeSet serialization should not fail")
     }
 }
 
 impl table::Decode for ChangeSet {
     fn decode(value: &[u8]) -> Result<Self, DatabaseError> {
-        bincode::serde::decode_from_slice(value, bincode::config::standard())
-            .map(|(v, _)| v)
-            .map_err(|_| DatabaseError::Decode)
+        bincode::deserialize(value).map_err(|_| DatabaseError::Decode)
     }
 }
 
