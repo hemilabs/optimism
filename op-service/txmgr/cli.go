@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sync/atomic"
 	"time"
@@ -35,12 +36,16 @@ const (
 	MaxBaseFeeFlagName                 = "txmgr.max-basefee"
 	MinTipCapFlagName                  = "txmgr.min-tip-cap"
 	MaxTipCapFlagName                  = "txmgr.max-tip-cap"
+	RebroadcastIntervalFlagName        = "txmgr.rebroadcast-interval"
 	ResubmissionTimeoutFlagName        = "resubmission-timeout"
 	NetworkTimeoutFlagName             = "network-timeout"
+	RetryIntervalFlagName              = "txmgr.retry-interval"
+	MaxRetriesFlagName                 = "txmgr.max-retries"
 	TxSendTimeoutFlagName              = "txmgr.send-timeout"
 	TxNotInMempoolTimeoutFlagName      = "txmgr.not-in-mempool-timeout"
 	ReceiptQueryIntervalFlagName       = "txmgr.receipt-query-interval"
 	AlreadyPublishedCustomErrsFlagName = "txmgr.already-published-custom-errs"
+	CellProofTimeFlagName              = "txmgr.cell-proof-time"
 )
 
 var (
@@ -65,26 +70,35 @@ type DefaultFlagValues struct {
 	FeeLimitThresholdGwei     float64
 	MinTipCapGwei             float64
 	MinBaseFeeGwei            float64
+	RebroadcastInterval       time.Duration
 	ResubmissionTimeout       time.Duration
 	NetworkTimeout            time.Duration
+	RetryInterval             time.Duration
+	MaxRetries                uint64
 	TxSendTimeout             time.Duration
 	TxNotInMempoolTimeout     time.Duration
 	ReceiptQueryInterval      time.Duration
+	CellProofTime             uint64
 }
 
 var (
-	DefaultBatcherFlagValues = DefaultFlagValues{
+	defaultCellProofTime     uint64 = math.MaxUint64
+	DefaultBatcherFlagValues        = DefaultFlagValues{
 		NumConfirmations:          uint64(10),
 		SafeAbortNonceTooLowCount: uint64(3),
 		FeeLimitMultiplier:        uint64(5),
 		FeeLimitThresholdGwei:     100.0,
 		MinTipCapGwei:             1.0,
 		MinBaseFeeGwei:            1.0,
+		RebroadcastInterval:       12 * time.Second,
 		ResubmissionTimeout:       48 * time.Second,
 		NetworkTimeout:            10 * time.Second,
+		RetryInterval:             1 * time.Second,
+		MaxRetries:                uint64(10),
 		TxSendTimeout:             0, // Try sending txs indefinitely, to preserve tx ordering for Holocene
 		TxNotInMempoolTimeout:     2 * time.Minute,
 		ReceiptQueryInterval:      12 * time.Second,
+		CellProofTime:             defaultCellProofTime,
 	}
 	DefaultChallengerFlagValues = DefaultFlagValues{
 		NumConfirmations:          uint64(3),
@@ -95,9 +109,12 @@ var (
 		MinBaseFeeGwei:            1.0,
 		ResubmissionTimeout:       24 * time.Second,
 		NetworkTimeout:            10 * time.Second,
+		RetryInterval:             1 * time.Second,
+		MaxRetries:                uint64(10),
 		TxSendTimeout:             2 * time.Minute,
 		TxNotInMempoolTimeout:     1 * time.Minute,
 		ReceiptQueryInterval:      12 * time.Second,
+		CellProofTime:             defaultCellProofTime,
 	}
 
 	// geth enforces a 1 gwei minimum for blob tx fee
@@ -175,6 +192,12 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			EnvVars: prefixEnvVars("TXMGR_MAX_BASEFEE"),
 		},
 		&cli.DurationFlag{
+			Name:    RebroadcastIntervalFlagName,
+			Usage:   "Interval at which a published transaction will be rebroadcasted if it has not yet been mined. Should be less than ResubmissionTimeout to have an effect.",
+			Value:   defaults.RebroadcastInterval,
+			EnvVars: prefixEnvVars("TXMGR_REBROADCAST_INTERVAL"),
+		},
+		&cli.DurationFlag{
 			Name:    ResubmissionTimeoutFlagName,
 			Usage:   "Duration we will wait before resubmitting a transaction to L1",
 			Value:   defaults.ResubmissionTimeout,
@@ -185,6 +208,18 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			Usage:   "Timeout for all network operations",
 			Value:   defaults.NetworkTimeout,
 			EnvVars: prefixEnvVars("NETWORK_TIMEOUT"),
+		},
+		&cli.DurationFlag{
+			Name:    RetryIntervalFlagName,
+			Usage:   "Duration we will wait before resubmitting a transaction to L1 on a transient error. Values <= 0 will result in retrying immediately. Should be less than ResubmissionTimeout to have an effect.",
+			Value:   defaults.RetryInterval,
+			EnvVars: prefixEnvVars("TXMGR_RETRY_INTERVAL"),
+		},
+		&cli.Uint64Flag{
+			Name:    MaxRetriesFlagName,
+			Usage:   "Maximum number of times to resubmit a transaction to L1 on a transient error. Set to 0 to disable retries.",
+			Value:   defaults.MaxRetries,
+			EnvVars: prefixEnvVars("TXMGR_MAX_RETRIES"),
 		},
 		&cli.DurationFlag{
 			Name:    TxSendTimeoutFlagName,
@@ -209,6 +244,12 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			Usage:   "List of custom RPC error messages that indicate that a transaction has already been published.",
 			EnvVars: prefixEnvVars("TXMGR_ALREADY_PUBLISHED_CUSTOM_ERRS"),
 		},
+		&cli.Uint64Flag{
+			Name:    CellProofTimeFlagName,
+			Usage:   "Enables cell proofs in blob transactions for Fusaka (EIP-7742) compatibility from the provided unix timestamp. Should be set to the L1 Fusaka time. May be left blank for Ethereum Mainnet, Sepolia, Holesky, or Hoodi L1s.",
+			EnvVars: prefixEnvVars("TXMGR_CELL_PROOF_TIME"),
+			Value:   defaults.CellProofTime,
+		},
 	}, opsigner.CLIFlags(envPrefix, "")...)
 }
 
@@ -228,12 +269,16 @@ type CLIConfig struct {
 	MinTipCapGwei              float64
 	MaxBaseFeeGwei             float64
 	MaxTipCapGwei              float64
+	RebroadcastInterval        time.Duration
 	ResubmissionTimeout        time.Duration
 	ReceiptQueryInterval       time.Duration
 	NetworkTimeout             time.Duration
+	RetryInterval              time.Duration
+	MaxRetries                 uint64
 	TxSendTimeout              time.Duration
 	TxNotInMempoolTimeout      time.Duration
 	AlreadyPublishedCustomErrs []string
+	CellProofTime              uint64
 }
 
 func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
@@ -245,12 +290,16 @@ func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
 		FeeLimitThresholdGwei:     defaults.FeeLimitThresholdGwei,
 		MinTipCapGwei:             defaults.MinTipCapGwei,
 		MinBaseFeeGwei:            defaults.MinBaseFeeGwei,
+		RebroadcastInterval:       defaults.RebroadcastInterval,
 		ResubmissionTimeout:       defaults.ResubmissionTimeout,
 		NetworkTimeout:            defaults.NetworkTimeout,
+		RetryInterval:             defaults.RetryInterval,
+		MaxRetries:                defaults.MaxRetries,
 		TxSendTimeout:             defaults.TxSendTimeout,
 		TxNotInMempoolTimeout:     defaults.TxNotInMempoolTimeout,
 		ReceiptQueryInterval:      defaults.ReceiptQueryInterval,
 		SignerCLIConfig:           opsigner.NewCLIConfig(),
+		CellProofTime:             defaults.CellProofTime,
 	}
 }
 
@@ -286,6 +335,23 @@ func (m CLIConfig) Check() error {
 	if err := m.SignerCLIConfig.Check(); err != nil {
 		return err
 	}
+	atMostOneIsSet := func(options ...bool) bool {
+		boolToInt := func(b bool) int {
+			if b {
+				return 1
+			}
+			return 0
+		}
+
+		sum := 0
+		for _, option := range options {
+			sum += boolToInt(option)
+		}
+		return sum == 1 || sum == 0
+	}
+	if !atMostOneIsSet(m.PrivateKey != "", m.Mnemonic != "", m.SignerCLIConfig.Enabled()) {
+		return errors.New("can only provide at most one of: [private key, mnemonic, remote signer]")
+	}
 	return nil
 }
 
@@ -306,12 +372,16 @@ func ReadCLIConfig(ctx *cli.Context) CLIConfig {
 		MaxBaseFeeGwei:             ctx.Float64(MaxBaseFeeFlagName),
 		MinTipCapGwei:              ctx.Float64(MinTipCapFlagName),
 		MaxTipCapGwei:              ctx.Float64(MaxTipCapFlagName),
+		RebroadcastInterval:        ctx.Duration(RebroadcastIntervalFlagName),
 		ResubmissionTimeout:        ctx.Duration(ResubmissionTimeoutFlagName),
 		ReceiptQueryInterval:       ctx.Duration(ReceiptQueryIntervalFlagName),
 		NetworkTimeout:             ctx.Duration(NetworkTimeoutFlagName),
+		RetryInterval:              ctx.Duration(RetryIntervalFlagName),
+		MaxRetries:                 ctx.Uint64(MaxRetriesFlagName),
 		TxSendTimeout:              ctx.Duration(TxSendTimeoutFlagName),
 		TxNotInMempoolTimeout:      ctx.Duration(TxNotInMempoolTimeoutFlagName),
 		AlreadyPublishedCustomErrs: ctx.StringSlice(AlreadyPublishedCustomErrsFlagName),
+		CellProofTime:              ctx.Uint64(CellProofTimeFlagName),
 	}
 }
 
@@ -379,6 +449,8 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		}
 	}
 
+	cellProofTime := fallbackToOsakaCellProofTimeIfKnown(chainID, cfg.CellProofTime)
+
 	res := Config{
 		Backend: l1,
 		ChainID: chainID,
@@ -388,12 +460,16 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		TxSendTimeout:              cfg.TxSendTimeout,
 		TxNotInMempoolTimeout:      cfg.TxNotInMempoolTimeout,
 		NetworkTimeout:             cfg.NetworkTimeout,
+		RetryInterval:              cfg.RetryInterval,
+		MaxRetries:                 cfg.MaxRetries,
 		ReceiptQueryInterval:       cfg.ReceiptQueryInterval,
 		NumConfirmations:           cfg.NumConfirmations,
 		SafeAbortNonceTooLowCount:  cfg.SafeAbortNonceTooLowCount,
 		AlreadyPublishedCustomErrs: cfg.AlreadyPublishedCustomErrs,
+		CellProofTime:              cellProofTime,
 	}
 
+	res.RebroadcastInterval.Store(int64(cfg.RebroadcastInterval))
 	res.ResubmissionTimeout.Store(int64(cfg.ResubmissionTimeout))
 	res.FeeLimitThreshold.Store(feeLimitThreshold)
 	res.FeeLimitMultiplier.Store(cfg.FeeLimitMultiplier)
@@ -406,9 +482,25 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 	return &res, nil
 }
 
+func fallbackToOsakaCellProofTimeIfKnown(chainID *big.Int, cellProofTime uint64) uint64 {
+	if cellProofTime != defaultCellProofTime {
+		return cellProofTime // We only fallback if nothing is set
+	}
+	l1ChainConfig := eth.L1ChainConfigByChainID(eth.ChainIDFromBig(chainID))
+	if l1ChainConfig != nil && l1ChainConfig.OsakaTime != nil {
+		return *l1ChainConfig.OsakaTime
+	}
+	return math.MaxUint64 // Network not known and no override specified, so we never use cell proofs
+}
+
 // Config houses parameters for altering the behavior of a SimpleTxManager.
 type Config struct {
 	Backend ETHBackend
+
+	// RebroadcastInterval is the interval at which a published transaction
+	// will be rebroadcasted if it has not yet been mined.
+	RebroadcastInterval atomic.Int64
+
 	// ResubmissionTimeout is the interval at which, if no previously
 	// published transaction has been mined, the new tx with a bumped gas
 	// price will be published. Only one publication at MaxGasPrice will be
@@ -450,6 +542,17 @@ type Config struct {
 	// This is intended to be used for network requests that can be replayed.
 	NetworkTimeout time.Duration
 
+	// RetryInterval is the interval at which the tx manager will retry
+	// sending a transaction if it fails with a non-fatal error (e.g. the
+	// gapped nonce error in the blob pool).
+	RetryInterval time.Duration
+
+	// MaxRetries is the maximum number of times to retry sending a
+	// transaction. This is used to limit the number of times we retry
+	// sending a transaction if it fails with a non-fatal error (e.g. the
+	// gapped nonce error in the blob pool).
+	MaxRetries uint64
+
 	// ReceiptQueryInterval is the interval at which the tx manager will
 	// query the backend to check for confirmations after a tx at a
 	// specific gas price has been published.
@@ -475,6 +578,9 @@ type Config struct {
 	// List of custom RPC error messages that indicate that a transaction has
 	// already been published.
 	AlreadyPublishedCustomErrs []string
+
+	// CellProofTime is the time at which cell proofs are enabled in blob transaction (for Fusaka (EIP-7742) compatibility).
+	CellProofTime uint64
 }
 
 func (m *Config) Check() error {

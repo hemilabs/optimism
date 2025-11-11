@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/log"
 	"sync"
 
 	"github.com/ethereum/go-ethereum"
@@ -63,6 +64,7 @@ func (l *lazyRPC) Close() {
 }
 
 func (l *lazyRPC) CallContext(ctx context.Context, result any, method string, args ...any) error {
+	log.Info("Lazy call context", "method", method, "args", args)
 	if err := l.dial(ctx); err != nil {
 		return err
 	}

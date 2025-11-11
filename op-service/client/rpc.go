@@ -111,6 +111,8 @@ func WithRPCRecorder(recorder rpc.Recorder) RPCOption {
 func NewRPC(ctx context.Context, lgr log.Logger, addr string, opts ...RPCOption) (RPC, error) {
 	cfg := applyOptions(opts)
 
+	log.Info("NewRPC", "addr", addr, "lazy", cfg.lazy, "opts", opts)
+
 	var wrapped RPC
 	if cfg.lazy {
 		wrapped = newLazyRPC(addr, cfg)
@@ -229,6 +231,7 @@ func (b *BaseRPCClient) Close() {
 }
 
 func (b *BaseRPCClient) CallContext(ctx context.Context, result any, method string, args ...any) error {
+	log.Info("Base RPC call context", "method", method, "args", args)
 	cCtx, cancel := context.WithTimeout(ctx, b.callTimeout)
 	defer cancel()
 	return b.c.CallContext(cCtx, result, method, args...)

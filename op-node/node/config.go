@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/params"
 	"math"
 	"time"
 
@@ -29,6 +30,8 @@ type Config struct {
 	Driver driver.Config
 
 	Rollup rollup.Config
+
+	L1ChainConfig *params.ChainConfig
 
 	// P2PSigner will be used for signing off on published content
 	// if the node is sequencing and if the p2p stack is enabled
@@ -140,6 +143,9 @@ func (cfg *Config) Check() error {
 	}
 	if err := cfg.L2.Check(); err != nil {
 		return fmt.Errorf("l2 endpoint config error: %w", err)
+	}
+	if cfg.L1ChainConfig == nil {
+		return fmt.Errorf("missing L1ChainConfig")
 	}
 	if cfg.Rollup.EcotoneTime != nil {
 		if cfg.Beacon == nil {
