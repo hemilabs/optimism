@@ -846,7 +846,7 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 
 	popPayouts, err := d.l2Chain.PopPayoutsByL2Keystone(ctx, *payoutL2KeystoneAbrevHash)
 	if err != nil {
-		d.log.Error("error getting pop payouts", "error", fmt.Errorf("unable to fetch PoP Payouts from BSS: %v", err))
+		d.log.Error("error getting pop payouts", "error", fmt.Errorf("unable to fetch PoP Payouts from op-geth: %v", err))
 		return nil, nil
 	}
 

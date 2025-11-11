@@ -3,6 +3,7 @@ package derive
 import (
 	"context"
 	"fmt"
+	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -25,18 +26,20 @@ type SystemConfigL2Fetcher interface {
 
 // FetchingAttributesBuilder fetches inputs for the building of L2 payload attributes on the fly.
 type FetchingAttributesBuilder struct {
-	rollupCfg *rollup.Config
-	l1        L1ReceiptsFetcher
-	l2        SystemConfigL2Fetcher
+	rollupCfg     *rollup.Config
+	l1ChainConfig *params.ChainConfig
+	l1            L1ReceiptsFetcher
+	l2            SystemConfigL2Fetcher
 	// whether to skip the L1 origin timestamp check - only for testing purposes
 	testSkipL1OriginCheck bool
 }
 
-func NewFetchingAttributesBuilder(rollupCfg *rollup.Config, l1 L1ReceiptsFetcher, l2 SystemConfigL2Fetcher) *FetchingAttributesBuilder {
+func NewFetchingAttributesBuilder(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, l1 L1ReceiptsFetcher, l2 SystemConfigL2Fetcher) *FetchingAttributesBuilder {
 	return &FetchingAttributesBuilder{
-		rollupCfg: rollupCfg,
-		l1:        l1,
-		l2:        l2,
+		rollupCfg:     rollupCfg,
+		l1ChainConfig: l1ChainConfig,
+		l1:            l1,
+		l2:            l2,
 	}
 }
 
@@ -132,7 +135,7 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		upgradeTxs = append(upgradeTxs, isthmus...)
 	}
 
-	l1InfoTx, err := L1InfoDepositBytes(ba.rollupCfg, sysConfig, seqNumber, l1Info, nextL2Time)
+	l1InfoTx, err := L1InfoDepositBytes(ba.rollupCfg, ba.l1ChainConfig, sysConfig, seqNumber, l1Info, nextL2Time)
 	if err != nil {
 		return nil, NewCriticalError(fmt.Errorf("failed to create l1InfoTx: %w", err))
 	}
