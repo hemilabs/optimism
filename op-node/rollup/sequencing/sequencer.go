@@ -545,8 +545,6 @@ func (d *Sequencer) startBuildingBlock() {
 		}
 	}
 
-	d.rollupCfg.HoloceneTime
-
 	popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
 	if err != nil {
 		d.emitter.Emit(rollup.CriticalErrorEvent{Err: err})
