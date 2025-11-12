@@ -99,6 +99,7 @@ func ForGamePublished(ctx context.Context, client *ethclient.Client, optimismPor
 		return gameBlockNumber, nil
 	}
 	outputBlockNum, err := AndGet(ctx, time.Second, getL2BlockFromLatestGame, func(latest *big.Int) bool {
+		fmt.Printf("latest = %d, l2BlockNumber = %d\n", latest, l2BlockNumber)
 		return latest.Cmp(l2BlockNumber) >= 0
 	})
 	if err != nil {
