@@ -92,6 +92,7 @@ func ForGamePublished(ctx context.Context, client *ethclient.Client, optimismPor
 	getL2BlockFromLatestGame := func() (*big.Int, error) {
 		latestGame, err := withdrawals.FindLatestGame(ctx, disputeGameFactoryContract, optimismPortal2Contract)
 		if err != nil {
+			fmt.Printf("error occurred finding latest game: %s\n", err)
 			return big.NewInt(-1), nil
 		}
 
