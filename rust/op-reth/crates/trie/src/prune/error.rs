@@ -1,4 +1,4 @@
-use crate::{OpProofsStorageError, api::WriteCounts};
+use crate::OpProofsStorageError;
 use reth_provider::ProviderError;
 use std::{
     fmt,
@@ -8,7 +8,7 @@ use std::{
 use strum::Display;
 use thiserror::Error;
 
-/// Result of [`OpProofStoragePruner::run`](crate::OpProofStoragePruner::run) execution.
+/// Result of [`OpProofStoragePruner::run`] execution.
 pub type OpProofStoragePrunerResult = Result<PrunerOutput, PrunerError>;
 
 /// Successful prune summary.
@@ -20,42 +20,22 @@ pub struct PrunerOutput {
     pub start_block: u64,
     /// New earliest block at the end of the run.
     pub end_block: u64,
-    /// Number of entries updated/removed per table.
-    pub write_counts: WriteCounts,
+    /// Total number of entries removed across tables.
+    pub total_entries_pruned: u64,
 }
 
 impl Display for PrunerOutput {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let blocks = self.end_block.saturating_sub(self.start_block);
-        let total_entries = self.write_counts.hashed_accounts_written_total +
-            self.write_counts.hashed_storages_written_total +
-            self.write_counts.account_trie_updates_written_total +
-            self.write_counts.storage_trie_updates_written_total;
         write!(
             f,
             "Pruned {}→{} ({} blocks), entries={}, elapsed={:.3}s",
             self.start_block,
             self.end_block,
             blocks,
-            total_entries,
+            self.total_entries_pruned,
             self.duration.as_secs_f64(),
         )
-    }
-}
-
-impl PrunerOutput {
-    /// extend the current [`PrunerOutput`] with another [`PrunerOutput`]
-    pub fn extend_ref(&mut self, other: Self) {
-        self.duration += other.duration;
-        // take the earliest start block
-        if self.start_block > other.start_block {
-            self.start_block = other.start_block;
-        }
-        // take the latest end block
-        if self.end_block < other.end_block {
-            self.end_block = other.end_block;
-        }
-        self.write_counts += other.write_counts;
     }
 }
 
@@ -73,24 +53,4 @@ pub enum PrunerError {
 
     /// The pruner timed out before finishing the prune
     TimedOut(Duration),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PrunerOutput;
-    use crate::api::WriteCounts;
-    use std::time::Duration;
-
-    #[test]
-    fn test_pruner_output_display() {
-        let pruner_output = PrunerOutput {
-            duration: Duration::from_secs(10),
-            start_block: 1,
-            end_block: 2,
-            write_counts: WriteCounts::new(1, 2, 3, 4),
-        };
-        let formatted_pruner_output = format!("{pruner_output}");
-
-        assert_eq!(formatted_pruner_output, "Pruned 1→2 (1 blocks), entries=10, elapsed=10.000s");
-    }
 }
