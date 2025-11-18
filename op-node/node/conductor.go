@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	conductorRpc "github.com/ethereum-optimism/optimism/op-conductor/rpc"
+	"github.com/ethereum-optimism/optimism/op-node/config"
 	"github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
@@ -20,7 +21,7 @@ import (
 
 // ConductorClient is a client for the op-conductor RPC service.
 type ConductorClient struct {
-	cfg     *Config
+	cfg     *config.Config
 	metrics *metrics.Metrics
 	log     log.Logger
 
@@ -35,7 +36,7 @@ type ConductorClient struct {
 var _ conductor.SequencerConductor = &ConductorClient{}
 
 // NewConductorClient returns a new conductor client for the op-conductor RPC service.
-func NewConductorClient(cfg *Config, log log.Logger, metrics *metrics.Metrics) conductor.SequencerConductor {
+func NewConductorClient(cfg *config.Config, log log.Logger, metrics *metrics.Metrics) conductor.SequencerConductor {
 	return &ConductorClient{
 		cfg:     cfg,
 		metrics: metrics,
@@ -57,7 +58,7 @@ func (c *ConductorClient) initialize(ctx context.Context) error {
 		return fmt.Errorf("no conductor RPC endpoint available: %w", err)
 	}
 	metricsOpt := rpc.WithRecorder(c.metrics.NewRecorder("conductor"))
-	conductorRpcClient, err := dial.DialRPCClientWithTimeout(context.Background(), time.Minute*1, c.log, endpoint, metricsOpt)
+	conductorRpcClient, err := dial.DialRPCClientWithTimeout(context.Background(), c.log, endpoint, metricsOpt)
 	if err != nil {
 		return fmt.Errorf("failed to dial conductor RPC: %w", err)
 	}

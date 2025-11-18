@@ -11,9 +11,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
+	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -30,9 +32,12 @@ func TestBuilder(t *testing.T) {
 	superchainConfig.WithProxyAdminOwner(common.HexToAddress("0xaaaa"))
 	superchainConfig.WithGuardian(common.HexToAddress("0xbbbb"))
 	superchainConfig.WithProtocolVersionsOwner(common.HexToAddress("0xcccc"))
+	superchainConfig.WithChallenger(common.HexToAddress("0xdddd"))
 
 	// Configure L1
 	pragueOffset := uint64(100)
+	osakaOffset := uint64(200)
+	bpo1Offset := uint64(300)
 	alice := common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	aliceFunds := uint256.NewInt(10000)
 	l1Params := state.L1DevGenesisParams{
@@ -42,6 +47,8 @@ func TestBuilder(t *testing.T) {
 			ExcessBlobGas: 123,
 		},
 		PragueTimeOffset: &pragueOffset,
+		OsakaTimeOffset:  &osakaOffset,
+		BPO1TimeOffset:   &bpo1Offset,
 		Prefund: map[common.Address]*hexutil.U256{
 			alice: (*hexutil.U256)(aliceFunds),
 		},
@@ -52,6 +59,8 @@ func TestBuilder(t *testing.T) {
 	l1Config.WithGasLimit(l1Params.BlockParams.GasLimit)
 	l1Config.WithExcessBlobGas(l1Params.BlockParams.ExcessBlobGas)
 	l1Config.WithPragueOffset(*l1Params.PragueTimeOffset)
+	l1Config.WithOsakaOffset(*l1Params.OsakaTimeOffset)
+	l1Config.WithBPO1Offset(*l1Params.BPO1TimeOffset)
 	l1Config.WithPrefundedAccount(alice, *aliceFunds)
 
 	// Configure L2
@@ -101,11 +110,12 @@ func TestBuilder(t *testing.T) {
 	l2Config.WithEIP1559Elasticity(10)
 	l2Config.WithOperatorFeeScalar(100)
 	l2Config.WithOperatorFeeConstant(200)
+	l2Config.WithDAFootprintGasScalar(400)
 
 	// Test L2HardforkConfigurator methods
 	isthmusOffset := uint64(8000)
-	l2Config.WithForkAtGenesis(rollup.Holocene)
-	l2Config.WithForkAtOffset(rollup.Isthmus, &isthmusOffset)
+	l2Config.WithForkAtGenesis(forks.Holocene)
+	l2Config.WithForkAtOffset(forks.Isthmus, &isthmusOffset)
 
 	// Build the intent
 	intent, err := builder.Build()
@@ -118,10 +128,11 @@ func TestBuilder(t *testing.T) {
 		ConfigType:            state.IntentTypeCustom,
 		L1ChainID:             1,
 		SuperchainConfigProxy: &superchainConfigProxyAddr,
-		SuperchainRoles: &state.SuperchainRoles{
-			ProxyAdminOwner:       common.HexToAddress("0xaaaa"),
-			Guardian:              common.HexToAddress("0xbbbb"),
-			ProtocolVersionsOwner: common.HexToAddress("0xcccc"),
+		SuperchainRoles: &addresses.SuperchainRoles{
+			SuperchainProxyAdminOwner: common.HexToAddress("0xaaaa"),
+			SuperchainGuardian:        common.HexToAddress("0xbbbb"),
+			ProtocolVersionsOwner:     common.HexToAddress("0xcccc"),
+			Challenger:                common.HexToAddress("0xdddd"),
 		},
 		L1DevGenesisParams: &l1Params,
 		L1ContractsLocator: &artifacts.Locator{
@@ -142,6 +153,7 @@ func TestBuilder(t *testing.T) {
 				BaseFeeVaultRecipient:      baseFeeRecipient,
 				SequencerFeeVaultRecipient: sequencerFeeRecipient,
 				L1FeeVaultRecipient:        l1FeeRecipient,
+				DAFootprintGasScalar:       400,
 				Roles: state.ChainRoles{
 					L1ProxyAdminOwner: l1ProxyAdminOwner,
 					L2ProxyAdminOwner: l2ProxyAdminOwner,
@@ -154,18 +166,19 @@ func TestBuilder(t *testing.T) {
 				Eip1559DenominatorCanyon: 250,
 				Eip1559Denominator:       50,
 				Eip1559Elasticity:        10,
+				GasLimit:                 standard.GasLimit,
 				OperatorFeeScalar:        100,
 				OperatorFeeConstant:      200,
 				DeployOverrides: map[string]any{
 					"l2BlockTime":                 uint64(2),
-					"l2GenesisRegolithTimeOffset": 0,
-					"l2GenesisCanyonTimeOffset":   0,
-					"l2GenesisDeltaTimeOffset":    0,
-					"l2GenesisEcotoneTimeOffset":  0,
-					"l2GenesisFjordTimeOffset":    0,
-					"l2GenesisGraniteTimeOffset":  0,
-					"l2GenesisHoloceneTimeOffset": 0,
-					"l2GenesisIsthmusTimeOffset":  isthmusOffset,
+					"l2GenesisRegolithTimeOffset": hexutil.Uint64(0),
+					"l2GenesisCanyonTimeOffset":   hexutil.Uint64(0),
+					"l2GenesisDeltaTimeOffset":    hexutil.Uint64(0),
+					"l2GenesisEcotoneTimeOffset":  hexutil.Uint64(0),
+					"l2GenesisFjordTimeOffset":    hexutil.Uint64(0),
+					"l2GenesisGraniteTimeOffset":  hexutil.Uint64(0),
+					"l2GenesisHoloceneTimeOffset": hexutil.Uint64(0),
+					"l2GenesisIsthmusTimeOffset":  hexutil.Uint64(isthmusOffset),
 				},
 				L2DevGenesisParams: &state.L2DevGenesisParams{
 					Prefund: map[common.Address]*hexutil.U256{

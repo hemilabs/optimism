@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 
@@ -22,13 +21,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-var errInvalidConfig = errors.New("invalid config")
-
 type Config struct {
-	SkipValidation bool
 	InteropEnabled bool
-	DB             l2.KeyValueStore
-	StoreBlockData bool
 }
 
 // Main executes the client program in a detached context and exits the current process.
@@ -48,7 +42,6 @@ func Main(useInterop bool) {
 	preimageHinter := preimage.ClientHinterChannel()
 	config := Config{
 		InteropEnabled: useInterop,
-		DB:             memorydb.New(),
 	}
 	if err := RunProgram(logger, preimageOracle, preimageHinter, config); errors.Is(err, claim.ErrClaimNotValid) {
 		log.Error("Claim is invalid", "err", err)
@@ -105,12 +98,9 @@ func runDerivation(logger log.Logger, cfg *rollup.Config, l2Cfg *params.ChainCon
 	}
 	if cfg.InteropEnabled {
 		bootInfo := boot.BootstrapInterop(pClient)
-		return interop.RunInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, !cfg.SkipValidation)
-	}
-	if cfg.DB == nil {
-		return fmt.Errorf("%w: db config is required", errInvalidConfig)
+		return interop.RunInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle)
 	}
 	bootInfo := boot.NewBootstrapClient(pClient).BootInfo()
-	derivationOptions := tasks.DerivationOptions{StoreBlockData: cfg.StoreBlockData}
-	return RunPreInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, cfg.DB, derivationOptions)
+	db := memorydb.New()
+	return RunPreInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, db, tasks.DerivationOptions{})
 }

@@ -4,8 +4,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/challenger"
+	"github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
+	"github.com/ethereum-optimism/optimism/op-e2e/config"
 	"github.com/ethereum-optimism/optimism/op-e2e/interop"
+	"github.com/ethereum-optimism/optimism/op-e2e/system/e2esys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/endpoint"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
@@ -16,15 +18,16 @@ import (
 )
 
 type SuperDisputeSystem struct {
-	sys interop.SuperSystem
+	sys  interop.SuperSystem
+	opts *e2esys.SystemConfigOpts
 }
 
 func (s *SuperDisputeSystem) SupervisorClient() *sources.SupervisorClient {
 	return s.sys.SupervisorClient()
 }
 
-func NewSuperDisputeSystem(sys interop.SuperSystem) *SuperDisputeSystem {
-	return &SuperDisputeSystem{sys}
+func NewSuperDisputeSystem(sys interop.SuperSystem, opts *e2esys.SystemConfigOpts) *SuperDisputeSystem {
+	return &SuperDisputeSystem{sys, opts}
 }
 
 func splitName(name string) (string, string) {
@@ -96,6 +99,10 @@ func (s *SuperDisputeSystem) DependencySet() *depset.StaticConfigDependencySet {
 	return s.sys.DependencySet()
 }
 
+func (s *SuperDisputeSystem) L1Genesis() *core.Genesis {
+	return s.sys.L1Genesis()
+}
+
 func (s *SuperDisputeSystem) L2Geneses() []*core.Genesis {
 	networks := s.sys.L2IDs()
 	cfgs := make([]*core.Genesis, len(networks))
@@ -106,7 +113,12 @@ func (s *SuperDisputeSystem) L2Geneses() []*core.Genesis {
 }
 
 func (s *SuperDisputeSystem) PrestateVariant() challenger.PrestateVariant {
-	return challenger.InteropVariant
+	switch s.opts.AllocType {
+	case config.AllocTypeMTCannonNext:
+		return challenger.InteropVariantNext
+	default:
+		return challenger.InteropVariant
+	}
 }
 
 func (s *SuperDisputeSystem) AdvanceTime(duration time.Duration) {

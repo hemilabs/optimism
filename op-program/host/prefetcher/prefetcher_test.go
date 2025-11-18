@@ -204,11 +204,10 @@ func TestFetchL1Blob(t *testing.T) {
 		prefetcher, _, blobFetcher, _, _ := createPrefetcher(t)
 
 		oracle := l1.NewPreimageOracle(asOracleFn(t, prefetcher), asHinter(t, prefetcher))
-		blobFetcher.ExpectOnGetBlobSidecars(
+		blobFetcher.ExpectOnGetBlobs(
 			context.Background(),
 			l1Ref,
 			[]eth.IndexedBlobHash{blobHash},
-			(eth.Bytes48)(commitment),
 			[]*eth.Blob{&blob},
 			nil,
 		)
@@ -641,6 +640,12 @@ func TestFetchL2BlockData(t *testing.T) {
 		}
 		if !isCanonical {
 			l2Client.ExpectInfoAndTxsByHash(block.Hash(), eth.BlockToInfo(block), block.Transactions(), nil)
+			output := &eth.OutputV0{
+				BlockHash:                block.Hash(),
+				StateRoot:                eth.Bytes32(block.Root()),
+				MessagePasserStorageRoot: eth.Bytes32{},
+			}
+			l2Client.ExpectOutputByRoot(block.Hash(), output, nil)
 		}
 
 		defer l2Client.MockDebugClient.AssertExpectations(t)
@@ -1033,7 +1038,7 @@ type mockExecutor struct {
 }
 
 func (m *mockExecutor) RunProgram(
-	ctx context.Context, prefetcher hostcommon.Prefetcher, blockNumber uint64, chainID eth.ChainID, db l2.KeyValueStore) error {
+	_ context.Context, _ hostcommon.Prefetcher, blockNumber uint64, _ eth.Output, chainID eth.ChainID, _ l2.KeyValueStore) error {
 	m.invoked = true
 	m.blockNumber = blockNumber
 	m.chainID = chainID

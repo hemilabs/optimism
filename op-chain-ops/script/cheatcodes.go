@@ -44,3 +44,7 @@ func (c *AccessControlledPrecompile) Run(input []byte, blockContext common.Hash)
 	}
 	return c.inner.Run(input, blockContext)
 }
+
+func (c *AccessControlledPrecompile) Name() string {
+	return c.inner.Name()
+}

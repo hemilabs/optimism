@@ -2,15 +2,19 @@
 pragma solidity ^0.8.0;
 
 import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
+import { IProxyAdminOwnedBase } from "interfaces/L1/IProxyAdminOwnedBase.sol";
 
-interface ISystemConfig {
+interface ISystemConfig is IProxyAdminOwnedBase {
     enum UpdateType {
         BATCHER,
         FEE_SCALARS,
         GAS_LIMIT,
         UNSAFE_BLOCK_SIGNER,
         EIP_1559_PARAMS,
-        OPERATOR_FEE_PARAMS
+        OPERATOR_FEE_PARAMS,
+        MIN_BASE_FEE,
+        DA_FOOTPRINT_GAS_SCALAR
     }
 
     struct Addresses {
@@ -22,8 +26,10 @@ interface ISystemConfig {
     }
 
     error ReinitializableBase_ZeroInitVersion();
+    error SystemConfig_InvalidFeatureState();
 
     event ConfigUpdate(uint256 indexed version, UpdateType indexed updateType, bytes data);
+    event FeatureSet(bytes32 indexed feature, bool indexed enabled);
     event Initialized(uint8 version);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
@@ -55,7 +61,8 @@ interface ISystemConfig {
         IResourceMetering.ResourceConfig memory _config,
         address _batchInbox,
         Addresses memory _addresses,
-        uint256 _l2ChainId
+        uint256 _l2ChainId,
+        ISuperchainConfig _superchainConfig
     )
         external;
     function initVersion() external view returns (uint8);
@@ -67,6 +74,8 @@ interface ISystemConfig {
     function minimumGasLimit() external view returns (uint64);
     function operatorFeeConstant() external view returns (uint64);
     function operatorFeeScalar() external view returns (uint32);
+    function minBaseFee() external view returns (uint64);
+    function daFootprintGasScalar() external view returns (uint16);
     function optimismMintableERC20Factory() external view returns (address addr_);
     function optimismPortal() external view returns (address addr_);
     function overhead() external view returns (uint256);
@@ -81,11 +90,17 @@ interface ISystemConfig {
     function setOperatorFeeScalars(uint32 _operatorFeeScalar, uint64 _operatorFeeConstant) external;
     function setUnsafeBlockSigner(address _unsafeBlockSigner) external;
     function setEIP1559Params(uint32 _denominator, uint32 _elasticity) external;
+    function setMinBaseFee(uint64 _minBaseFee) external;
+    function setDAFootprintGasScalar(uint16 _daFootprintGasScalar) external;
     function startBlock() external view returns (uint256 startBlock_);
     function transferOwnership(address newOwner) external; // nosemgrep
     function unsafeBlockSigner() external view returns (address addr_);
-    function upgrade(uint256 _l2ChainId) external;
     function version() external pure returns (string memory);
+    function paused() external view returns (bool);
+    function superchainConfig() external view returns (ISuperchainConfig);
+    function guardian() external view returns (address);
+    function setFeature(bytes32 _feature, bool _enabled) external;
+    function isFeatureEnabled(bytes32) external view returns (bool);
 
     function __constructor__() external;
 }

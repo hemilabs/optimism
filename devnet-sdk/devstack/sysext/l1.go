@@ -3,7 +3,7 @@ package sysext
 import (
 	"github.com/ethereum-optimism/optimism/devnet-sdk/devstack/shim"
 	"github.com/ethereum-optimism/optimism/devnet-sdk/devstack/stack"
-	"github.com/ethereum-optimism/optimism/devnet-sdk/devstack/stack/match"
+	"github.com/ethereum-optimism/optimism/op-devstack/stack/match"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 

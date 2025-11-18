@@ -27,11 +27,6 @@ func TestCalculateTypeSlots(t *testing.T) {
 				"internalType": "contract IProxyAdmin"
 			},
 			{
-				"name": "_l1ContractsRelease",
-				"type": "string",
-				"internalType": "string"
-			},
-			{
 				"name": "_blueprints",
 				"type": "tuple",
 				"internalType": "struct OPContractsManager.Blueprints",
@@ -149,11 +144,6 @@ func TestCalculateTypeSlots(t *testing.T) {
 						"internalType": "address"
 					}
 				]
-			},
-			{
-				"name": "_upgradeController",
-				"type": "address",
-				"internalType": "address"
 			}
 		]`
 
@@ -166,6 +156,6 @@ func TestCalculateTypeSlots(t *testing.T) {
 			totalSlots += calculateTypeSlots(arg.Type)
 		}
 
-		require.Equal(t, 28, totalSlots)
+		require.Equal(t, 24, totalSlots)
 	})
 }

@@ -140,19 +140,6 @@ type CLIConfig struct {
 	// ActiveSequencerCheckDuration is the duration between checks to determine the active sequencer endpoint.
 	ActiveSequencerCheckDuration time.Duration
 
-	// ThrottleThreshold is the number of pending bytes beyond which the batcher will start throttling future bytes. Set to 0 to
-	// disable sequencer throttling entirely (only recommended for testing).
-	ThrottleThreshold uint64
-	// ThrottleTxSize is the DA size of a transaction to start throttling when we are over the throttling threshold.
-	ThrottleTxSize uint64
-	// ThrottleBlockSize is the total per-block DA limit to start imposing on block building when we are over the throttling threshold.
-	ThrottleBlockSize uint64
-	// ThrottleAlwaysBlockSize is the total per-block DA limit to always imposing on block building.
-	ThrottleAlwaysBlockSize uint64
-
-	// PreferLocalSafeL2 triggers the batcher to load blocks from the sequencer based on the LocalSafeL2 SyncStatus field (instead of the SafeL2 field).
-	PreferLocalSafeL2 bool
-
 	// TestUseMaxTxSizeForBlobs allows to set the blob size with MaxL1TxSize.
 	// Should only be used for testing purposes.
 	TestUseMaxTxSizeForBlobs bool

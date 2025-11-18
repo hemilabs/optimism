@@ -57,6 +57,7 @@ type Config struct {
 	Networks          []string
 	L2Custom          bool
 	RollupConfigPaths []string
+	L1GenesisPath     string
 	L2GenesisPaths    []string
 	DepsetConfigPath  string
 }
@@ -200,6 +201,7 @@ func (e *Executor) DoGenerateProof(ctx context.Context, dir string, begin uint64
 			memoryUsed = fmt.Sprintf("%d", uint64(info.MemoryUsed))
 			e.metrics.RecordMemoryUsed(uint64(info.MemoryUsed))
 			e.metrics.RecordSteps(info.Steps)
+			e.metrics.RecordInstructionCacheMissCount(info.InstructionCacheMissCount)
 			e.metrics.RecordRmwSuccessCount(info.RmwSuccessCount)
 			e.metrics.RecordRmwFailCount(info.RmwFailCount)
 			e.metrics.RecordMaxStepsBetweenLLAndSC(info.MaxStepsBetweenLLAndSC)
@@ -215,6 +217,7 @@ func (e *Executor) DoGenerateProof(ctx context.Context, dir string, begin uint64
 type debugInfo struct {
 	MemoryUsed                   hexutil.Uint64 `json:"memory_used"`
 	Steps                        uint64         `json:"total_steps"`
+	InstructionCacheMissCount    uint64         `json:"instruction_cache_miss_count"`
 	RmwSuccessCount              uint64         `json:"rmw_success_count"`
 	RmwFailCount                 uint64         `json:"rmw_fail_count"`
 	MaxStepsBetweenLLAndSC       uint64         `json:"max_steps_between_ll_and_sc"`

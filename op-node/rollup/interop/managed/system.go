@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/engine"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
@@ -40,7 +39,6 @@ type L1Source interface {
 type ManagedMode struct {
 	log log.Logger
 
-	emitter event.Emitter
 
 	l1 L1Source
 	l2 L2Source
@@ -107,56 +105,6 @@ func (m *ManagedMode) Stop(ctx context.Context) error {
 
 	m.log.Info("Interop sub-system stopped")
 	return nil
-}
-
-func (m *ManagedMode) AttachEmitter(em event.Emitter) {
-	m.emitter = em
-}
-
-func (m *ManagedMode) OnEvent(ev event.Event) bool {
-	switch x := ev.(type) {
-	case rollup.ResetEvent:
-		msg := x.Err.Error()
-		m.events.Send(&supervisortypes.ManagedEvent{Reset: &msg})
-	case engine.UnsafeUpdateEvent:
-		ref := x.Ref.BlockRef()
-		m.events.Send(&supervisortypes.ManagedEvent{UnsafeBlock: &ref})
-	case engine.LocalSafeUpdateEvent:
-		m.log.Info("Emitting local safe update because of L2 block", "derivedFrom", x.Source, "derived", x.Ref)
-		m.events.Send(&supervisortypes.ManagedEvent{DerivationUpdate: &supervisortypes.DerivedBlockRefPair{
-			Source:  x.Source,
-			Derived: x.Ref.BlockRef(),
-		}})
-	case derive.DeriverL1StatusEvent:
-		m.log.Info("Emitting local safe update because of L1 traversal", "derivedFrom", x.Origin, "derived", x.LastL2)
-		m.events.Send(&supervisortypes.ManagedEvent{
-			DerivationUpdate: &supervisortypes.DerivedBlockRefPair{
-				Source:  x.Origin,
-				Derived: x.LastL2.BlockRef(),
-			},
-			DerivationOriginUpdate: &x.Origin,
-		})
-	case derive.ExhaustedL1Event:
-		m.log.Info("Exhausted L1 data", "derivedFrom", x.L1Ref, "derived", x.LastL2)
-		m.events.Send(&supervisortypes.ManagedEvent{ExhaustL1: &supervisortypes.DerivedBlockRefPair{
-			Source:  x.L1Ref,
-			Derived: x.LastL2.BlockRef(),
-		}})
-	case engine.InteropReplacedBlockEvent:
-		m.log.Info("Replaced block", "replacement", x.Ref)
-		out, err := DecodeInvalidatedBlockTxFromReplacement(x.Envelope.ExecutionPayload.Transactions)
-		if err != nil {
-			m.log.Error("Failed to parse replacement block", "err", err)
-			return true
-		}
-		m.events.Send(&supervisortypes.ManagedEvent{ReplaceBlock: &supervisortypes.BlockReplacement{
-			Replacement: x.Ref,
-			Invalidated: out.BlockHash,
-		}})
-	default:
-		return false
-	}
-	return true
 }
 
 func (m *ManagedMode) PullEvent() (*supervisortypes.ManagedEvent, error) {

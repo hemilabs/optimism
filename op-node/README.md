@@ -51,8 +51,8 @@ just op-node
   --l1=ws://localhost:8546 \
   --l1.beacon=http://localhost:4000 \
   --l2=ws://localhost:9001 \
-  --p2p.listen.tcp=9222
-  --p2p.listen.udp=9222
+  --p2p.listen.tcp=9222 \
+  --p2p.listen.udp=9222 \
   --rpc.port=7000 \
   --syncmode=execution-layer
 
@@ -144,7 +144,7 @@ The op-node is changing in two ways:
 
 #### Interoperability
 
-The OP Stack is make chains natively interoperable:
+The OP Stack makes chains natively interoperable:
 messages between chains form safety dependencies, and verified asynchronously.
 Asynchronous verification entails that the op-node reorgs away a block
 if and when the block is determined to be invalid.
