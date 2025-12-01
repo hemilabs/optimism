@@ -291,7 +291,6 @@ exclude (
 	google.golang.org/genproto v0.0.0-20181202183823-bd91e49a0898
 	google.golang.org/genproto v0.0.0-20190306203927-b5d61aea6440
 	google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
-
 )
 
-replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251021064858-fe61c4552ad0
+replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20251201184659-6ba3f1d00b42
