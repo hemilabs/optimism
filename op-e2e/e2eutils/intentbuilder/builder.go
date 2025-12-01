@@ -10,12 +10,14 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
+	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -27,15 +29,20 @@ type L1Configurator interface {
 	WithGasLimit(v uint64) L1Configurator
 	WithExcessBlobGas(v uint64) L1Configurator
 	WithPragueOffset(v uint64) L1Configurator
+	WithOsakaOffset(v uint64) L1Configurator
+	WithBPO1Offset(v uint64) L1Configurator
+	WithL1BlobSchedule(schedule *params.BlobScheduleConfig) L1Configurator
 	WithPrefundedAccount(addr common.Address, amount uint256.Int) L1Configurator
 }
 
 type SuperchainConfigurator interface {
 	ID() SuperchainID
+	L1ChainID() eth.ChainID
 	WithSuperchainConfigProxy(address common.Address) SuperchainConfigurator
 	WithProxyAdminOwner(address common.Address) SuperchainConfigurator
 	WithGuardian(address common.Address) SuperchainConfigurator
 	WithProtocolVersionsOwner(address common.Address) SuperchainConfigurator
+	WithChallenger(address common.Address) SuperchainConfigurator
 }
 
 type L2Configurator interface {
@@ -43,12 +50,15 @@ type L2Configurator interface {
 	ChainID() eth.ChainID
 	WithBlockTime(uint64)
 	WithL1StartBlockHash(hash common.Hash)
+	WithAdditionalDisputeGames(games []state.AdditionalDisputeGame)
+	WithFinalizationPeriodSeconds(value uint64)
 	ContractsConfigurator
 	L2VaultsConfigurator
 	L2RolesConfigurator
 	L2FeesConfigurator
 	L2HardforkConfigurator
 	WithPrefundedAccount(addr common.Address, amount uint256.Int) L2Configurator
+	WithDAFootprintGasScalar(scalar uint16)
 }
 
 type ContractsConfigurator interface {
@@ -81,8 +91,8 @@ type L2FeesConfigurator interface {
 }
 
 type L2HardforkConfigurator interface {
-	WithForkAtGenesis(fork rollup.ForkName)
-	WithForkAtOffset(fork rollup.ForkName, offset *uint64)
+	WithForkAtGenesis(fork forks.Name)
+	WithForkAtOffset(fork forks.Name, offset *uint64)
 }
 
 type Builder interface {
@@ -92,7 +102,11 @@ type Builder interface {
 	WithSuperchain() (Builder, SuperchainConfigurator)
 	WithL1(l1ChainID eth.ChainID) (Builder, L1Configurator)
 	WithL2(l2ChainID eth.ChainID) (Builder, L2Configurator)
+	L2s() (out []L2Configurator)
 	Build() (*state.Intent, error)
+
+	WithGlobalOverride(key string, value any) Builder
+	GlobalOverride(key string) any
 }
 
 func WithDevkeyVaults(t require.TestingT, dk devkeys.Keys, configurator L2Configurator) {
@@ -102,9 +116,8 @@ func WithDevkeyVaults(t require.TestingT, dk devkeys.Keys, configurator L2Config
 	configurator.WithL1FeeVaultRecipient(addrFor(devkeys.L1FeeVaultRecipientRole))
 }
 
-func WithDevkeyRoles(t require.TestingT, dk devkeys.Keys, configurator L2Configurator) {
+func WithDevkeyL2Roles(t require.TestingT, dk devkeys.Keys, configurator L2Configurator) {
 	addrFor := RoleToAddrProvider(t, dk, configurator.ChainID())
-	configurator.WithL1ProxyAdminOwner(addrFor(devkeys.L1ProxyAdminOwnerRole))
 	configurator.WithL2ProxyAdminOwner(addrFor(devkeys.L2ProxyAdminOwnerRole))
 	configurator.WithSystemConfigOwner(addrFor(devkeys.SystemConfigOwner))
 	configurator.WithUnsafeBlockSigner(addrFor(devkeys.SequencerP2PRole))
@@ -113,11 +126,22 @@ func WithDevkeyRoles(t require.TestingT, dk devkeys.Keys, configurator L2Configu
 	configurator.WithChallenger(addrFor(devkeys.ChallengerRole))
 }
 
+func WithDevkeyL1Roles(t require.TestingT, dk devkeys.Keys, configurator L2Configurator, l1ChainID eth.ChainID) {
+	addrFor := RoleToAddrProvider(t, dk, l1ChainID)
+	configurator.WithL1ProxyAdminOwner(addrFor(devkeys.L1ProxyAdminOwnerRole))
+}
+
 func WithDevkeySuperRoles(t require.TestingT, dk devkeys.Keys, l1ID eth.ChainID, configurator SuperchainConfigurator) {
 	addrFor := RoleToAddrProvider(t, dk, l1ID)
 	configurator.WithGuardian(addrFor(devkeys.SuperchainConfigGuardianKey))
 	configurator.WithProtocolVersionsOwner(addrFor(devkeys.SuperchainDeployerKey))
 	configurator.WithProxyAdminOwner(addrFor(devkeys.L1ProxyAdminOwnerRole))
+	configurator.WithChallenger(addrFor(devkeys.ChallengerRole))
+}
+
+func WithOverrideGuardianToL1PAO(t require.TestingT, dk devkeys.Keys, l1ID eth.ChainID, configurator SuperchainConfigurator) {
+	addrFor := RoleToAddrProvider(t, dk, l1ID)
+	configurator.WithGuardian(addrFor(devkeys.L1ProxyAdminOwnerRole))
 }
 
 func KeyToAddrProvider(t require.TestingT, dk devkeys.Keys) func(k devkeys.Key) common.Address {
@@ -138,7 +162,6 @@ func RoleToAddrProvider(t require.TestingT, dk devkeys.Keys, chainID eth.ChainID
 }
 
 type intentBuilder struct {
-	t                require.TestingT
 	l1StartBlockHash *common.Hash
 	intent           *state.Intent
 }
@@ -147,7 +170,7 @@ func New() Builder {
 	return &intentBuilder{
 		intent: &state.Intent{
 			ConfigType:      state.IntentTypeCustom,
-			SuperchainRoles: new(state.SuperchainRoles),
+			SuperchainRoles: new(addresses.SuperchainRoles),
 		},
 	}
 }
@@ -177,14 +200,38 @@ func (b *intentBuilder) WithL2(l2ChainID eth.ChainID) (Builder, L2Configurator) 
 		Eip1559DenominatorCanyon: standard.Eip1559DenominatorCanyon,
 		Eip1559Denominator:       standard.Eip1559Denominator,
 		Eip1559Elasticity:        standard.Eip1559Elasticity,
+		GasLimit:                 standard.GasLimit,
 		DeployOverrides:          make(map[string]any),
 	}
 	b.intent.Chains = append(b.intent.Chains, chainIntent)
 	return b, &l2Configurator{builder: b, chainIndex: len(b.intent.Chains) - 1}
 }
 
+func (b *intentBuilder) L2s() (out []L2Configurator) {
+	for i := range b.intent.Chains {
+		out = append(out, &l2Configurator{builder: b, chainIndex: i})
+	}
+	return out
+}
+
+// WithGlobalOverride sets a global override.
+// This is generally discouraged, but may be needed to work around legacy configuration constraints.
+func (b *intentBuilder) WithGlobalOverride(key string, value any) Builder {
+	if b.intent.GlobalDeployOverrides == nil {
+		b.intent.GlobalDeployOverrides = make(map[string]any)
+	}
+	b.intent.GlobalDeployOverrides[key] = value
+	return b
+}
+
+func (b *intentBuilder) GlobalOverride(key string) any {
+	return b.intent.GlobalDeployOverrides[key]
+}
+
 func (b *intentBuilder) Build() (*state.Intent, error) {
-	require.NoError(b.t, b.intent.Check(), "invalid intent")
+	if err := b.intent.Check(); err != nil {
+		return nil, fmt.Errorf("check intent: %w", err)
+	}
 	return b.intent, nil
 }
 
@@ -196,23 +243,32 @@ func (c *superchainConfigurator) ID() SuperchainID {
 	return "main"
 }
 
+func (c *superchainConfigurator) L1ChainID() eth.ChainID {
+	return eth.ChainIDFromUInt64(c.builder.intent.L1ChainID)
+}
+
 func (c *superchainConfigurator) WithSuperchainConfigProxy(address common.Address) SuperchainConfigurator {
 	c.builder.intent.SuperchainConfigProxy = &address
 	return c
 }
 
 func (c *superchainConfigurator) WithProxyAdminOwner(address common.Address) SuperchainConfigurator {
-	c.builder.intent.SuperchainRoles.ProxyAdminOwner = address
+	c.builder.intent.SuperchainRoles.SuperchainProxyAdminOwner = address
 	return c
 }
 
 func (c *superchainConfigurator) WithGuardian(address common.Address) SuperchainConfigurator {
-	c.builder.intent.SuperchainRoles.Guardian = address
+	c.builder.intent.SuperchainRoles.SuperchainGuardian = address
 	return c
 }
 
 func (c *superchainConfigurator) WithProtocolVersionsOwner(address common.Address) SuperchainConfigurator {
 	c.builder.intent.SuperchainRoles.ProtocolVersionsOwner = address
+	return c
+}
+
+func (c *superchainConfigurator) WithChallenger(address common.Address) SuperchainConfigurator {
+	c.builder.intent.SuperchainRoles.Challenger = address
 	return c
 }
 
@@ -254,6 +310,24 @@ func (c *l1Configurator) WithExcessBlobGas(v uint64) L1Configurator {
 func (c *l1Configurator) WithPragueOffset(v uint64) L1Configurator {
 	c.initL1DevGenesisParams()
 	c.builder.intent.L1DevGenesisParams.PragueTimeOffset = &v
+	return c
+}
+
+func (c *l1Configurator) WithOsakaOffset(v uint64) L1Configurator {
+	c.initL1DevGenesisParams()
+	c.builder.intent.L1DevGenesisParams.OsakaTimeOffset = &v
+	return c
+}
+
+func (c *l1Configurator) WithBPO1Offset(v uint64) L1Configurator {
+	c.initL1DevGenesisParams()
+	c.builder.intent.L1DevGenesisParams.BPO1TimeOffset = &v
+	return c
+}
+
+func (c *l1Configurator) WithL1BlobSchedule(schedule *params.BlobScheduleConfig) L1Configurator {
+	c.initL1DevGenesisParams()
+	c.builder.intent.L1DevGenesisParams.BlobSchedule = schedule
 	return c
 }
 
@@ -349,14 +423,18 @@ func (c *l2Configurator) WithOperatorFeeScalar(value uint64) {
 	c.builder.intent.Chains[c.chainIndex].OperatorFeeScalar = uint32(value)
 }
 
+func (c *l2Configurator) WithDAFootprintGasScalar(value uint16) {
+	c.builder.intent.Chains[c.chainIndex].DAFootprintGasScalar = value
+}
+
 func (c *l2Configurator) WithOperatorFeeConstant(value uint64) {
 	c.builder.intent.Chains[c.chainIndex].OperatorFeeConstant = value
 }
 
-func (c *l2Configurator) WithForkAtGenesis(fork rollup.ForkName) {
+func (c *l2Configurator) WithForkAtGenesis(fork forks.Name) {
 	var future bool
-	for _, refFork := range rollup.AllForks {
-		if refFork == rollup.Bedrock {
+	for _, refFork := range forks.All {
+		if refFork == forks.Bedrock {
 			continue
 		}
 
@@ -372,14 +450,15 @@ func (c *l2Configurator) WithForkAtGenesis(fork rollup.ForkName) {
 	}
 }
 
-func (c *l2Configurator) WithForkAtOffset(fork rollup.ForkName, offset *uint64) {
-	require.True(c.t, rollup.IsValidFork(fork))
+func (c *l2Configurator) WithForkAtOffset(fork forks.Name, offset *uint64) {
+	require.True(c.t, forks.IsValid(fork))
 	key := fmt.Sprintf("l2Genesis%sTimeOffset", cases.Title(language.English).String(string(fork)))
 
 	if offset == nil {
 		delete(c.builder.intent.Chains[c.chainIndex].DeployOverrides, key)
 	} else {
-		c.builder.intent.Chains[c.chainIndex].DeployOverrides[key] = offset
+		// The typing is important, or op-deployer merge-JSON tricks will fail
+		c.builder.intent.Chains[c.chainIndex].DeployOverrides[key] = (*hexutil.Uint64)(offset)
 	}
 }
 
@@ -394,4 +473,16 @@ func (c *l2Configurator) initL2DevGenesisParams() *state.L2DevGenesisParams {
 func (c *l2Configurator) WithPrefundedAccount(addr common.Address, amount uint256.Int) L2Configurator {
 	c.initL2DevGenesisParams().Prefund[addr] = (*hexutil.U256)(&amount)
 	return c
+}
+
+func (c *l2Configurator) WithAdditionalDisputeGames(games []state.AdditionalDisputeGame) {
+	chain := c.builder.intent.Chains[c.chainIndex]
+	if chain.AdditionalDisputeGames == nil {
+		chain.AdditionalDisputeGames = make([]state.AdditionalDisputeGame, 0)
+	}
+	chain.AdditionalDisputeGames = append(chain.AdditionalDisputeGames, games...)
+}
+
+func (c *l2Configurator) WithFinalizationPeriodSeconds(value uint64) {
+	c.builder.intent.Chains[c.chainIndex].DeployOverrides["l2FinalizationPeriodSeconds"] = value
 }

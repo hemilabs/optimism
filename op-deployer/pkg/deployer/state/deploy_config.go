@@ -1,13 +1,10 @@
 package state
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
-
-	op_service "github.com/ethereum-optimism/optimism/op-service"
 
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 
@@ -23,43 +20,35 @@ import (
 
 var (
 	l2GenesisBlockBaseFeePerGas = hexutil.Big(*(big.NewInt(1000000000)))
-
-	vaultMinWithdrawalAmount = mustHexBigFromHex("0x8ac7230489e80000")
 )
 
 func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State, chainState *ChainState) (genesis.DeployConfig, error) {
-	upgradeSchedule := standard.DefaultHardforkScheduleForTag(intent.L1ContractsLocator.Tag)
-	if intent.UseInterop {
-		if upgradeSchedule.L2GenesisIsthmusTimeOffset == nil {
-			return genesis.DeployConfig{}, errors.New("expecting isthmus fork to be enabled for interop deployments")
-		}
-		upgradeSchedule.UseInterop = true
-	}
+	upgradeSchedule := standard.DefaultHardforkScheduleForTag(standard.CurrentTag)
 
 	cfg := genesis.DeployConfig{
 		L1DependenciesConfig: genesis.L1DependenciesConfig{
-			L1StandardBridgeProxy:       chainState.L1StandardBridgeProxyAddress,
-			L1CrossDomainMessengerProxy: chainState.L1CrossDomainMessengerProxyAddress,
-			L1ERC721BridgeProxy:         chainState.L1ERC721BridgeProxyAddress,
-			SystemConfigProxy:           chainState.SystemConfigProxyAddress,
-			OptimismPortalProxy:         chainState.OptimismPortalProxyAddress,
-			ProtocolVersionsProxy:       state.SuperchainDeployment.ProtocolVersionsProxyAddress,
+			L1StandardBridgeProxy:       chainState.L1StandardBridgeProxy,
+			L1CrossDomainMessengerProxy: chainState.L1CrossDomainMessengerProxy,
+			L1ERC721BridgeProxy:         chainState.L1Erc721BridgeProxy,
+			SystemConfigProxy:           chainState.SystemConfigProxy,
+			OptimismPortalProxy:         chainState.OptimismPortalProxy,
+			ProtocolVersionsProxy:       state.SuperchainDeployment.ProtocolVersionsProxy,
 		},
 		L2InitializationConfig: genesis.L2InitializationConfig{
 			DevDeployConfig: genesis.DevDeployConfig{
 				FundDevAccounts: intent.FundDevAccounts,
 			},
 			L2GenesisBlockDeployConfig: genesis.L2GenesisBlockDeployConfig{
-				L2GenesisBlockGasLimit:      60_000_000,
+				L2GenesisBlockGasLimit:      hexutil.Uint64(chainIntent.GasLimit),
 				L2GenesisBlockBaseFeePerGas: &l2GenesisBlockBaseFeePerGas,
 			},
 			L2VaultsDeployConfig: genesis.L2VaultsDeployConfig{
 				BaseFeeVaultWithdrawalNetwork:            "local",
 				L1FeeVaultWithdrawalNetwork:              "local",
 				SequencerFeeVaultWithdrawalNetwork:       "local",
-				SequencerFeeVaultMinimumWithdrawalAmount: vaultMinWithdrawalAmount,
-				BaseFeeVaultMinimumWithdrawalAmount:      vaultMinWithdrawalAmount,
-				L1FeeVaultMinimumWithdrawalAmount:        vaultMinWithdrawalAmount,
+				SequencerFeeVaultMinimumWithdrawalAmount: standard.VaultMinWithdrawalAmount,
+				BaseFeeVaultMinimumWithdrawalAmount:      standard.VaultMinWithdrawalAmount,
+				L1FeeVaultMinimumWithdrawalAmount:        standard.VaultMinWithdrawalAmount,
 				BaseFeeVaultRecipient:                    chainIntent.BaseFeeVaultRecipient,
 				L1FeeVaultRecipient:                      chainIntent.L1FeeVaultRecipient,
 				SequencerFeeVaultRecipient:               chainIntent.SequencerFeeVaultRecipient,
@@ -68,11 +57,11 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 				EnableGovernance:      false,
 				GovernanceTokenSymbol: "OP",
 				GovernanceTokenName:   "Optimism",
-				GovernanceTokenOwner:  common.HexToAddress("0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAdDEad"),
+				GovernanceTokenOwner:  standard.GovernanceTokenOwner,
 			},
 			GasPriceOracleDeployConfig: genesis.GasPriceOracleDeployConfig{
-				GasPriceOracleBaseFeeScalar:       1368,
-				GasPriceOracleBlobBaseFeeScalar:   810949,
+				GasPriceOracleBaseFeeScalar:       standard.BasefeeScalar,
+				GasPriceOracleBlobBaseFeeScalar:   standard.BlobBaseFeeScalar,
 				GasPriceOracleOperatorFeeScalar:   chainIntent.OperatorFeeScalar,
 				GasPriceOracleOperatorFeeConstant: chainIntent.OperatorFeeConstant,
 			},
@@ -106,6 +95,10 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 				ProxyAdminOwner:  chainIntent.Roles.L2ProxyAdminOwner,
 				FinalSystemOwner: chainIntent.Roles.L1ProxyAdminOwner,
 			},
+			FeeMarketConfig: genesis.FeeMarketConfig{
+				MinBaseFee:           chainIntent.MinBaseFee,
+				DAFootprintGasScalar: chainIntent.DAFootprintGasScalar,
+			},
 		},
 		FaultProofDeployConfig: genesis.FaultProofDeployConfig{
 			UseFaultProofs:                  true,
@@ -115,10 +108,6 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 			ProofMaturityDelaySeconds:       604800,
 			DisputeGameFinalityDelaySeconds: 302400,
 		},
-	}
-
-	if intent.UseInterop {
-		cfg.L2InitializationConfig.UpgradeScheduleDeployConfig.L2GenesisInteropTimeOffset = op_service.U64UtilPtr(0)
 	}
 
 	if chainState.StartBlock == nil {
@@ -136,7 +125,7 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 
 	if chainIntent.DangerousAltDAConfig.UseAltDA {
 		cfg.AltDADeployConfig = chainIntent.DangerousAltDAConfig
-		cfg.L1DependenciesConfig.DAChallengeProxy = chainState.DataAvailabilityChallengeProxyAddress
+		cfg.L1DependenciesConfig.DAChallengeProxy = chainState.AltDAChallengeProxy
 	}
 
 	// The below dummy variables are set in order to allow the deploy
@@ -179,12 +168,6 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 	}
 
 	return cfg, nil
-}
-
-func mustHexBigFromHex(hex string) *hexutil.Big {
-	num := hexutil.MustDecodeBig(hex)
-	hexBig := hexutil.Big(*num)
-	return &hexBig
 }
 
 func calculateBatchInboxAddr(chainID common.Hash) common.Address {

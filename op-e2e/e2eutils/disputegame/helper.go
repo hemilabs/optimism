@@ -12,6 +12,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/outputs"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/super"
+	challengerTypes "github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
+	shared "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/challenger"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/disputegame/preimage"
@@ -88,8 +90,9 @@ type DisputeSystem interface {
 	DisputeGameFactoryAddr() common.Address
 	RollupCfgs() []*rollup.Config
 	DependencySet() *depset.StaticConfigDependencySet
+	L1Genesis() *core.Genesis
 	L2Geneses() []*core.Genesis
-	PrestateVariant() challenger.PrestateVariant
+	PrestateVariant() shared.PrestateVariant
 
 	AdvanceTime(time.Duration)
 }
@@ -147,13 +150,10 @@ func NewFactoryHelper(t *testing.T, ctx context.Context, system DisputeSystem, o
 }
 
 func (h *FactoryHelper) PreimageHelper(ctx context.Context) *preimage.Helper {
-	opts := &bind.CallOpts{Context: ctx}
-	gameAddr, err := h.Factory.GameImpls(opts, cannonGameType)
-	h.Require.NoError(err)
 	caller := batching.NewMultiCaller(h.Client.Client(), batching.DefaultBatchSize)
-	game, err := contracts.NewFaultDisputeGameContract(ctx, metrics.NoopContractMetrics, gameAddr, caller)
+	dgf, err := contracts.NewDisputeGameFactoryContract(ctx, metrics.NoopContractMetrics, h.FactoryAddr, caller)
 	h.Require.NoError(err)
-	vm, err := game.Vm(ctx)
+	vm, err := dgf.GetGameVm(ctx, challengerTypes.GameType(cannonGameType))
 	h.Require.NoError(err)
 	oracle, err := vm.Oracle(ctx)
 	h.Require.NoError(err)
@@ -230,12 +230,24 @@ func (h *FactoryHelper) StartSuperCannonGameWithCorrectRoot(ctx context.Context,
 	return h.startSuperCannonGameOfType(ctx, l2Timestamp, common.Hash(output.SuperRoot), superCannonGameType, opts...)
 }
 
+func (h *FactoryHelper) StartSuperCannonGameWithCorrectRootAtTimestamp(ctx context.Context, l2Timestamp uint64, opts ...GameOpt) *SuperCannonGameHelper {
+	cfg := NewGameCfg(opts...)
+	h.WaitForSuperTimestamp(l2Timestamp, cfg)
+	output, err := h.System.SupervisorClient().SuperRootAtTimestamp(ctx, hexutil.Uint64(l2Timestamp))
+	h.Require.NoErrorf(err, "Failed to get output at timestamp %v", l2Timestamp)
+	return h.startSuperCannonGameOfType(ctx, l2Timestamp, common.Hash(output.SuperRoot), superCannonGameType, opts...)
+}
+
 func (h *FactoryHelper) StartSuperCannonGame(ctx context.Context, rootClaim common.Hash, opts ...GameOpt) *SuperCannonGameHelper {
 	// Can't create a game at L1 genesis!
 	require.NoError(h.T, wait.ForBlock(ctx, h.Client, 1))
 	b, err := h.Client.BlockByNumber(ctx, nil)
 	require.NoError(h.T, err)
 	return h.startSuperCannonGameOfType(ctx, b.Time(), rootClaim, superCannonGameType, opts...)
+}
+
+func (h *FactoryHelper) StartSuperCannonGameAtTimestamp(ctx context.Context, timestamp uint64, rootClaim common.Hash, opts ...GameOpt) *SuperCannonGameHelper {
+	return h.startSuperCannonGameOfType(ctx, timestamp, rootClaim, superCannonGameType, opts...)
 }
 
 func (h *FactoryHelper) startSuperCannonGameOfType(ctx context.Context, timestamp uint64, rootClaim common.Hash, gameType uint32, opts ...GameOpt) *SuperCannonGameHelper {
@@ -251,7 +263,7 @@ func (h *FactoryHelper) startSuperCannonGameOfType(ctx context.Context, timestam
 	tx, err := transactions.PadGasEstimate(h.Opts, 2, func(opts *bind.TransactOpts) (*types.Transaction, error) {
 		return h.Factory.Create(opts, gameType, rootClaim, extraData)
 	})
-	h.Require.NoError(err, "create fault dispute game")
+	h.Require.NoErrorf(err, "create fault dispute game at timestamp %v. extraData: %x", timestamp, extraData)
 	rcpt, err := wait.ForReceiptOK(ctx, h.Client, tx.Hash())
 	h.Require.NoError(err, "wait for create fault dispute game receipt to be OK")
 	h.Require.Len(rcpt.Logs, 2, "should have emitted a single DisputeGameCreated event")
@@ -378,7 +390,7 @@ func (h *FactoryHelper) WaitForSuperTimestamp(l2Timestamp uint64, cfg *GameCfg) 
 	}
 
 	client := h.System.SupervisorClient()
-	absoluteTimeout := 3 * time.Minute
+	absoluteTimeout := 5 * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), absoluteTimeout)
 	defer cancel()
 
@@ -399,7 +411,7 @@ func (h *FactoryHelper) WaitForSuperTimestamp(l2Timestamp uint64, cfg *GameCfg) 
 						break
 					}
 				}
-				if !localUnsafeAtTimestamp {
+				if localUnsafeAtTimestamp {
 					return
 				}
 			} else {
@@ -409,7 +421,7 @@ func (h *FactoryHelper) WaitForSuperTimestamp(l2Timestamp uint64, cfg *GameCfg) 
 			}
 			// log every 30 seconds
 			if time.Since(lastLog) > 30*time.Second {
-				h.T.Logf("Waiting for super timestamp %v", l2Timestamp)
+				h.T.Logf("Waiting for super timestamp %v. Latest safe: %v", l2Timestamp, status.SafeTimestamp)
 				lastLog = time.Now()
 			}
 		case <-ctx.Done():

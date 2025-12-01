@@ -15,6 +15,8 @@ func L1ChainConfigByChainID(chainID ChainID) *params.ChainConfig {
 		return params.SepoliaChainConfig
 	case ChainIDFromBig(params.HoleskyChainConfig.ChainID):
 		return params.HoleskyChainConfig
+	case ChainIDFromBig(params.HoodiChainConfig.ChainID):
+		return params.HoodiChainConfig
 	default:
 		return nil
 	}

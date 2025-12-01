@@ -9,7 +9,6 @@ import (
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
 	"github.com/ethereum-optimism/optimism/op-node/p2p/store"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	ophttp "github.com/ethereum-optimism/optimism/op-service/httputil"
 	"github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum/go-ethereum/params"
@@ -23,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/event"
 )
 
 const Namespace = "op_node"
@@ -557,6 +557,13 @@ func (m *Metrics) StartServer(hostname string, port int) (*ophttp.HTTPServer, er
 		m.registry, promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}),
 	)
 	return ophttp.StartHTTPServer(addr, h)
+}
+
+// Registry returns the underlying Prometheus registry used by this metrics instance.
+// This enables external services (e.g. a supervising process) to expose metrics
+// without starting an internal HTTP server per node.
+func (m *Metrics) Registry() *prometheus.Registry {
+	return m.registry
 }
 
 func (m *Metrics) Document() []metrics.DocumentedMetric {

@@ -64,10 +64,35 @@ flycheck_*.el
 # network security
 /network-security.data
 
-## JetBrains
+!op-deployer/pkg/deployer/artifacts
+
+packages/contracts-bedrock/deployments/anvil
+
+# vim
+*.sw*
+
+# jetbrains
 .idea/
 *.iml
 
-## Visual Studio Code
-.vscode/
-.history/
+.secrets
+.env
+.env*
+!.env.example
+!.envrc.example
+*.log
+
+.devnet*
+
+# Ignore local fuzzing results
+**/testdata/fuzz/
+
+coverage.out
+
+__pycache__
+
+# Ignore echidna artifacts
+crytic-export
+
+# ignore local asdf config
+.tool-versions

@@ -1,18 +1,11 @@
 package throttler
 
 import (
-	"github.com/stretchr/testify/require"
 	"math"
-)
+	"testing"
 
-package throttler
-
-import (
-"math"
-"testing"
-
-"github.com/ethereum-optimism/optimism/op-batcher/config"
-"github.com/stretchr/testify/require"
+	"github.com/ethereum-optimism/optimism/op-batcher/config"
+	"github.com/stretchr/testify/require"
 )
 
 // Test constants specific to linear strategy

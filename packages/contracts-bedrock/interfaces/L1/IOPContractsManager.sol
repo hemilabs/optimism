@@ -10,31 +10,41 @@ import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
 import { IPermissionedDisputeGame } from "interfaces/dispute/IPermissionedDisputeGame.sol";
-import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 import { IProtocolVersions } from "interfaces/L1/IProtocolVersions.sol";
 import { IOptimismPortal2 } from "interfaces/L1/IOptimismPortal2.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.sol";
 import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
+import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
 
 interface IOPContractsManagerContractsContainer {
+    error OPContractsManagerContractsContainer_DevFeatureInProd();
+
     function __constructor__(
         IOPContractsManager.Blueprints memory _blueprints,
-        IOPContractsManager.Implementations memory _implementations
+        IOPContractsManager.Implementations memory _implementations,
+        bytes32 _devFeatureBitmap
     )
         external;
 
     function blueprints() external view returns (IOPContractsManager.Blueprints memory);
     function implementations() external view returns (IOPContractsManager.Implementations memory);
+    function devFeatureBitmap() external view returns (bytes32);
+    function isDevFeatureEnabled(bytes32 _feature) external view returns (bool);
 }
 
 interface IOPContractsManagerGameTypeAdder {
+    error OPContractsManagerGameTypeAdder_UnsupportedGameType();
+    error OPContractsManagerGameTypeAdder_MixedGameTypes();
+
     event GameTypeAdded(
         uint256 indexed l2ChainId, GameType indexed gameType, address newDisputeGame, address oldDisputeGame
     );
@@ -49,7 +59,7 @@ interface IOPContractsManagerGameTypeAdder {
         returns (IOPContractsManager.AddGameOutput[] memory);
 
     function updatePrestate(
-        IOPContractsManager.OpChainConfig[] memory _prestateUpdateInputs,
+        IOPContractsManager.UpdatePrestateInput[] memory _prestateUpdateInputs,
         address _superchainConfig
     )
         external;
@@ -64,7 +74,7 @@ interface IOPContractsManagerDeployer {
 
     function deploy(
         IOPContractsManager.DeployInput memory _input,
-        address _superchainConfig,
+        ISuperchainConfig _superchainConfig,
         address _deployer
     )
         external
@@ -76,9 +86,15 @@ interface IOPContractsManagerDeployer {
 interface IOPContractsManagerUpgrader {
     event Upgraded(uint256 indexed l2ChainId, address indexed systemConfig, address indexed upgrader);
 
+    error OPContractsManagerUpgrader_SuperchainConfigNeedsUpgrade(uint256 index);
+
+    error OPContractsManagerUpgrader_SuperchainConfigAlreadyUpToDate();
+
     function __constructor__(IOPContractsManagerContractsContainer _contractsContainer) external;
 
     function upgrade(IOPContractsManager.OpChainConfig[] memory _opChainConfigs) external;
+
+    function upgradeSuperchainConfig(ISuperchainConfig _superchainConfig) external;
 
     function contractsContainer() external view returns (IOPContractsManagerContractsContainer);
 }
@@ -178,10 +194,6 @@ interface IOPContractsManager {
         address permissionedDisputeGame2;
         address permissionlessDisputeGame1;
         address permissionlessDisputeGame2;
-        address superPermissionedDisputeGame1;
-        address superPermissionedDisputeGame2;
-        address superPermissionlessDisputeGame1;
-        address superPermissionlessDisputeGame2;
     }
 
     /// @notice The latest implementation contracts for the OP Stack.
@@ -190,6 +202,7 @@ interface IOPContractsManager {
         address protocolVersionsImpl;
         address l1ERC721BridgeImpl;
         address optimismPortalImpl;
+        address optimismPortalInteropImpl;
         address ethLockboxImpl;
         address systemConfigImpl;
         address optimismMintableERC20FactoryImpl;
@@ -199,19 +212,29 @@ interface IOPContractsManager {
         address anchorStateRegistryImpl;
         address delayedWETHImpl;
         address mipsImpl;
+        address faultDisputeGameV2Impl;
+        address permissionedDisputeGameV2Impl;
+        address superFaultDisputeGameImpl;
+        address superPermissionedDisputeGameImpl;
     }
 
     /// @notice The input required to identify a chain for upgrading.
     struct OpChainConfig {
         ISystemConfig systemConfigProxy;
-        IProxyAdmin proxyAdmin;
-        Claim absolutePrestate;
+        Claim cannonPrestate;
+        Claim cannonKonaPrestate;
+    }
+
+    /// @notice The input required to identify a chain for updating prestates
+    struct UpdatePrestateInput {
+        ISystemConfig systemConfigProxy;
+        Claim cannonPrestate;
+        Claim cannonKonaPrestate;
     }
 
     struct AddGameInput {
         string saltMixer;
         ISystemConfig systemConfig;
-        IProxyAdmin proxyAdmin;
         IDelayedWETH delayedWETH;
         GameType disputeGameType;
         Claim disputeAbsolutePrestate;
@@ -239,16 +262,7 @@ interface IOPContractsManager {
     /// @notice Address of the ProtocolVersions contract shared by all chains.
     function protocolVersions() external view returns (IProtocolVersions);
 
-    /// @notice Address of the ProxyAdmin contract shared by all chains.
-    function superchainProxyAdmin() external view returns (IProxyAdmin);
-
-    /// @notice L1 smart contracts release deployed by this version of OPCM. This is used in opcm to signal which
-    /// version of the L1 smart contracts is deployed. It takes the format of `op-contracts/vX.Y.Z`.
-    function l1ContractsRelease() external view returns (string memory);
-
     // -------- Errors --------
-
-    error OnlyUpgradeController();
 
     /// @notice Thrown when an address is the zero address.
     error AddressNotFound(address who);
@@ -286,6 +300,8 @@ interface IOPContractsManager {
 
     error PrestateRequired();
 
+    error InvalidDevFeatureAccess(bytes32 devFeature);
+
     // -------- Methods --------
 
     function __constructor__(
@@ -293,13 +309,45 @@ interface IOPContractsManager {
         IOPContractsManagerDeployer _opcmDeployer,
         IOPContractsManagerUpgrader _opcmUpgrader,
         IOPContractsManagerInteropMigrator _opcmInteropMigrator,
+        IOPContractsManagerStandardValidator _opcmStandardValidator,
         ISuperchainConfig _superchainConfig,
-        IProtocolVersions _protocolVersions,
-        IProxyAdmin _superchainProxyAdmin,
-        string memory _l1ContractsRelease,
-        address _upgradeController
+        IProtocolVersions _protocolVersions
     )
         external;
+
+    function validateWithOverrides(
+        IOPContractsManagerStandardValidator.ValidationInput calldata _input,
+        bool _allowFailure,
+        IOPContractsManagerStandardValidator.ValidationOverrides calldata _overrides
+    )
+        external
+        view
+        returns (string memory);
+
+    function validate(
+        IOPContractsManagerStandardValidator.ValidationInput calldata _input,
+        bool _allowFailure
+    )
+        external
+        view
+        returns (string memory);
+
+    function validateWithOverrides(
+        IOPContractsManagerStandardValidator.ValidationInputDev calldata _input,
+        bool _allowFailure,
+        IOPContractsManagerStandardValidator.ValidationOverrides calldata _overrides
+    )
+    external
+    view
+    returns (string memory);
+
+    function validate(
+        IOPContractsManagerStandardValidator.ValidationInputDev calldata _input,
+        bool _allowFailure
+    )
+    external
+    view
+    returns (string memory);
 
     function deploy(DeployInput calldata _input) external returns (DeployOutput memory);
 
@@ -307,13 +355,17 @@ interface IOPContractsManager {
     /// @param _opChainConfigs The chains to upgrade
     function upgrade(OpChainConfig[] memory _opChainConfigs) external;
 
+    /// @notice Upgrades the SuperchainConfig contract.
+    /// @param _superchainConfig The SuperchainConfig contract to upgrade.
+    function upgradeSuperchainConfig(ISuperchainConfig _superchainConfig) external;
+
     /// @notice addGameType deploys a new dispute game and links it to the DisputeGameFactory. The inputted _gameConfigs
     /// must be added in ascending GameType order.
     function addGameType(AddGameInput[] memory _gameConfigs) external returns (AddGameOutput[] memory);
 
     /// @notice Updates the prestate hash for a new game type while keeping all other parameters the same
-    /// @param _prestateUpdateInputs The new prestate hash to use
-    function updatePrestate(OpChainConfig[] memory _prestateUpdateInputs) external;
+    /// @param _prestateUpdateInputs The new prestates to use
+    function updatePrestate(UpdatePrestateInput[] memory _prestateUpdateInputs) external;
 
     /// @notice Migrates one or more OP Stack chains to use the Super Root dispute games and shared
     ///         dispute game contracts.
@@ -337,36 +389,17 @@ interface IOPContractsManager {
 
     function opcmInteropMigrator() external view returns (IOPContractsManagerInteropMigrator);
 
+    function opcmStandardValidator() external view returns (IOPContractsManagerStandardValidator);
+
+    /// @notice Retrieves the development feature bitmap stored in this OPCM contract
+    /// @return The development feature bitmap.
+    function devFeatureBitmap() external view returns (bytes32);
+
+    /// @notice Returns the status of a development feature.
+    /// @param _feature The feature to check.
+    /// @return True if the feature is enabled, false otherwise.
+    function isDevFeatureEnabled(bytes32 _feature) external view returns (bool);
+
     /// @notice Returns the implementation contract addresses.
-    function implementations() external view returns (Implementations memory);
-
-    function upgradeController() external view returns (address);
-
-    function isRC() external view returns (bool);
-
-    function setRC(bool _isRC) external;
-}
-
-/// @notice Minimal interface only used for calling `implementations()` method but without retrieving the ETHLockbox
-///         on it, since the OPCM contracts already deployed on mainnet don't have it.
-/// @dev    Only used for testing.
-interface IOPCMImplementationsWithoutLockbox {
-    /// @notice The implementation contracts for the OP Stack, without the newly added ETHLockbox.
-    struct Implementations {
-        address superchainConfigImpl;
-        address protocolVersionsImpl;
-        address l1ERC721BridgeImpl;
-        address optimismPortalImpl;
-        address systemConfigImpl;
-        address optimismMintableERC20FactoryImpl;
-        address l1CrossDomainMessengerImpl;
-        address l1StandardBridgeImpl;
-        address disputeGameFactoryImpl;
-        address anchorStateRegistryImpl;
-        address delayedWETHImpl;
-        address mipsImpl;
-    }
-
-    /// @notice Returns the implementation contracts without the ETHLockbox.
     function implementations() external view returns (Implementations memory);
 }

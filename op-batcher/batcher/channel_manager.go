@@ -37,7 +37,6 @@ type channelManager struct {
 
 	// All blocks which are not yet safe
 	blocks queue.Queue[SizedBlock]
-
 	// blockCursor is an index into blocks queue. It points at the next block
 	// to build a channel with. blockCursor = len(blocks) is reserved for when
 	// there are no blocks ready to build with.
@@ -471,6 +470,9 @@ func (s *channelManager) outputFrames() error {
 		"full_reason", s.currentChannel.FullErr(),
 		"compr_ratio", comprRatio,
 	)
+
+	s.currentChannel.channelBuilder.co.DiscardCompressor() // Free up memory by discarding the compressor
+
 	return nil
 }
 

@@ -7,12 +7,15 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ethereum-optimism/optimism/op-service/ioutil"
+
 	"github.com/ethereum-optimism/optimism/devnet-sdk/proofs/prestate"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/forking"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/pipeline"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
@@ -169,7 +172,7 @@ func ApplyPipeline(
 	}
 	st := opts.State
 
-	l1ArtifactsFS, err := artifacts.Download(ctx, intent.L1ContractsLocator, artifacts.BarProgressor(), opts.CacheDir)
+	l1ArtifactsFS, err := artifacts.Download(ctx, intent.L1ContractsLocator, ioutil.BarProgressor(), opts.CacheDir)
 	if err != nil {
 		return fmt.Errorf("failed to download L1 artifacts: %w", err)
 	}
@@ -178,7 +181,7 @@ func ApplyPipeline(
 	if intent.L1ContractsLocator.Equal(intent.L2ContractsLocator) {
 		l2ArtifactsFS = l1ArtifactsFS
 	} else {
-		l2Afs, err := artifacts.Download(ctx, intent.L2ContractsLocator, artifacts.BarProgressor(), opts.CacheDir)
+		l2Afs, err := artifacts.Download(ctx, intent.L2ContractsLocator, ioutil.BarProgressor(), opts.CacheDir)
 		if err != nil {
 			return fmt.Errorf("failed to download L2 artifacts: %w", err)
 		}
@@ -291,6 +294,14 @@ func ApplyPipeline(
 		return fmt.Errorf("invalid deployment target: '%s'", opts.DeploymentTarget)
 	}
 
+	// Now that we have the host, we can load the deployment scripts
+	//
+	// This step will error out if the ABIs don't match the Go types
+	opcmScripts, err := opcm.NewScripts(l1Host)
+	if err != nil {
+		return fmt.Errorf("failed to load OPCM script: %w", err)
+	}
+
 	pEnv := &pipeline.Env{
 		StateWriter:  opts.StateWriter,
 		L1ScriptHost: l1Host,
@@ -298,6 +309,7 @@ func ApplyPipeline(
 		Logger:       opts.Logger,
 		Broadcaster:  bcaster,
 		Deployer:     deployer,
+		Scripts:      opcmScripts,
 	}
 
 	pline := []pipelineStage{
@@ -389,15 +401,13 @@ func ApplyPipeline(
 		})
 	}
 
-	// Generate the interop dependency set if interop is enabled
-	if intent.UseInterop {
-		pline = append(pline, pipelineStage{
-			"generate-interop-depset",
-			func() error {
-				return pipeline.GenerateInteropDepset(ctx, pEnv, intent, st)
-			},
-		})
-	}
+	// Generate the interop dependency set
+	pline = append(pline, pipelineStage{
+		"generate-interop-depset",
+		func() error {
+			return pipeline.GenerateInteropDepset(ctx, pEnv, intent, st)
+		},
+	})
 
 	// Generate the prestate for all chains
 	pline = append(pline, pipelineStage{

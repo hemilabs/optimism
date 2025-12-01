@@ -61,7 +61,9 @@ func NewBlockProcessorFromPayloadAttributes(provider BlockDataProvider, parent c
 			d = provider.Config().BaseFeeChangeDenominator(header.Time)
 			e = provider.Config().ElasticityMultiplier()
 		}
-		header.Extra = eip1559.EncodeHoloceneExtraData(d, e)
+		if provider.Config().IsOptimismHolocene(header.Time) {
+			header.Extra = eip1559.EncodeOptimismExtraData(provider.Config(), header.Time, d, e, attrs.MinBaseFee)
+		}
 	}
 
 	return NewBlockProcessorFromHeader(provider, header)
@@ -159,15 +161,20 @@ func (b *BlockProcessor) Assemble() (*types.Block, types.Receipts, error) {
 		Transactions: b.transactions,
 	}
 
+	cfg := b.evm.ChainConfig()
 	// Processing for EIP-7685 requests would happen here, but is skipped on OP.
 	// Kept here to minimize diff.
-	if b.dataProvider.Config().IsPrague(b.header.Number, b.header.Time) && !b.dataProvider.Config().IsIsthmus(b.header.Time) {
+	if cfg.IsPrague(b.header.Number, b.header.Time) && !cfg.IsIsthmus(b.header.Time) {
 		_requests := [][]byte{}
 		// EIP-6110 - no-op because we just ignore all deposit requests, so no need to parse logs
 		// EIP-7002
-		core.ProcessWithdrawalQueue(&_requests, b.evm)
+		if err := core.ProcessWithdrawalQueue(&_requests, b.evm); err != nil {
+			return nil, nil, err
+		}
 		// EIP-7251
-		core.ProcessConsolidationQueue(&_requests, b.evm)
+		if err := core.ProcessConsolidationQueue(&_requests, b.evm); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	block, err := b.dataProvider.Engine().FinalizeAndAssemble(b.dataProvider, b.header, b.state, &body, b.receipts)

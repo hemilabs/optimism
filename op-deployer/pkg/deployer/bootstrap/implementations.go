@@ -8,8 +8,8 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
-
+	mipsVersion "github.com/ethereum-optimism/optimism/cannon/mipsevm/versions"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
@@ -32,17 +32,22 @@ type ImplementationsConfig struct {
 	L1RPCUrl                        string             `cli:"l1-rpc-url"`
 	PrivateKey                      string             `cli:"private-key"`
 	ArtifactsLocator                *artifacts.Locator `cli:"artifacts-locator"`
-	L1ContractsRelease              string             `cli:"l1-contracts-release"`
 	MIPSVersion                     int                `cli:"mips-version"`
 	WithdrawalDelaySeconds          uint64             `cli:"withdrawal-delay-seconds"`
 	MinProposalSizeBytes            uint64             `cli:"min-proposal-size-bytes"`
 	ChallengePeriodSeconds          uint64             `cli:"challenge-period-seconds"`
 	ProofMaturityDelaySeconds       uint64             `cli:"proof-maturity-delay-seconds"`
 	DisputeGameFinalityDelaySeconds uint64             `cli:"dispute-game-finality-delay-seconds"`
+	DevFeatureBitmap                common.Hash        `cli:"dev-feature-bitmap"`
+	FaultGameMaxGameDepth           uint64             `cli:"dispute-max-game-depth"`
+	FaultGameSplitDepth             uint64             `cli:"dispute-split-depth"`
+	FaultGameClockExtension         uint64             `cli:"dispute-clock-extension"`
+	FaultGameMaxClockDuration       uint64             `cli:"dispute-max-clock-duration"`
 	SuperchainConfigProxy           common.Address     `cli:"superchain-config-proxy"`
 	ProtocolVersionsProxy           common.Address     `cli:"protocol-versions-proxy"`
-	UpgradeController               common.Address     `cli:"upgrade-controller"`
-	UseInterop                      bool               `cli:"use-interop"`
+	L1ProxyAdminOwner               common.Address     `cli:"l1-proxy-admin-owner"`
+	SuperchainProxyAdmin            common.Address     `cli:"superchain-proxy-admin"`
+	Challenger                      common.Address     `cli:"challenger"`
 	CacheDir                        string             `cli:"cache-dir"`
 
 	Logger log.Logger
@@ -70,13 +75,8 @@ func (c *ImplementationsConfig) Check() error {
 	if c.ArtifactsLocator == nil {
 		return errors.New("artifacts locator must be specified")
 	}
-	if c.ArtifactsLocator.IsTag() {
-		c.L1ContractsRelease = c.ArtifactsLocator.Tag
-	} else {
-		c.L1ContractsRelease = "dev"
-	}
-	if c.MIPSVersion != 1 && c.MIPSVersion != 2 {
-		return errors.New("MIPS version must be specified as either 1 or 2")
+	if !mipsVersion.IsSupported(c.MIPSVersion) {
+		return errors.New("MIPS version is not supported")
 	}
 	if c.WithdrawalDelaySeconds == 0 {
 		return errors.New("withdrawal delay in seconds must be specified")
@@ -93,14 +93,36 @@ func (c *ImplementationsConfig) Check() error {
 	if c.DisputeGameFinalityDelaySeconds == 0 {
 		return errors.New("dispute game finality delay in seconds must be specified")
 	}
+	// Check V2 fault game parameters only if V2 dispute games feature is enabled
+	deployV2Games := deployer.IsDevFeatureEnabled(c.DevFeatureBitmap, deployer.DeployV2DisputeGamesDevFlag)
+	if deployV2Games {
+		if c.FaultGameMaxGameDepth == 0 {
+			return errors.New("fault game max game depth must be specified when V2 dispute games feature is enabled")
+		}
+		if c.FaultGameSplitDepth == 0 {
+			return errors.New("fault game split depth must be specified when V2 dispute games feature is enabled")
+		}
+		if c.FaultGameClockExtension == 0 {
+			return errors.New("fault game clock extension must be specified when V2 dispute games feature is enabled")
+		}
+		if c.FaultGameMaxClockDuration == 0 {
+			return errors.New("fault game max clock duration must be specified when V2 dispute games feature is enabled")
+		}
+	}
 	if c.SuperchainConfigProxy == (common.Address{}) {
 		return errors.New("superchain config proxy must be specified")
 	}
 	if c.ProtocolVersionsProxy == (common.Address{}) {
 		return errors.New("protocol versions proxy must be specified")
 	}
-	if c.UpgradeController == (common.Address{}) {
-		return errors.New("upgrade controller must be specified")
+	if c.L1ProxyAdminOwner == (common.Address{}) {
+		return errors.New("l1 proxy admin owner must be specified")
+	}
+	if c.SuperchainProxyAdmin == (common.Address{}) {
+		return errors.New("superchain proxy admin must be specified")
+	}
+	if c.Challenger == (common.Address{}) {
+		return errors.New("challenger must be specified")
 	}
 	return nil
 }
@@ -115,6 +137,13 @@ func ImplementationsCLI(cliCtx *cli.Context) error {
 		return fmt.Errorf("failed to populate config: %w", err)
 	}
 	cfg.Logger = l
+
+	artifactsURLStr := cliCtx.String(deployer.ArtifactsLocatorFlagName)
+	artifactsLocator := new(artifacts.Locator)
+	if err := artifactsLocator.UnmarshalText([]byte(artifactsURLStr)); err != nil {
+		return fmt.Errorf("failed to parse artifacts URL: %w", err)
+	}
+	cfg.ArtifactsLocator = artifactsLocator
 
 	ctx := ctxinterrupt.WithCancelOnInterrupt(cliCtx.Context)
 	outfile := cliCtx.String(OutfileFlagName)
@@ -136,11 +165,7 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 
 	lgr := cfg.Logger
 
-	if cfg.ArtifactsLocator.IsTag() && !standard.IsSupportedL1Version(cfg.ArtifactsLocator.Tag) {
-		return dio, fmt.Errorf("unsupported L1 version: %s", cfg.ArtifactsLocator.Tag)
-	}
-
-	artifactsFS, err := artifacts.Download(ctx, cfg.ArtifactsLocator, artifacts.BarProgressor(), cfg.CacheDir)
+	artifactsFS, err := artifacts.Download(ctx, cfg.ArtifactsLocator, ioutil.BarProgressor(), cfg.CacheDir)
 	if err != nil {
 		return dio, fmt.Errorf("failed to download artifacts: %w", err)
 	}
@@ -186,13 +211,12 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 		return dio, fmt.Errorf("failed to create script host: %w", err)
 	}
 
-	superProxyAdmin, err := standard.SuperchainProxyAdminAddrFor(chainID.Uint64())
+	opcmScripts, err := opcm.NewScripts(l1Host)
 	if err != nil {
-		return dio, fmt.Errorf("failed to get superchain proxy admin address: %w", err)
+		return dio, fmt.Errorf("failed to load OPCM scripts: %w", err)
 	}
 
-	if dio, err = opcm.DeployImplementations(
-		l1Host,
+	if dio, err = opcmScripts.DeployImplementations.Run(
 		opcm.DeployImplementationsInput{
 			WithdrawalDelaySeconds:          new(big.Int).SetUint64(cfg.WithdrawalDelaySeconds),
 			MinProposalSizeBytes:            new(big.Int).SetUint64(cfg.MinProposalSizeBytes),
@@ -200,12 +224,16 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 			ProofMaturityDelaySeconds:       new(big.Int).SetUint64(cfg.ProofMaturityDelaySeconds),
 			DisputeGameFinalityDelaySeconds: new(big.Int).SetUint64(cfg.DisputeGameFinalityDelaySeconds),
 			MipsVersion:                     new(big.Int).SetUint64(uint64(cfg.MIPSVersion)),
-			L1ContractsRelease:              cfg.L1ContractsRelease,
+			DevFeatureBitmap:                cfg.DevFeatureBitmap,
+			FaultGameV2MaxGameDepth:         new(big.Int).SetUint64(cfg.FaultGameMaxGameDepth),
+			FaultGameV2SplitDepth:           new(big.Int).SetUint64(cfg.FaultGameSplitDepth),
+			FaultGameV2ClockExtension:       new(big.Int).SetUint64(cfg.FaultGameClockExtension),
+			FaultGameV2MaxClockDuration:     new(big.Int).SetUint64(cfg.FaultGameMaxClockDuration),
 			SuperchainConfigProxy:           cfg.SuperchainConfigProxy,
 			ProtocolVersionsProxy:           cfg.ProtocolVersionsProxy,
-			SuperchainProxyAdmin:            superProxyAdmin,
-			UpgradeController:               cfg.UpgradeController,
-			UseInterop:                      cfg.UseInterop,
+			SuperchainProxyAdmin:            cfg.SuperchainProxyAdmin,
+			L1ProxyAdminOwner:               cfg.L1ProxyAdminOwner,
+			Challenger:                      cfg.Challenger,
 		},
 	); err != nil {
 		return dio, fmt.Errorf("error deploying implementations: %w", err)

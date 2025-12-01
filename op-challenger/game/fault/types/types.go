@@ -9,6 +9,8 @@ import (
 	"math/big"
 	"time"
 
+	"slices"
+
 	preimage "github.com/ethereum-optimism/optimism/op-preimage"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
@@ -32,6 +34,9 @@ const (
 	SuperCannonGameType       GameType = 4
 	SuperPermissionedGameType GameType = 5
 	OPSuccinctGameType        GameType = 6
+	SuperAsteriscKonaGameType GameType = 7
+	CannonKonaGameType        GameType = 8
+	SuperCannonKonaGameType   GameType = 9
 	FastGameType              GameType = 254
 	AlphabetGameType          GameType = 255
 	KailuaGameType            GameType = 1337
@@ -58,6 +63,12 @@ func (t GameType) String() string {
 		return "super-permissioned"
 	case OPSuccinctGameType:
 		return "op-succinct"
+	case SuperAsteriscKonaGameType:
+		return "super-asterisc-kona"
+	case CannonKonaGameType:
+		return "cannon-kona"
+	case SuperCannonKonaGameType:
+		return "super-cannon-kona"
 	case FastGameType:
 		return "fast"
 	case AlphabetGameType:
@@ -75,14 +86,16 @@ const (
 	TraceTypeAlphabet          TraceType = "alphabet"
 	TraceTypeFast              TraceType = "fast"
 	TraceTypeCannon            TraceType = "cannon"
+	TraceTypeCannonKona        TraceType = "cannon-kona"
 	TraceTypeAsterisc          TraceType = "asterisc"
 	TraceTypeAsteriscKona      TraceType = "asterisc-kona"
 	TraceTypePermissioned      TraceType = "permissioned"
 	TraceTypeSuperCannon       TraceType = "super-cannon"
 	TraceTypeSuperPermissioned TraceType = "super-permissioned"
+	TraceTypeSuperAsteriscKona TraceType = "super-asterisc-kona"
 )
 
-var TraceTypes = []TraceType{TraceTypeAlphabet, TraceTypeCannon, TraceTypePermissioned, TraceTypeAsterisc, TraceTypeAsteriscKona, TraceTypeFast, TraceTypeSuperCannon, TraceTypeSuperPermissioned}
+var TraceTypes = []TraceType{TraceTypeAlphabet, TraceTypeCannon, TraceTypeCannonKona, TraceTypePermissioned, TraceTypeAsterisc, TraceTypeAsteriscKona, TraceTypeFast, TraceTypeSuperCannon, TraceTypeSuperPermissioned, TraceTypeSuperAsteriscKona}
 
 func (t TraceType) String() string {
 	return string(t)
@@ -103,18 +116,15 @@ func (t *TraceType) Clone() any {
 }
 
 func ValidTraceType(value TraceType) bool {
-	for _, t := range TraceTypes {
-		if t == value {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(TraceTypes, value)
 }
 
 func (t TraceType) GameType() GameType {
 	switch t {
 	case TraceTypeCannon:
 		return CannonGameType
+	case TraceTypeCannonKona:
+		return CannonKonaGameType
 	case TraceTypePermissioned:
 		return PermissionedGameType
 	case TraceTypeAsterisc:
@@ -129,6 +139,8 @@ func (t TraceType) GameType() GameType {
 		return SuperCannonGameType
 	case TraceTypeSuperPermissioned:
 		return SuperPermissionedGameType
+	case TraceTypeSuperAsteriscKona:
+		return SuperAsteriscKonaGameType
 	default:
 		return UnknownGameType
 	}
@@ -305,6 +317,14 @@ type Clock struct {
 
 	// Timestamp is the time that the clock was last updated.
 	Timestamp time.Time
+}
+
+// DecodeClock decodes a uint128 into a Clock duration and timestamp.
+func DecodeClock(clock *big.Int) Clock {
+	maxUint64 := new(big.Int).Add(new(big.Int).SetUint64(math.MaxUint64), big.NewInt(1))
+	remainder := new(big.Int)
+	quotient, _ := new(big.Int).QuoRem(clock, maxUint64, remainder)
+	return NewClock(time.Duration(quotient.Int64())*time.Second, time.Unix(remainder.Int64(), 0))
 }
 
 // NewClock creates a new Clock instance.

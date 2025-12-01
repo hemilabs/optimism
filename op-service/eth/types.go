@@ -45,6 +45,30 @@ const (
 
 var ErrBedrockScalarPaddingNotEmpty = errors.New("version 0 scalar value has non-empty padding")
 
+type InsertKeystoneStatus string
+
+const (
+	// given keystone is valid
+	KeystoneValid ExecutePayloadStatus = "VALID"
+	// given keystone is invalid
+	KeystoneInvalid ExecutePayloadStatus = "INVALID"
+
+	NewKeystone EngineAPIMethod = "engine_newKeystone"
+	GetPayouts  EngineAPIMethod = "engine_popPayoutsByL2Keystone"
+)
+
+type KeystoneStatus struct {
+	// the result of the keystone insertion
+	Status InsertKeystoneStatus `json:"status"`
+	// additional details on the result (optional field)
+	ValidationError string `json:"validationError,omitempty"`
+}
+
+type PopPayout struct {
+	MinerAddress common.Address `json:"miner_address"`
+	Amount       *big.Int       `json:"amount"`
+}
+
 // InputError can be used to create rpc.Error instances with a specific error code.
 type InputError struct {
 	Inner error
@@ -235,6 +259,41 @@ type ExecutionPayloadEnvelope struct {
 	ExecutionPayload      *ExecutionPayload `json:"executionPayload"`
 }
 
+func (env *ExecutionPayloadEnvelope) ID() BlockID {
+	return env.ExecutionPayload.ID()
+}
+
+func (env *ExecutionPayloadEnvelope) String() string {
+	return fmt.Sprintf("envelope(%s)", env.ID())
+}
+
+type ExecutionPayload struct {
+	ParentHash    common.Hash     `json:"parentHash"`
+	FeeRecipient  common.Address  `json:"feeRecipient"`
+	StateRoot     Bytes32         `json:"stateRoot"`
+	ReceiptsRoot  Bytes32         `json:"receiptsRoot"`
+	LogsBloom     Bytes256        `json:"logsBloom"`
+	PrevRandao    Bytes32         `json:"prevRandao"`
+	BlockNumber   Uint64Quantity  `json:"blockNumber"`
+	GasLimit      Uint64Quantity  `json:"gasLimit"`
+	GasUsed       Uint64Quantity  `json:"gasUsed"`
+	Timestamp     Uint64Quantity  `json:"timestamp"`
+	ExtraData     BytesMax32      `json:"extraData"`
+	BaseFeePerGas Uint256Quantity `json:"baseFeePerGas"`
+	BlockHash     common.Hash     `json:"blockHash"`
+	// Array of transaction objects, each object is a byte list (DATA) representing
+	// TransactionType || TransactionPayload or LegacyTransaction as defined in EIP-2718
+	Transactions []Data `json:"transactions"`
+	// Nil if not present (Bedrock)
+	Withdrawals *types.Withdrawals `json:"withdrawals,omitempty"`
+	// Nil if not present (Bedrock, Canyon, Delta)
+	BlobGasUsed *Uint64Quantity `json:"blobGasUsed,omitempty"`
+	// Nil if not present (Bedrock, Canyon, Delta)
+	ExcessBlobGas *Uint64Quantity `json:"excessBlobGas,omitempty"`
+	// Nil if not present (Bedrock, Canyon, Delta, Ecotone, Fjord, Granite, Holocene)
+	WithdrawalsRoot *common.Hash `json:"withdrawalsRoot,omitempty"`
+}
+
 func (p *ExecutionPayload) CheckEqual(o *ExecutionPayload) error {
 	if p == nil || o == nil {
 		if p == o {
@@ -324,41 +383,6 @@ func (p *ExecutionPayload) CheckEqual(o *ExecutionPayload) error {
 		return fmt.Errorf("WithdrawalsRoot mismatch: %v != %v", *p.WithdrawalsRoot, *o.WithdrawalsRoot)
 	}
 	return nil
-}
-
-func (env *ExecutionPayloadEnvelope) ID() BlockID {
-	return env.ExecutionPayload.ID()
-}
-
-func (env *ExecutionPayloadEnvelope) String() string {
-	return fmt.Sprintf("envelope(%s)", env.ID())
-}
-
-type ExecutionPayload struct {
-	ParentHash    common.Hash     `json:"parentHash"`
-	FeeRecipient  common.Address  `json:"feeRecipient"`
-	StateRoot     Bytes32         `json:"stateRoot"`
-	ReceiptsRoot  Bytes32         `json:"receiptsRoot"`
-	LogsBloom     Bytes256        `json:"logsBloom"`
-	PrevRandao    Bytes32         `json:"prevRandao"`
-	BlockNumber   Uint64Quantity  `json:"blockNumber"`
-	GasLimit      Uint64Quantity  `json:"gasLimit"`
-	GasUsed       Uint64Quantity  `json:"gasUsed"`
-	Timestamp     Uint64Quantity  `json:"timestamp"`
-	ExtraData     BytesMax32      `json:"extraData"`
-	BaseFeePerGas Uint256Quantity `json:"baseFeePerGas"`
-	BlockHash     common.Hash     `json:"blockHash"`
-	// Array of transaction objects, each object is a byte list (DATA) representing
-	// TransactionType || TransactionPayload or LegacyTransaction as defined in EIP-2718
-	Transactions []Data `json:"transactions"`
-	// Nil if not present (Bedrock)
-	Withdrawals *types.Withdrawals `json:"withdrawals,omitempty"`
-	// Nil if not present (Bedrock, Canyon, Delta)
-	BlobGasUsed *Uint64Quantity `json:"blobGasUsed,omitempty"`
-	// Nil if not present (Bedrock, Canyon, Delta)
-	ExcessBlobGas *Uint64Quantity `json:"excessBlobGas,omitempty"`
-	// Nil if not present (Bedrock, Canyon, Delta, Ecotone, Fjord, Granite, Holocene)
-	WithdrawalsRoot *common.Hash `json:"withdrawalsRoot,omitempty"`
 }
 
 func (payload *ExecutionPayload) ID() BlockID {
@@ -615,6 +639,8 @@ type SystemConfig struct {
 	OperatorFeeParams Bytes32 `json:"operatorFeeParams"`
 	// MinBaseFee identifies the minimum base fee.
 	MinBaseFee uint64 `json:"minBaseFee"`
+	// DAFootprintGasScalar identifies the DA footprint gas scalar.
+	DAFootprintGasScalar uint16 `json:"daFootprintGasScalar"`
 	// More fields can be added for future SystemConfig versions.
 
 	// MarshalPreHolocene indicates whether or not this struct should be
@@ -703,7 +729,7 @@ func EncodeScalar(scalars EcotoneScalars) (scalar [32]byte) {
 	scalar[0] = L1ScalarEcotone
 	binary.BigEndian.PutUint32(scalar[24:28], scalars.BlobBaseFeeScalar)
 	binary.BigEndian.PutUint32(scalar[28:32], scalars.BaseFeeScalar)
-	return
+	return scalar
 }
 
 func CheckEcotoneL1SystemConfigScalar(scalar [32]byte) error {
@@ -747,7 +773,7 @@ func DecodeOperatorFeeParams(scalar [32]byte) OperatorFeeParams {
 func EncodeOperatorFeeParams(params OperatorFeeParams) (scalar [32]byte) {
 	binary.BigEndian.PutUint32(scalar[20:24], params.Scalar)
 	binary.BigEndian.PutUint64(scalar[24:32], params.Constant)
-	return
+	return scalar
 }
 
 type Bytes48 [48]byte
@@ -779,7 +805,7 @@ type Uint64String uint64
 
 func (v Uint64String) MarshalText() (out []byte, err error) {
 	out = strconv.AppendUint(out, uint64(v), 10)
-	return
+	return out, err
 }
 
 func (v *Uint64String) UnmarshalText(b []byte) error {
@@ -789,27 +815,6 @@ func (v *Uint64String) UnmarshalText(b []byte) error {
 	}
 	*v = Uint64String(n)
 	return nil
-}
-
-type InsertKeystoneStatus string
-
-const (
-	// given keystone is valid
-	KeystoneValid ExecutePayloadStatus = "VALID"
-	// given keystone is invalid
-	KeystoneInvalid ExecutePayloadStatus = "INVALID"
-)
-
-type KeystoneStatus struct {
-	// the result of the keystone insertion
-	Status InsertKeystoneStatus `json:"status"`
-	// additional details on the result (optional field)
-	ValidationError string `json:"validationError,omitempty"`
-}
-
-type PopPayout struct {
-	MinerAddress common.Address `json:"miner_address"`
-	Amount       *big.Int       `json:"amount"`
 }
 
 type EngineAPIMethod string
@@ -826,9 +831,6 @@ const (
 	GetPayloadV2 EngineAPIMethod = "engine_getPayloadV2"
 	GetPayloadV3 EngineAPIMethod = "engine_getPayloadV3"
 	GetPayloadV4 EngineAPIMethod = "engine_getPayloadV4"
-
-	NewKeystone EngineAPIMethod = "engine_newKeystone"
-	GetPayouts  EngineAPIMethod = "engine_popPayoutsByL2Keystone"
 )
 
 // StorageKey is a marshaling utility for hex-encoded storage keys, which can have leading 0s and are

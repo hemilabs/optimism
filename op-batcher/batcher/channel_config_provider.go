@@ -12,7 +12,7 @@ import (
 
 type (
 	ChannelConfigProvider interface {
-		ChannelConfig(isPectra bool, isThrottling bool) ChannelConfig
+		ChannelConfig(isPectra, isThrottling bool) ChannelConfig
 	}
 
 	GasPricer interface {

@@ -36,9 +36,16 @@ type rpcConfig struct {
 	callTimeout      time.Duration
 	batchCallTimeout time.Duration
 	fixedDialBackoff time.Duration
+	connectTimeout   time.Duration
 }
 
 type RPCOption func(cfg *rpcConfig)
+
+func WithConnectTimeout(d time.Duration) RPCOption {
+	return func(cfg *rpcConfig) {
+		cfg.connectTimeout = d
+	}
+}
 
 func WithCallTimeout(d time.Duration) RPCOption {
 	return func(cfg *rpcConfig) {
@@ -133,6 +140,9 @@ func applyOptions(opts []RPCOption) rpcConfig {
 		opt(&cfg)
 	}
 
+	if cfg.connectTimeout == 0 {
+		cfg.connectTimeout = 10 * time.Second
+	}
 	if cfg.backoffAttempts < 1 { // default to at least 1 attempt, or it always fails to dial.
 		cfg.backoffAttempts = 1
 	}
@@ -160,12 +170,15 @@ func dialRPCClientWithBackoff(ctx context.Context, log log.Logger, addr string, 
 		bOff = retry.Fixed(cfg.fixedDialBackoff)
 	}
 	return retry.Do(ctx, cfg.backoffAttempts, bOff, func() (*rpc.Client, error) {
-		return CheckAndDial(ctx, log, addr, cfg.gethRPCOptions...)
+		return CheckAndDial(ctx, log, addr, cfg.connectTimeout, cfg.gethRPCOptions...)
 	})
 }
 
-func CheckAndDial(ctx context.Context, log log.Logger, addr string, options ...rpc.ClientOption) (*rpc.Client, error) {
-	if !IsURLAvailable(ctx, addr) {
+func CheckAndDial(ctx context.Context, log log.Logger, addr string, connectTimeout time.Duration, options ...rpc.ClientOption) (*rpc.Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+
+	if !IsURLAvailable(ctx, addr, connectTimeout) {
 		log.Warn("failed to dial address, but may connect later", "addr", addr)
 		return nil, fmt.Errorf("address unavailable (%s)", addr)
 	}
@@ -176,7 +189,7 @@ func CheckAndDial(ctx context.Context, log log.Logger, addr string, options ...r
 	return client, nil
 }
 
-func IsURLAvailable(ctx context.Context, address string) bool {
+func IsURLAvailable(ctx context.Context, address string, timeout time.Duration) bool {
 	u, err := url.Parse(address)
 	if err != nil {
 		return false
@@ -193,7 +206,7 @@ func IsURLAvailable(ctx context.Context, address string) bool {
 			return true
 		}
 	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
+	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false
@@ -230,17 +243,29 @@ func (b *BaseRPCClient) Close() {
 	b.c.Close()
 }
 
+type ErrorDataProvider interface {
+	ErrorData() interface{}
+}
+
 func (b *BaseRPCClient) CallContext(ctx context.Context, result any, method string, args ...any) error {
 	log.Info("Base RPC call context", "method", method, "args", args)
 	cCtx, cancel := context.WithTimeout(ctx, b.callTimeout)
 	defer cancel()
-	return b.c.CallContext(cCtx, result, method, args...)
+	err := b.c.CallContext(cCtx, result, method, args...)
+	if ed, ok := err.(ErrorDataProvider); ok && ed.ErrorData() != nil {
+		err = fmt.Errorf("%w: %v", err, ed.ErrorData())
+	}
+	return err
 }
 
 func (b *BaseRPCClient) BatchCallContext(ctx context.Context, batch []rpc.BatchElem) error {
 	cCtx, cancel := context.WithTimeout(ctx, b.batchCallTimeout)
 	defer cancel()
-	return b.c.BatchCallContext(cCtx, batch)
+	err := b.c.BatchCallContext(cCtx, batch)
+	if ed, ok := err.(ErrorDataProvider); ok && ed.ErrorData() != nil {
+		err = fmt.Errorf("%w: %v", err, ed.ErrorData())
+	}
+	return err
 }
 
 func (b *BaseRPCClient) Subscribe(ctx context.Context, namespace string, channel any, args ...any) (ethereum.Subscription, error) {
