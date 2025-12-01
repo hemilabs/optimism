@@ -14,7 +14,7 @@ use std::{fmt, sync::Arc};
 pub mod import;
 pub mod import_receipts;
 pub mod init_state;
-pub mod op_proofs;
+pub mod initialize_proofs;
 
 #[cfg(feature = "dev")]
 pub mod test_vectors;
@@ -62,9 +62,9 @@ pub enum Commands<Spec: ChainSpecParser = OpChainSpecParser, Ext: clap::Args + f
     /// Re-execute blocks in parallel to verify historical sync correctness.
     #[command(name = "re-execute")]
     ReExecute(re_execute::Command<Spec>),
-    /// Manage storage of historical proofs in expanded trie db in fault proof window.
-    #[command(name = "proofs")]
-    OpProofs(op_proofs::Command<Spec>),
+    /// Initializes the proofs storage with the current state of the chain.
+    #[command(name = "initialize-op-proofs")]
+    InitializeOpProofs(initialize_proofs::InitializeOpProofsCommand<Spec>),
 }
 
 impl<
@@ -89,7 +89,7 @@ impl<
             #[cfg(feature = "dev")]
             Self::TestVectors(_) => None,
             Self::ReExecute(cmd) => cmd.chain_spec(),
-            Self::OpProofs(cmd) => cmd.chain_spec(),
+            Self::InitializeOpProofs(cmd) => cmd.chain_spec(),
         }
     }
 }
