@@ -14,6 +14,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/client"
@@ -304,10 +305,12 @@ func (cl *L1BeaconClient) GetBlobs(ctx context.Context, ref eth.L1BlockRef, hash
 		return nil, err
 	}
 	resp, err := cl.cl.BeaconBlobs(ctx, slot, hashes)
+	log.Info("BeaconBlobs response", "resp", resp, "err", err)
 	if err != nil {
 		// We would normally check for an explicit error like "method not found", but the Beacon
 		// API doesn't standardize such a response. Thus, we interpret all errors as
 		// "method not found" and fall back to fetching sidecars.
+		log.Info("Got error, falling back to blob sidecars")
 		blobSidecars, err := cl.getBlobSidecars(ctx, slot, hashes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get blob sidecars for L1BlockRef %s: %w", ref, err)
