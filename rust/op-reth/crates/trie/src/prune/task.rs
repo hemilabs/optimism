@@ -1,4 +1,4 @@
-use crate::{OpProofsStorage, OpProofsStore, prune::OpProofStoragePruner};
+use crate::{prune::OpProofStoragePruner, OpProofsStore};
 use reth_provider::BlockHashReader;
 use reth_tasks::shutdown::GracefulShutdown;
 use tokio::{
@@ -6,8 +6,6 @@ use tokio::{
     time::{Duration, MissedTickBehavior},
 };
 use tracing::info;
-
-const PRUNE_BATCH_SIZE: u64 = 200;
 
 /// Periodic pruner task: constructs the pruner and runs it every interval.
 #[derive(Debug)]
@@ -23,14 +21,13 @@ where
     H: BlockHashReader,
 {
     /// Initialize a new [`OpProofStoragePrunerTask`]
-    pub fn new(
-        provider: OpProofsStorage<P>,
+    pub const fn new(
+        provider: P,
         hash_reader: H,
         min_block_interval: u64,
         task_run_interval: Duration,
     ) -> Self {
-        let pruner =
-            OpProofStoragePruner::new(provider, hash_reader, min_block_interval, PRUNE_BATCH_SIZE);
+        let pruner = OpProofStoragePruner::new(provider, hash_reader, min_block_interval);
         Self { pruner, min_block_interval, task_run_interval }
     }
 
@@ -54,7 +51,7 @@ where
                     break;
                 }
                 _ = interval.tick() => {
-                    self.pruner.run()
+                    self.pruner.run().await
                 }
             }
         }
