@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -64,7 +65,10 @@ func (b blockInfo) BlobBaseFee(chainConfig *params.ChainConfig) *big.Int {
 	if ebg == nil {
 		return nil
 	}
-	return eip4844.CalcBlobFee(chainConfig, b.Header())
+	log.Info("Calculating blob base fee for block", "number", b.NumberU64(), "hash", b.Hash(), "excessBlobGas", b.ExcessBlobGas())
+	fee := eip4844.CalcBlobFee(chainConfig, b.Header())
+	log.Info("Calculated fee", "block", b.NumberU64(), "fee", fee)
+	return fee
 }
 
 func (b blockInfo) HeaderRLP() ([]byte, error) {
