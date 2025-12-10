@@ -68,6 +68,7 @@ func (b blockInfo) BlobBaseFee(chainConfig *params.ChainConfig) *big.Int {
 	log.Info("Calculating blob base fee for block", "number", b.NumberU64(), "hash", b.Hash(), "excessBlobGas", b.ExcessBlobGas())
 	fee := eip4844.CalcBlobFee(chainConfig, b.Header())
 	log.Info("Calculated fee", "block", b.NumberU64(), "fee", fee)
+	log.Info("Header info", "time", b.Header().Time, "latest fork", chainConfig.LatestFork(b.Header().Time))
 	return fee
 }
 
