@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import { IRemoteL2TokenVerificationRegistry } from "src/L1/interfaces/IRemoteL2TokenVerificationRegistry.sol";
 import { IStandardBridge } from "src/universal/interfaces/IStandardBridge.sol";
 import { ICrossDomainMessenger } from "src/universal/interfaces/ICrossDomainMessenger.sol";
 import { ISuperchainConfig } from "src/L1/interfaces/ISuperchainConfig.sol";
@@ -25,6 +26,10 @@ interface IL1StandardBridge is IStandardBridge {
     );
     event ETHDepositInitiated(address indexed from, address indexed to, uint256 amount, bytes extraData);
     event ETHWithdrawalFinalized(address indexed from, address indexed to, uint256 amount, bytes extraData);
+
+    function setRemoteL2TokenVerifier(IRemoteL2TokenVerificationRegistry _remoteL2TokenVerificationRegistry) external;
+
+    function guardianWithdrawFundsSentIncorrectly(address _l1Token, address _incorrectL2Token, uint256 _amount) external;
 
     function depositERC20(
         address _l1Token,

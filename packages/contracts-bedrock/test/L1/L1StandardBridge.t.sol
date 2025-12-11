@@ -4,10 +4,12 @@ pragma solidity 0.8.15;
 // Testing
 import { stdStorage, StdStorage } from "forge-std/Test.sol";
 import { Bridge_Initializer } from "test/setup/Bridge_Initializer.sol";
+import { RemoteL2TokenVerificationRegistryMock } from "test/mocks/RemoteL2TokenVerificationRegistryMock.sol";
 
 // Contracts
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { StandardBridge } from "src/universal/StandardBridge.sol";
+import { OptimismMintableERC20 } from "src/universal/OptimismMintableERC20.sol";
 
 // Libraries
 import { Predeploys } from "src/libraries/Predeploys.sol";
@@ -18,6 +20,7 @@ import { ICrossDomainMessenger } from "src/universal/interfaces/ICrossDomainMess
 import { ISuperchainConfig } from "src/L1/interfaces/ISuperchainConfig.sol";
 import { IOptimismPortal } from "src/L1/interfaces/IOptimismPortal.sol";
 import { IL1StandardBridge } from "src/L1/interfaces/IL1StandardBridge.sol";
+import { IRemoteL2TokenVerificationRegistry } from "src/L1/interfaces/IRemoteL2TokenVerificationRegistry.sol";
 
 contract L1StandardBridge_Getter_Test is Bridge_Initializer {
     /// @dev Test that the accessors return the correct initialized values.
@@ -463,6 +466,141 @@ contract L1StandardBridge_BridgeETHTo_TestFail is PreBridgeETHTo {
     }
 }
 
+
+contract L1StandardBridge_GuardianWithdrawal_Test is Bridge_Initializer {
+    using stdStorage for StdStorage;
+
+    function test_guardianWithdrawFundsSentIncorrectly_with_known_bad_succeeds() external {
+        uint256 nonce = l1CrossDomainMessenger.messageNonce();
+        uint256 version = 0; // Internal constant in the OptimismPortal: DEPOSIT_VERSION
+        address l1MessengerAliased = AddressAliasHelper.applyL1ToL2Alias(address(l1CrossDomainMessenger));
+
+        // Deal Alice's ERC20 State
+        deal(address(L1Token), alice, 100000, true);
+        vm.prank(alice);
+        L1Token.approve(address(l1StandardBridge), type(uint256).max);
+
+        // The l1StandardBridge should transfer alice's tokens to itself
+        vm.expectCall(address(L1Token), abi.encodeCall(ERC20.transferFrom, (alice, address(l1StandardBridge), 100)));
+
+        bytes memory message = abi.encodeCall(
+            StandardBridge.finalizeBridgeERC20, (address(L2Token), address(L1Token), alice, alice, 100, hex"")
+        );
+
+        // the L1 bridge should call L1CrossDomainMessenger.sendMessage
+        vm.expectCall(
+            address(l1CrossDomainMessenger),
+            abi.encodeCall(ICrossDomainMessenger.sendMessage, (address(l2StandardBridge), message, 10000))
+        );
+
+        bytes memory innerMessage = abi.encodeCall(
+            ICrossDomainMessenger.relayMessage,
+            (nonce, address(l1StandardBridge), address(l2StandardBridge), 0, 10000, message)
+        );
+
+        uint64 baseGas = l1CrossDomainMessenger.baseGas(message, 10000);
+        vm.expectCall(
+            address(optimismPortal),
+            abi.encodeCall(
+                IOptimismPortal.depositTransaction, (address(l2CrossDomainMessenger), 0, baseGas, false, innerMessage)
+            )
+        );
+
+        // Create a new L1 token which is not OptimismMintableERC20
+        ERC20 L1Token2 = new ERC20("Native L1 Token 2", "L1T2");
+
+        OptimismMintableERC20 L2Token2 = OptimismMintableERC20(
+            l2OptimismMintableERC20Factory.createStandardL2Token(
+                address(L1Token2),
+                string(abi.encodePacked("L2-", L1Token2.name())),
+                string(abi.encodePacked("L2-", L1Token2.symbol()))
+            )
+        );
+
+        vm.prank(alice);
+        l1StandardBridge.depositERC20(address(L1Token), address(L2Token), 100, 10000, hex"");
+        assertEq(l1StandardBridge.deposits(address(L1Token), address(L2Token)), 100);
+
+        // Mock out a registry
+        IRemoteL2TokenVerificationRegistry remoteL2TokenVerificationRegistry = new RemoteL2TokenVerificationRegistryMock();
+
+        // Alice does deposit before destination marked invalid
+        vm.prank(alice);
+        l1StandardBridge.depositERC20(address(L1Token), address(L2Token2), 500, 10000, hex"");
+        assertEq(l1StandardBridge.deposits(address(L1Token), address(L2Token2)), 500);
+
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.setRemoteL2TokenVerifier(remoteL2TokenVerificationRegistry);
+
+        remoteL2TokenVerificationRegistry.markDestinationContractInvalidForL1Contract(address(L1Token), address(L2Token2));
+
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.guardianWithdrawFundsSentIncorrectly(address(L1Token), address(L2Token2), 500);
+        assertEq(l1StandardBridge.deposits(address(L1Token), address(L2Token2)), 0);
+        assertEq(L1Token.balanceOf(superchainConfig.guardian()), 500);
+    }
+
+
+    /// @dev Tests that tuardian can't recover funds that aren't to a known bad address,
+    ///      that they can only recover up to the total amount bridged to an incorrect address,
+    ///      and that only the guardian can attempt to recover funds
+    function test_guardianWithdrawFundsSentIncorrectly_appropriately_reverts() external {
+        // Deal Alice's ERC20 State
+        deal(address(L1Token), alice, 100000, true);
+        vm.prank(alice);
+        L1Token.approve(address(l1StandardBridge), type(uint256).max);
+
+        // Mock out a registry
+        IRemoteL2TokenVerificationRegistry remoteL2TokenVerificationRegistry = new RemoteL2TokenVerificationRegistryMock();
+
+        // Create a new L1 token
+        ERC20 L1Token2 = new ERC20("Native L1 Token 2", "L1T2");
+
+        deal(address(L1Token2), alice, 100000, true);
+        vm.prank(alice);
+        L1Token2.approve(address(l1StandardBridge), type(uint256).max);
+
+        // Create two L2 tokens; one that is OptimismMintableERC20 but for L1Token2,
+        // and another that is just a regular ERC20 deployed on L2 that is not OptimismMintableERC20
+        OptimismMintableERC20 L2Token2 = OptimismMintableERC20(
+            l2OptimismMintableERC20Factory.createStandardL2Token(
+                address(L1Token2),
+                string(abi.encodePacked("L2-", L1Token2.name())),
+                string(abi.encodePacked("L2-", L1Token2.symbol()))
+            )
+        );
+
+        // Alice does deposit of L1Token2 before destination marked invalid
+        deal(address(L1Token2), alice, 100000, true);
+        vm.prank(alice);
+        L1Token2.approve(address(l1StandardBridge), type(uint256).max);
+        vm.prank(alice);
+        l1StandardBridge.depositERC20(address(L1Token2), address(L2Token), 500, 10000, hex"");
+        assertEq(l1StandardBridge.deposits(address(L1Token2), address(L2Token)), 500);
+        vm.prank(alice);
+        l1StandardBridge.depositERC20(address(L1Token2), address(L2Token2), 700, 10000, hex"");
+        assertEq(l1StandardBridge.deposits(address(L1Token2), address(L2Token2)), 700);
+
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.setRemoteL2TokenVerifier(remoteL2TokenVerificationRegistry);
+
+        remoteL2TokenVerificationRegistry.markDestinationContractInvalidForL1Contract(address(L1Token), address(L2Token2));
+        remoteL2TokenVerificationRegistry.markDestinationContractInvalidForL1Contract(address(L1Token2), address(L2Token));
+
+        vm.expectRevert("only guardian can recover stuck ERC20 funds");
+        vm.prank(alice);
+        l1StandardBridge.guardianWithdrawFundsSentIncorrectly(address(L1Token2), address(L2Token), 10000);
+
+        vm.expectRevert("cannot withdraw more of the L1 token than was deposited to the incorrect L2 token address");
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.guardianWithdrawFundsSentIncorrectly(address(L1Token2), address(L2Token), 10000);
+
+        vm.expectRevert("guardian can only recover funds sent to a known invalid L2 token address");
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.guardianWithdrawFundsSentIncorrectly(address(L1Token2), address(L2Token2), 700);
+    }
+}
+
 contract L1StandardBridge_DepositERC20_Test is Bridge_Initializer {
     using stdStorage for StdStorage;
 
@@ -477,6 +615,7 @@ contract L1StandardBridge_DepositERC20_Test is Bridge_Initializer {
     ///      Emits ERC20DepositInitiated event.
     ///      Calls depositTransaction on the OptimismPortal.
     ///      Only EOA can call depositERC20.
+    ///      Deposit of valid L1-L2 mapping after setting an invalid L1-L2 mapping works
     function test_depositERC20_succeeds() external {
         uint256 nonce = l1CrossDomainMessenger.messageNonce();
         uint256 version = 0; // Internal constant in the OptimismPortal: DEPOSIT_VERSION
@@ -537,6 +676,22 @@ contract L1StandardBridge_DepositERC20_Test is Bridge_Initializer {
         vm.prank(alice);
         l1StandardBridge.depositERC20(address(L1Token), address(L2Token), 100, 10000, hex"");
         assertEq(l1StandardBridge.deposits(address(L1Token), address(L2Token)), 100);
+
+        // Mock out a registry
+        IRemoteL2TokenVerificationRegistry remoteL2TokenVerificationRegistry = new RemoteL2TokenVerificationRegistryMock();
+
+        // Create a new L1 token which is not OptimismMintableERC20
+        ERC20 L1Token2 = new ERC20("Native L1 Token 2", "L1T2");
+
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.setRemoteL2TokenVerifier(remoteL2TokenVerificationRegistry);
+
+        remoteL2TokenVerificationRegistry.markDestinationContractInvalidForL1Contract(address(L1Token2), address(L1Token));
+
+        // After marking in the registry for L1Token2 => L1Token invalid, deposits of the correct L1Token should still work
+        vm.prank(alice);
+        l1StandardBridge.depositERC20(address(L1Token), address(L2Token), 100, 10000, hex"");
+        assertEq(l1StandardBridge.deposits(address(L1Token), address(L2Token)), 200);
     }
 }
 
@@ -550,6 +705,55 @@ contract L1StandardBridge_DepositERC20_TestFail is Bridge_Initializer {
         vm.expectRevert("StandardBridge: function can only be called from an EOA");
         vm.prank(alice, alice);
         l1StandardBridge.depositERC20(address(0), address(0), 100, 100, hex"");
+    }
+
+    /// @dev Tests that depositing an ERC20 to the bridge reverts
+    ///      if the destination is known bad
+    function test_depositERC20_to_bad_destination_reverts() external {
+        // Deal Alice's ERC20 State
+        deal(address(L1Token), alice, 100000, true);
+        vm.prank(alice);
+        L1Token.approve(address(l1StandardBridge), type(uint256).max);
+
+        // Mock out a registry
+        IRemoteL2TokenVerificationRegistry remoteL2TokenVerificationRegistry = new RemoteL2TokenVerificationRegistryMock();
+
+        // Create a new L1 token
+        ERC20 L1Token2 = new ERC20("Native L1 Token 2", "L1T2");
+
+        deal(address(L1Token2), alice, 100000, true);
+        vm.prank(alice);
+        L1Token2.approve(address(l1StandardBridge), type(uint256).max);
+
+        // Create two L2 tokens; one that is OptimismMintableERC20 but for L1Token2,
+        // and another that is just a regular ERC20 deployed on L2 that is not OptimismMintableERC20
+        OptimismMintableERC20 L2Token2 = OptimismMintableERC20(
+            l2OptimismMintableERC20Factory.createStandardL2Token(
+                address(L1Token2),
+                string(abi.encodePacked("L2-", L1Token2.name())),
+                string(abi.encodePacked("L2-", L1Token2.symbol()))
+            )
+        );
+        ERC20 L2NonTunnelToken = new ERC20("Random Token", "RTK");
+
+        vm.prank(superchainConfig.guardian());
+        l1StandardBridge.setRemoteL2TokenVerifier(remoteL2TokenVerificationRegistry);
+
+        remoteL2TokenVerificationRegistry.markDestinationContractInvalidForL1Contract(address(L1Token), address(L2Token2));
+        remoteL2TokenVerificationRegistry.markDestinationContractInvalidForL1Contract(address(L1Token2), address(L2Token));
+        remoteL2TokenVerificationRegistry.markDestinationContractFullyInvalid(address(L2NonTunnelToken));
+
+        vm.expectRevert("cannot tunnel the specified l1 token to a known-invalid l2 token contract");
+        vm.prank(alice, alice);
+        l1StandardBridge.depositERC20(address(L1Token), address(L2Token2), 100, 100, hex"");
+
+        vm.expectRevert("cannot tunnel the specified l1 token to a known-invalid l2 token contract");
+        vm.prank(alice, alice);
+        l1StandardBridge.depositERC20(address(L1Token2), address(L2Token), 100, 100, hex"");
+
+        vm.expectRevert("cannot tunnel the specified l1 token to a known-invalid l2 token contract");
+        vm.prank(alice, alice);
+        l1StandardBridge.depositERC20(address(L1Token2), address(L2NonTunnelToken), 100, 100, hex"");
     }
 }
 

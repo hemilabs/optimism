@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
+// ERC20 Contracts
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
 // Contracts
 import { StandardBridge } from "src/universal/StandardBridge.sol";
 
@@ -12,6 +16,7 @@ import { ISemver } from "src/universal/interfaces/ISemver.sol";
 import { ICrossDomainMessenger } from "src/universal/interfaces/ICrossDomainMessenger.sol";
 import { ISuperchainConfig } from "src/L1/interfaces/ISuperchainConfig.sol";
 import { ISystemConfig } from "src/L1/interfaces/ISystemConfig.sol";
+import { IRemoteL2TokenVerificationRegistry } from "src/L1/interfaces/IRemoteL2TokenVerificationRegistry.sol";
 
 /// @custom:proxied true
 /// @title L1StandardBridge
@@ -24,6 +29,7 @@ import { ISystemConfig } from "src/L1/interfaces/ISystemConfig.sol";
 ///         of some token types that may not be properly supported by this contract include, but are
 ///         not limited to: tokens with transfer fees, rebasing tokens, and tokens with blocklists.
 contract L1StandardBridge is StandardBridge, ISemver {
+    using SafeERC20 for IERC20;
     /// @custom:legacy
     /// @notice Emitted whenever a deposit of ETH from L1 into L2 is initiated.
     /// @param from      Address of the depositor.
@@ -83,6 +89,9 @@ contract L1StandardBridge is StandardBridge, ISemver {
 
     /// @notice Address of the SystemConfig contract.
     ISystemConfig public systemConfig;
+
+    /// @notice Address of the RemoteL2TokenVerificationRegistry contract.
+    IRemoteL2TokenVerificationRegistry public remoteL2TokenVerificationRegistry;
 
     /// @notice Constructs the L1StandardBridge contract.
     constructor() StandardBridge() {
@@ -245,6 +254,56 @@ contract L1StandardBridge is StandardBridge, ISemver {
         return address(otherBridge);
     }
 
+    /// @notice Sets the Remote L2 Token Verifier contract. If not set, the guardian recovery
+    ///         process is not enabled.
+    function setRemoteL2TokenVerifier(IRemoteL2TokenVerificationRegistry _remoteL2TokenVerificationRegistry) external {
+        require(msg.sender == superchainConfig.guardian(),
+        "L1StandardBridge: only guardian can set remote L2 token verifier contract");
+
+        require(address(_remoteL2TokenVerificationRegistry) != address(0),
+        "cannot set the remote L2 token verifier to the zero address");
+
+        require(address(remoteL2TokenVerificationRegistry) == address(0),
+        "cannot set the remote L2 token verifier twice");
+
+        remoteL2TokenVerificationRegistry = _remoteL2TokenVerificationRegistry;
+    }
+
+    /// @notice Allows the guardian to withdraw stuck L1 ERC20 tokens which were sent to an
+    ///         invalid L2 destination address
+    function guardianWithdrawFundsSentIncorrectly(address _l1Token, address _incorrectL2Token, uint256 _amount) external {
+        address guardian = superchainConfig.guardian();
+
+        require(guardian != address(0), "guardian cannot be the zero address");
+        require(msg.sender == guardian, "only guardian can recover stuck ERC20 funds");
+
+        require(_amount > 0, "amount cannot be zero");
+
+        require(address(remoteL2TokenVerificationRegistry) != address(0), "no remote L2 token verifier is set");
+
+        uint256 deposited = deposits[_l1Token][_incorrectL2Token];
+
+        // Max uint256 value indicates a full withdrawal
+        if (_amount == type(uint256).max) {
+            _amount = deposited;
+        }
+        require(_amount <= deposited,
+        "cannot withdraw more of the L1 token than was deposited to the incorrect L2 token address");
+
+        // Ensure that the RemoteL2TokenVerificationRegistry contract identifies the incorrectL2Token
+        // address as an invalid L2 destination address for tunneling the specific L1 token
+        require(remoteL2TokenVerificationRegistry.isInvalidL2Contract(_l1Token, _incorrectL2Token),
+        "guardian can only recover funds sent to a known invalid L2 token address");
+
+        deposits[_l1Token][_incorrectL2Token] = deposits[_l1Token][_incorrectL2Token] - _amount;
+
+        require(deposits[_l1Token][_incorrectL2Token] < deposited,
+        "resulting deposits after withdrawal are not valid");
+
+        // Transfer the recovered ERC20 tokens to the guardian
+        IERC20(_l1Token).safeTransfer(guardian, _amount);
+    }
+
     /// @notice Internal function for initiating an ETH deposit.
     /// @param _from        Address of the sender on L1.
     /// @param _to          Address of the recipient on L2.
@@ -273,6 +332,14 @@ contract L1StandardBridge is StandardBridge, ISemver {
     )
         internal
     {
+        // Only run additional tunnel protection checks if the RemoteL2TokenVerificationRegistry is set
+        if (address(remoteL2TokenVerificationRegistry) != address(0)) {
+            // Ensure the user isn't tunneling to a known-bad contract.
+            // This doesn't ensure the destination L2 contract is correct, only that it isn't
+            // already known as invalid.
+            require(!remoteL2TokenVerificationRegistry.isInvalidL2Contract(_l1Token, _l2Token),
+            "cannot tunnel the specified l1 token to a known-invalid l2 token contract");
+        }
         _initiateBridgeERC20(_l1Token, _l2Token, _from, _to, _amount, _minGasLimit, _extraData);
     }
 

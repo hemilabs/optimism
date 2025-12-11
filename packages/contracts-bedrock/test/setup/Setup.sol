@@ -4,6 +4,7 @@ pragma solidity 0.8.15;
 // Testing
 import { console2 as console } from "forge-std/console2.sol";
 import { Vm } from "forge-std/Vm.sol";
+import { RemoteL2TokenVerificationRegistryMock } from "test/mocks/RemoteL2TokenVerificationRegistryMock.sol";
 
 // Scripts
 import { Deploy } from "scripts/deploy/Deploy.s.sol";
@@ -49,6 +50,7 @@ import { IWETH98 } from "src/universal/interfaces/IWETH98.sol";
 import { IGovernanceToken } from "src/governance/interfaces/IGovernanceToken.sol";
 import { ILegacyMessagePasser } from "src/legacy/interfaces/ILegacyMessagePasser.sol";
 import { ISuperchainTokenBridge } from "src/L2/interfaces/ISuperchainTokenBridge.sol";
+import { IRemoteL2TokenVerificationRegistry } from "src/L1/interfaces/IRemoteL2TokenVerificationRegistry.sol";
 
 /// @title Setup
 /// @dev This contact is responsible for setting up the contracts in state. It currently
@@ -87,6 +89,7 @@ contract Setup {
     IProtocolVersions protocolVersions;
     ISuperchainConfig superchainConfig;
     IDataAvailabilityChallenge dataAvailabilityChallenge;
+    IRemoteL2TokenVerificationRegistry remoteL2TokenVerificationRegistry;
 
     // L2 contracts
     IL2CrossDomainMessenger l2CrossDomainMessenger =
@@ -130,6 +133,8 @@ contract Setup {
         vm.allowCheatcodes(address(l2Genesis));
         l2Genesis.setUp();
         console.log("L2 setup done!");
+
+        remoteL2TokenVerificationRegistry = new RemoteL2TokenVerificationRegistryMock();
     }
 
     /// @dev Sets up the L1 contracts.
