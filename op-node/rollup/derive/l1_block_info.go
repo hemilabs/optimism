@@ -3,6 +3,7 @@ package derive
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -497,16 +499,22 @@ func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, 
 
 	// 1. Set all fields according to active forks
 	if isEcotoneActivated {
+		log.Info("is ecotone but not first block")
 		l1BlockInfo.BlobBaseFee = block.BlobBaseFee(l1ChainConfig)
+		log.Info("set l1 block info blob base fee", "basefee", l1BlockInfo.BlobBaseFee)
 
 		// Apply Cancun blob base fee calculation if this chain needs the L1 Pectra
 		// blob schedule fix (mostly Holesky and Sepolia OP-Stack chains).
 		if t := rollupCfg.PectraBlobScheduleTime; t != nil && block.Time() < *t {
+			log.Info("block time less than pectra blob schedule", "time", block.Time(), "pectra time", rollupCfg.PectraBlobScheduleTime)
 			if rollupCfg.L2ChainID.Cmp(big.NewInt(43111)) == 0 && l2Timestamp < 1750870800 {
 				// Special case for Hemi mainnet, do nothing below this timestamp
 			} else if ebg := block.ExcessBlobGas(); ebg != nil {
+				log.Info("ebg != nil, calculating blob fee cancun")
 				l1BlockInfo.BlobBaseFee = eth.CalcBlobFeeCancun(*ebg)
+				log.Info("blob fee cancun", "fee", l1BlockInfo.BlobBaseFee)
 			} else {
+				log.Info("l1 not on Cancun yet, setting BlobBaseFee to nil")
 				// If L1 isn't on Cancun yet. It should already have been set
 				// to nil above in this case anyways.
 				l1BlockInfo.BlobBaseFee = nil
@@ -514,11 +522,13 @@ func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, 
 		}
 
 		if l1BlockInfo.BlobBaseFee == nil {
+			log.Info("Blob Base Fee is nil, setting BlobBaseFee to 1")
 			// The L2 spec states to use the MIN_BLOB_GASPRICE from EIP-4844 if not yet active on L1.
 			l1BlockInfo.BlobBaseFee = big.NewInt(1)
 		}
 		scalars, err := sysCfg.EcotoneScalars()
 		if err != nil {
+			log.Info("returning nil after error getting ecotone scalars", "err", err)
 			return nil, err
 		}
 		l1BlockInfo.BlobBaseFeeScalar = scalars.BlobBaseFeeScalar
@@ -543,21 +553,25 @@ func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, 
 	switch {
 	case isJovianActivated:
 		data, err = l1BlockInfo.marshalBinaryJovian()
+		log.Info("jovian serialization", "data", hex.EncodeToString(data))
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal Jovian l1 block info: %w", err)
 		}
 	case isIsthmusActivated:
 		data, err = l1BlockInfo.marshalBinaryIsthmus()
+		log.Info("isthmus serialization", "data", hex.EncodeToString(data))
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal Isthmus l1 block info: %w", err)
 		}
 	case isEcotoneActivated:
 		data, err = l1BlockInfo.marshalBinaryEcotone()
+		log.Info("ecotone serialization", "data", hex.EncodeToString(data))
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal Ecotone l1 block info: %w", err)
 		}
 	default:
 		data, err = l1BlockInfo.marshalBinaryBedrock()
+		log.Info("bedrock serialization", "data", hex.EncodeToString(data))
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal Bedrock l1 block info: %w", err)
 		}
@@ -584,6 +598,10 @@ func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, 
 		out.IsSystemTransaction = false
 		out.Gas = RegolithSystemTxGas
 	}
+
+	log.Info("l1 info deposit returning", "out", out, "blob base fee", l1BlockInfo.BlobBaseFee)
+	log.Info("final l1 block info", "info", l1BlockInfo)
+
 	return out, nil
 }
 

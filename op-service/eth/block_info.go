@@ -62,6 +62,7 @@ func ToBlockID(b NumberAndHash) BlockID {
 type blockInfo struct{ *types.Block }
 
 func (b blockInfo) BlobBaseFee(chainConfig *params.ChainConfig) *big.Int {
+	log.Info("excess blob gas", "gas", b.ExcessBlobGas())
 	ebg := b.ExcessBlobGas()
 	if ebg == nil {
 		return nil
