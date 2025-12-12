@@ -93,6 +93,12 @@ contract L1StandardBridge is StandardBridge, ProxyAdminOwnedBase, Reinitializabl
     /// @notice Address of the SystemConfig contract.
     ISystemConfig public systemConfig;
 
+    /// @notice Address of the USDC contract on L1.
+    address private usdcL1Contract = 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48;
+
+    /// @notice Address of the Stargate USDC contract on L2.
+    address private usdcL2StargateContract = 0xad11a8BEb98bbf61dbb1aa0F6d6F2ECD87b35afA;
+
     /// @notice Constructs the L1StandardBridge contract.
     constructor() StandardBridge() ReinitializableBase(3) {
         _disableInitializers();
@@ -205,6 +211,36 @@ contract L1StandardBridge is StandardBridge, ProxyAdminOwnedBase, Reinitializabl
         virtual
     {
         _initiateERC20Deposit(_l1Token, _l2Token, msg.sender, _to, _amount, _minGasLimit, _extraData);
+    }
+
+    /// @notice Allows the guardian to withdraw stuck L1 USDC which was sent
+    /// to the L2 Stargate USDC contract
+    function guardianWithdrawUSDCSentIncorrectly(uint256 _amount) external {
+        address guardian = superchainConfig.guardian();
+
+        require(guardian != address(0), "guardian cannot be the zero address");
+        require(msg.sender == guardian, "only guardian can recover stuck USDC funds");
+
+        require(_amount > 0, "amount cannot be zero");
+
+        uint256 deposited = deposits[usdcL1Contract][usdcL2StargateContract];
+
+        // Max uint256 value indicates a full withdrawal
+        if (_amount == type(uint256).max) {
+            _amount = deposited;
+        }
+
+        require(_amount <= deposited,
+        "cannot withdraw more of the L1 USDC token than was deposited to the incorrect L2 USDC token address");
+
+        deposits[usdcL1Contract][usdcL2StargateContract] = deposits[usdcL1Contract][usdcL2StargateContract] - _amount;
+
+        // Extra math sanity check against underflow, should be impossible to trigger
+        require(deposits[usdcL1Contract][usdcL2StargateContract] < deposited,
+        "resulting deposits after withdrawal are not valid");
+
+        // Transfer the recovered USDC tokens to the guardian
+        IERC20(usdcL1Contract).safeTransfer(guardian, _amount);
     }
 
     /// @custom:legacy
