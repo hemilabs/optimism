@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
 import { Predeploys } from "src/libraries/Predeploys.sol";
 import { StandardBridge } from "src/universal/StandardBridge.sol";
 import { ISemver } from "src/universal/ISemver.sol";
@@ -19,6 +22,7 @@ import { Constants } from "src/libraries/Constants.sol";
 ///         of some token types that may not be properly supported by this contract include, but are
 ///         not limited to: tokens with transfer fees, rebasing tokens, and tokens with blocklists.
 contract L1StandardBridge is StandardBridge, ISemver {
+    using SafeERC20 for IERC20;
     /// @custom:legacy
     /// @notice Emitted whenever a deposit of ETH from L1 into L2 is initiated.
     /// @param from      Address of the depositor.
@@ -77,7 +81,7 @@ contract L1StandardBridge is StandardBridge, ISemver {
     SuperchainConfig public superchainConfig;
 
     /// @notice Address of the USDC contract on L1.
-    address private usdcL1Contract = 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48;
+    address private usdcL1Contract = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     /// @notice Address of the Stargate USDC contract on L2.
     address private usdcL2StargateContract = 0xad11a8BEb98bbf61dbb1aa0F6d6F2ECD87b35afA;
