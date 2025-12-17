@@ -72,6 +72,7 @@ func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1Blo
 
 	nextTimestamp := l2SafeHead.Time + cfg.BlockTime
 	if batch.Timestamp > nextTimestamp {
+		log.Warn("batch.Timestamp %d > nextTimestamp %d, l2SafeHead.Time = %d, l2SafeHead.Hash = %s", batch.Timestamp, nextTimestamp, l2SafeHead.Time, l2SafeHead.Hash.String())
 		if cfg.IsHolocene(l1InclusionBlock.Time) {
 			log.Warn("dropping future batch", "next_timestamp", nextTimestamp)
 			return BatchDrop
