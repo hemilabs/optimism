@@ -73,10 +73,10 @@ func NewDriver(
 	}
 	sys.Register("finalizer", finalizer)
 
-	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec, false)
+	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec, hemitrapEnabled)
 	sys.Register("attributes-handler", attrHandler)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, indexingMode,hemitrapEnabled,  l1ChainConfig)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, indexingMode, hemitrapEnabled, l1ChainConfig)
 
 	pipelineDeriver := derive.NewPipelineDeriver(driverCtx, derivationPipeline)
 	sys.Register("pipeline", pipelineDeriver)
