@@ -81,10 +81,10 @@ contract L1StandardBridge is StandardBridge, ISemver {
     SuperchainConfig public superchainConfig;
 
     /// @notice Address of the USDC contract on L1.
-    address private usdcL1Contract = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address private constant usdcL1Contract = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     /// @notice Address of the Stargate USDC contract on L2.
-    address private usdcL2StargateContract = 0xad11a8BEb98bbf61dbb1aa0F6d6F2ECD87b35afA;
+    address private constant usdcL2StargateContract = 0xad11a8BEb98bbf61dbb1aa0F6d6F2ECD87b35afA;
 
     /// @notice Constructs the L1StandardBridge contract.
     constructor() StandardBridge() {
@@ -144,10 +144,14 @@ contract L1StandardBridge is StandardBridge, ISemver {
 
         require(guardian != address(0), "guardian cannot be the zero address");
         require(msg.sender == guardian, "only guardian can recover stuck USDC funds");
+        require(usdcL1Contract != address(0), "usdcL1Contract cannot be the zero address");
+        require(usdcL2StargateContract != address(0), "usdcL2StargateContract cannot be the zero address");
 
         require(_amount > 0, "amount cannot be zero");
 
         uint256 deposited = deposits[usdcL1Contract][usdcL2StargateContract];
+
+        require(deposited > 0, "there are no funds remaining to withdraw");
 
         // Max uint256 value indicates a full withdrawal
         if (_amount == type(uint256).max) {
