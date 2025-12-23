@@ -143,9 +143,9 @@ contract L1StandardBridge is StandardBridge, ISemver {
         address guardian = superchainConfig.guardian();
 
         require(guardian != address(0), "guardian cannot be the zero address");
-        require(msg.sender == guardian, "only guardian can recover stuck USDC funds");
         require(usdcL1Contract != address(0), "usdcL1Contract cannot be the zero address");
         require(usdcL2StargateContract != address(0), "usdcL2StargateContract cannot be the zero address");
+        require(msg.sender == guardian, "only guardian can recover stuck USDC funds");
 
         require(_amount > 0, "amount cannot be zero");
 
