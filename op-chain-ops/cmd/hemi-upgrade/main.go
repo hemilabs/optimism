@@ -40,6 +40,36 @@ import (
 // for a particular OP Stack chain and cannot currently be used by multiple chains.
 var deployments = map[uint64]superchain.ImplementationList{
 	// Hemi Sepolia, addresses were created with IMPL_SALT=hemi743111
+	43111: {
+		L1StandardBridge: superchain.VersionedContract{
+			Version: "2.1.0",
+			Address: superchain.HexToAddress("0x4B9882f8a7c65998bEe6176FA1F3CDf6fb54f8f9"), // x
+		},
+		L1CrossDomainMessenger: superchain.VersionedContract{
+			Version: "2.11.0",
+			Address: superchain.HexToAddress("0xdc40a14d9abd6f410226f1e6de71ae03441ca506"), // x
+		},
+		L1ERC721Bridge: superchain.VersionedContract{
+			Version: "1.4.1",
+			Address: superchain.HexToAddress("0x3de8370a1e304e83fbf114a956ebb9b913d8bc8c"), // x
+		},
+		OptimismPortal: superchain.VersionedContract{
+			Version: "2.5.0",
+			Address: superchain.HexToAddress("0x4b58ed755186326e77253444aade73c6e591c909"), // x
+		},
+		SystemConfig: superchain.VersionedContract{
+			Version: "1.12.0",
+			Address: superchain.HexToAddress("0x27392eb24eefce471992a42f374730c07e5bef26"), // x
+		},
+		L2OutputOracle: superchain.VersionedContract{
+			Version: "1.8.0",
+			Address: superchain.HexToAddress("0x05d99cb268ccc0f88e6bebe0eb0af4e9c0b83cf4"), // x
+		},
+		OptimismMintableERC20Factory: superchain.VersionedContract{
+			Version: "1.9.0",
+			Address: superchain.HexToAddress("0x380951156af4ed8d3b1923c0dfb7acbc59a045fc"), // x
+		},
+	},
 	743111: {
 		L1CrossDomainMessenger: superchain.VersionedContract{
 			Version: "2.3.0",
@@ -83,6 +113,16 @@ var proxyAddresses = map[uint64]*superchain.AddressList{
 		OptimismPortalProxy:               superchain.HexToAddress("0xB6f9579980aE46f61217A99145645341E49E2516"),
 		ProxyAdmin:                        superchain.HexToAddress("0xc43ED1E8D70d0e5801514833fAD3D93Ba16Da4Aa"),
 	},
+	43111: {
+		AddressManager:                    superchain.HexToAddress("0xA5F37791378c55941a52B4dCb70Be4D8D09f5e43"),
+		L1CrossDomainMessengerProxy:       superchain.HexToAddress("0xF005dFb08377faD44588Af68d0884D272A6fb050"),
+		L1ERC721BridgeProxy:               superchain.HexToAddress("0xa446331bD28cbe0186A983a27C528f566B6bedE0"),
+		L1StandardBridgeProxy:             superchain.HexToAddress("0x5eaa10F99e7e6D177eF9F74E519E319aa49f191e"),
+		L2OutputOracleProxy:               superchain.HexToAddress("0x6daF3a3497D8abdFE12915aDD9829f83A79C0d51"),
+		OptimismMintableERC20FactoryProxy: superchain.HexToAddress("0x0262fEDC4A98f94dDB90CeF0E058644d8409342C"),
+		OptimismPortalProxy:               superchain.HexToAddress("0x39a0005415256B9863aFE2d55Edcf75ECc3A4D7e"),
+		ProxyAdmin:                        superchain.HexToAddress("0xbE81A9D662422f667F634f3Fc301e2E360FeFB30"),
+	},
 }
 
 var chainConfigs = map[uint64]*superchain.ChainConfig{
@@ -91,6 +131,11 @@ var chainConfigs = map[uint64]*superchain.ChainConfig{
 		Name:             "Hemi Sepolia",
 		ChainID:          743111,
 		SystemConfigAddr: superchain.HexToAddress("0xfa73580F4D72294Ae9EE3DAaC36D8bF111B37Ce9"),
+	},
+	43111: {
+		Name:             "Hemi",
+		ChainID:          43111,
+		SystemConfigAddr: superchain.HexToAddress("0x5ae68684D9179A8053883f1Df599Ea7Fb35303c3"),
 	},
 }
 
@@ -227,9 +272,12 @@ func entrypoint(ctx *cli.Context) error {
 
 	address := crypto.PubkeyToAddress(*publicKeyEcdsa)
 
+	safeContractAddress := common.HexToAddress("0x8434dc705e4B729405Dd66C94DfC62bc3825Ea69")
 	// Clayton note: this is the sepolia safe address.  When using mainnet
 	// ensure that you update this (as well as the other addresses)
-	safeContractAddress := common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003")
+	if l2ChainID == 743111 {
+		safeContractAddress = common.HexToAddress("0x382D0AA958998408DD7695c8965C46BdaBBC3003")
+	}
 
 	signer := types.NewCancunSigner(l1ChainID)
 

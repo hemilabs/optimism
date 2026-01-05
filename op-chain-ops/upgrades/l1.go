@@ -30,8 +30,19 @@ var (
 	// superchainConfigProxy refers to the address of the Sepolia superchain config proxy.
 	// NOTE: this is currently hardcoded and we will need to move this to the superchain-registry
 	// and have 1 deployed for each superchain target.
-	superchainConfigProxy = common.HexToAddress("0xe4c5ef29cf4112bc2928a2c82412b9c509970a1e")
 )
+
+func superchainConfigProxyAddr(chainId uint64) common.Address {
+	if chainId == 43111 {
+		return common.HexToAddress("0x15144FB8621cB3c4ED3DB223c173ffb58C8D2aB8")
+	}
+
+	if chainId == 743111 {
+		return common.HexToAddress("0xe4c5ef29cf4112bc2928a2c82412b9c509970a1e")
+	}
+
+	panic(fmt.Sprintf("invalid chain id: %d", chainId))
+}
 
 // L1 will add calls for upgrading each of the L1 contracts.
 func L1(batch *safe.Batch, implementations superchain.ImplementationList, list superchain.AddressList, config *genesis.DeployConfig, chainConfig *superchain.ChainConfig, backend bind.ContractBackend) error {
@@ -122,6 +133,8 @@ func L1CrossDomainMessenger(batch *safe.Batch, implementations superchain.Implem
 		return fmt.Errorf("upgrading L1CrossDomainMessenger: OtherMessenger address doesn't match config")
 	}
 
+	superchainConfigProxy := superchainConfigProxyAddr(config.L2ChainID)
+
 	calldata, err := l1CrossDomainMessengerABI.Pack("initialize", superchainConfigProxy, optimismPortal)
 	if err != nil {
 		return err
@@ -203,6 +216,8 @@ func L1ERC721Bridge(batch *safe.Batch, implementations superchain.Implementation
 	if otherBridge != predeploys.L2ERC721BridgeAddr {
 		return fmt.Errorf("upgrading L1ERC721Bridge: OtherBridge address doesn't match config")
 	}
+
+	superchainConfigProxy := superchainConfigProxyAddr(config.L2ChainID)
 
 	calldata, err := l1ERC721BridgeABI.Pack("initialize", messenger, superchainConfigProxy)
 	if err != nil {
@@ -287,6 +302,8 @@ func L1StandardBridge(batch *safe.Batch, implementations superchain.Implementati
 	if otherBridge != predeploys.L2StandardBridgeAddr {
 		return fmt.Errorf("upgrading L1StandardBridge: OtherBridge address doesn't match config")
 	}
+
+	superchainConfigProxy := superchainConfigProxyAddr(config.L2ChainID)
 
 	calldata, err := l1StandardBridgeABI.Pack("initialize", messenger, superchainConfigProxy)
 	if err != nil {
@@ -588,6 +605,8 @@ func OptimismPortal(batch *safe.Batch, implementations superchain.Implementation
 	if systemConfig != common.HexToAddress(chainConfig.SystemConfigAddr.String()) {
 		return fmt.Errorf("upgrading OptimismPortal: SystemConfig address doesn't match config %s != %s", systemConfig, chainConfig.SystemConfigAddr.String())
 	}
+
+	superchainConfigProxy := superchainConfigProxyAddr(config.L2ChainID)
 
 	calldata, err := optimismPortalABI.Pack("initialize", l2OutputOracle, systemConfig, superchainConfigProxy)
 	if err != nil {
