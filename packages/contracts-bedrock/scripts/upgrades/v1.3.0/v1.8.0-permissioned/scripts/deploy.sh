@@ -50,5 +50,4 @@ forge script DeployUpgrade.s.sol:DeployUpgrade \
   $OPTIMISM_PORTAL_2_IMPL \
   --broadcast \
   --slow \
-  --verify \
   --non-interactive
