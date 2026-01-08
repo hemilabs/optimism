@@ -6,7 +6,7 @@ use reth_cli_commands::common::{AccessRights, CliNodeTypes, Environment, Environ
 use reth_node_core::version::version_metadata;
 use reth_optimism_chainspec::OpChainSpec;
 use reth_optimism_primitives::OpPrimitives;
-use reth_optimism_trie::{OpProofsStorage, OpProofsStore, db::MdbxProofsStorage};
+use reth_optimism_trie::{db::MdbxProofsStorage, OpProofsStorage, OpProofsStore};
 use reth_provider::{BlockReader, TransactionVariant};
 use std::{path::PathBuf, sync::Arc};
 use tracing::{info, warn};
@@ -36,12 +36,12 @@ pub struct UnwindCommand<C: ChainSpecParser> {
 
 impl<C: ChainSpecParser> UnwindCommand<C> {
     /// Validates that the target block number is within a valid range for unwinding.
-    fn validate_unwind_range<Store: OpProofsStore>(
+    async fn validate_unwind_range<Store: OpProofsStore>(
         &self,
         storage: &OpProofsStorage<Store>,
     ) -> eyre::Result<bool> {
         let (Some((earliest, _)), Some((latest, _))) =
-            (storage.get_earliest_block_number()?, storage.get_latest_block_number()?)
+            (storage.get_earliest_block_number().await?, storage.get_latest_block_number().await?)
         else {
             warn!(target: "reth::cli", "No blocks found in proofs storage. Nothing to unwind.");
             return Ok(false);
@@ -80,7 +80,7 @@ impl<C: ChainSpecParser<ChainSpec = OpChainSpec>> UnwindCommand<C> {
         .into();
 
         // Validate that the target block is within a valid range for unwinding
-        if !self.validate_unwind_range(&storage)? {
+        if !self.validate_unwind_range(&storage).await? {
             return Ok(());
         }
 
@@ -92,7 +92,7 @@ impl<C: ChainSpecParser<ChainSpec = OpChainSpec>> UnwindCommand<C> {
             })?;
 
         info!(target: "reth::cli", block_number = block.number, block_hash = %block.hash(), "Unwinding to target block");
-        storage.unwind_history(block.block_with_parent())?;
+        storage.unwind_history(block.block_with_parent()).await?;
 
         Ok(())
     }
