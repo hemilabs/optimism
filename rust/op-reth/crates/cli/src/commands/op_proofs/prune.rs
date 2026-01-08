@@ -7,7 +7,7 @@ use reth_node_core::version::version_metadata;
 use reth_optimism_chainspec::OpChainSpec;
 use reth_optimism_primitives::OpPrimitives;
 use reth_optimism_trie::{
-    OpProofStoragePruner, OpProofsStorage, OpProofsStore, db::MdbxProofsStorage,
+    db::MdbxProofsStorage, OpProofStoragePruner, OpProofsStorage, OpProofsStore,
 };
 use std::{path::PathBuf, sync::Arc};
 use tracing::info;
@@ -62,8 +62,8 @@ impl<C: ChainSpecParser<ChainSpec = OpChainSpec>> PruneCommand<C> {
         )
         .into();
 
-        let earliest_block = storage.get_earliest_block_number()?;
-        let latest_block = storage.get_latest_block_number()?;
+        let earliest_block = storage.get_earliest_block_number().await?;
+        let latest_block = storage.get_latest_block_number().await?;
         info!(
             target: "reth::cli",
             ?earliest_block,
@@ -77,7 +77,7 @@ impl<C: ChainSpecParser<ChainSpec = OpChainSpec>> PruneCommand<C> {
             self.proofs_history_window,
             self.proofs_history_prune_batch_size,
         );
-        pruner.run();
+        pruner.run().await;
         Ok(())
     }
 }
