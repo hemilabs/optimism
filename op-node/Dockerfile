@@ -1,14 +1,17 @@
-FROM golang:1.24.2-alpine3.21@sha256:7772cb5322baa875edd74705556d08f0eeca7b9c4b5367754ce3f2f00041ccee AS builder
+FROM golang:1.24.2@sha256:30baaea08c5d1e858329c50f29fe381e9b7d7bced11a0f5f1f69a1504cdfbf5e AS builder
 
-RUN apk add --update git make cargo bash
+ENV GOOS=linux
+
+RUN apt update
+RUN apt install -y git make bash curl
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="${PATH}:/root/.cargo/bin"
-RUN echo "export PATH=$PATH" >> /etc/profile
 
 WORKDIR /git
 RUN git clone https://github.com/casey/just
 WORKDIR /git/just
+RUN git checkout f028de5b258a0cc4696b9dea729cc7d4d5828baa
 RUN cargo install just
 
 ARG VERSION=v0.0.0 TARGETOS TARGETARCH
