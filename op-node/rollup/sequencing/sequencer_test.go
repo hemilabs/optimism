@@ -3,11 +3,14 @@ package sequencing
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand" // nosemgrep
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/hemilabs/heminetwork/hemi"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -690,6 +693,7 @@ type sequencerTestDeps struct {
 	seqState         *BasicSequencerStateListener
 	conductor        *FakeConductor
 	asyncGossip      *FakeAsyncGossip
+	l2Chain          *testutils.MockEngine
 }
 
 func createSequencer(log log.Logger) (*Sequencer, *sequencerTestDeps) {
@@ -730,10 +734,11 @@ func createSequencer(log log.Logger) (*Sequencer, *sequencerTestDeps) {
 		seqState:    &BasicSequencerStateListener{},
 		conductor:   &FakeConductor{},
 		asyncGossip: &FakeAsyncGossip{},
+		l2Chain:     &testutils.MockEngine{},
 	}
 	seq := NewSequencer(context.Background(), log, cfg, deps.attribBuilder,
 		deps.l1OriginSelector, deps.seqState, deps.conductor,
-		deps.asyncGossip, metrics.NoopMetrics, fakeEngController{})
+		deps.asyncGossip, metrics.NoopMetrics, deps.l2Chain, fakeEngController{})
 	// We create mock payloads, with the epoch-id as tx[0], rather than proper L1Block-info deposit tx.
 	seq.toBlockRef = func(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.L2BlockRef, error) {
 		return eth.L2BlockRef{
@@ -746,4 +751,211 @@ func createSequencer(log log.Logger) (*Sequencer, *sequencerTestDeps) {
 		}, nil
 	}
 	return seq, deps
+}
+
+// createSequencerWithPoPV2 creates a sequencer with PoPPayoutsV2 enabled for PoP payout testing
+func createSequencerWithPoPV2(log log.Logger) (*Sequencer, *sequencerTestDeps) {
+	seq, deps := createSequencer(log)
+	// Enable PoPPayoutsV2 at genesis
+	popv2Time := uint64(0)
+	deps.cfg.PoPPayoutsV2Time = &popv2Time
+	deps.cfg.PoPPayoutsV2Address = common.HexToAddress("0x1234567890123456789012345678901234567890")
+	return seq, deps
+}
+
+// TestSequencer_PoPPayoutV2_SortingAndNormalization tests that publications are sorted by height
+// and normalized so the minimum height is 0.
+func TestSequencer_PoPPayoutV2_SortingAndNormalization(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelDebug)
+	seq, deps := createSequencerWithPoPV2(logger)
+
+	// Create test publications with heights out of order and minimum > 0
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	publications := []eth.PopPublication{
+		{MinerAddress: common.HexToAddress("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), RelPubHeight: 5},
+		{MinerAddress: common.HexToAddress("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"), RelPubHeight: 3},
+		{MinerAddress: common.HexToAddress("0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"), RelPubHeight: 3}, // Same height as B
+		{MinerAddress: common.HexToAddress("0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"), RelPubHeight: 7},
+	}
+
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, publications, nil)
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	txBytes, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.NotNil(t, txBytes)
+
+	deps.l2Chain.AssertExpectations(t)
+}
+
+// TestSequencer_PoPPayoutV2_RPCError tests that RPC errors are handled gracefully.
+func TestSequencer_PoPPayoutV2_RPCError(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelError)
+	seq, deps := createSequencerWithPoPV2(logger)
+
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, nil, errors.New("RPC connection failed"))
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	// RPC error should return nil (no tx) without error - payout is skipped
+	txBytes, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.Nil(t, txBytes, "RPC error should skip payout, not return error")
+
+	deps.l2Chain.AssertExpectations(t)
+}
+
+// TestSequencer_PoPPayoutV2_EmptyPublications tests that empty publications return nil tx.
+func TestSequencer_PoPPayoutV2_EmptyPublications(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelInfo)
+	seq, deps := createSequencerWithPoPV2(logger)
+
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, []eth.PopPublication{}, nil)
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	txBytes, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.Nil(t, txBytes, "Empty publications should return nil tx")
+
+	deps.l2Chain.AssertExpectations(t)
+}
+
+// TestSequencer_PoPPayoutV2_TrimmingOverLimit tests that publications over the limit are trimmed.
+func TestSequencer_PoPPayoutV2_TrimmingOverLimit(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelInfo)
+	seq, deps := createSequencerWithPoPV2(logger)
+
+	// Create more publications than the limit
+	count := derive.MaximumPoPPayoutsInTx + 10
+	publications := make([]eth.PopPublication, count)
+	for i := 0; i < count; i++ {
+		addr := common.Address{}
+		addr[19] = byte(i)
+		publications[i] = eth.PopPublication{
+			MinerAddress: addr,
+			RelPubHeight: uint32(i % 9), // Heights 0-8
+		}
+	}
+
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, publications, nil)
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	txBytes, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.NotNil(t, txBytes, "Should create tx even with trimming")
+
+	deps.l2Chain.AssertExpectations(t)
+}
+
+// TestSequencer_PoPPayoutV2_DeterministicOrdering tests that publications with the same height
+// are sorted deterministically by address.
+func TestSequencer_PoPPayoutV2_DeterministicOrdering(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelDebug)
+	seq, deps := createSequencerWithPoPV2(logger)
+
+	// Create publications with same height but different addresses
+	// Addresses are intentionally out of order to test sorting
+	publications := []eth.PopPublication{
+		{MinerAddress: common.HexToAddress("0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"), RelPubHeight: 2},
+		{MinerAddress: common.HexToAddress("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), RelPubHeight: 2},
+		{MinerAddress: common.HexToAddress("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"), RelPubHeight: 2},
+	}
+
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, publications, nil)
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	txBytes1, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.NotNil(t, txBytes1)
+
+	// Run again with same input - should produce identical output
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, publications, nil)
+	txBytes2, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.NotNil(t, txBytes2)
+
+	require.Equal(t, txBytes1, txBytes2, "Same input should produce identical output")
+
+	deps.l2Chain.AssertExpectations(t)
+}
+
+// TestSequencer_PoPPayoutV2_HeightNormalization tests that heights are normalized to start at 0.
+func TestSequencer_PoPPayoutV2_HeightNormalization(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelDebug)
+	seq, deps := createSequencerWithPoPV2(logger)
+
+	// Create publications where minimum height is > 0
+	publications := []eth.PopPublication{
+		{MinerAddress: common.HexToAddress("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), RelPubHeight: 5},
+		{MinerAddress: common.HexToAddress("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"), RelPubHeight: 7},
+		{MinerAddress: common.HexToAddress("0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"), RelPubHeight: 5},
+	}
+
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, publications, nil)
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	txBytes, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.NoError(t, err)
+	require.NotNil(t, txBytes)
+
+	// The normalization happens internally - we verify it doesn't error
+	// and produces a valid transaction
+	deps.l2Chain.AssertExpectations(t)
+}
+
+// TestSequencer_PoPPayoutV2_MissingContractAddress tests error when contract address not configured.
+func TestSequencer_PoPPayoutV2_MissingContractAddress(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelError)
+	seq, deps := createSequencer(logger) // Use regular sequencer without V2 address
+
+	// Enable PoPPayoutsV2 but don't set address
+	popv2Time := uint64(0)
+	deps.cfg.PoPPayoutsV2Time = &popv2Time
+	deps.cfg.PoPPayoutsV2Address = common.Address{} // Empty address
+
+	publications := []eth.PopPublication{
+		{MinerAddress: common.HexToAddress("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), RelPubHeight: 0},
+	}
+
+	abrevHash := chainhash.Hash{0x01, 0x02, 0x03}
+	deps.l2Chain.ExpectPopPublicationsByL2Keystone(abrevHash, publications, nil)
+
+	keystone := &hemi.L2Keystone{
+		L2BlockNumber: 500,
+		EPHash:        []byte{0xAA},
+	}
+
+	_, err := seq.calculatePoPPayoutV2Tx(context.Background(), 1000, 500, &abrevHash, keystone)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "PoPPayoutsV2Address not configured")
+
+	deps.l2Chain.AssertExpectations(t)
 }

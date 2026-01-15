@@ -1,8 +1,6 @@
 module mutex
 
-go 1.22.0
-
-toolchain go1.22.7
+go 1.23
 
 require utils v0.0.0
 

@@ -222,7 +222,9 @@ func NewRollupConfigFromCLI(log log.Logger, ctx cliiface.Context) (*rollup.Confi
 	if err != nil {
 		return nil, err
 	}
-	applyOverrides(ctx, rollupConfig)
+	if err := applyOverrides(ctx, rollupConfig); err != nil {
+		return nil, err
+	}
 	return rollupConfig, nil
 }
 
@@ -256,7 +258,7 @@ Conflicting configuration is deprecated, and will stop the op-node from starting
 	return &rollupConfig, nil
 }
 
-func applyOverrides(ctx cliiface.Context, rollupConfig *rollup.Config) {
+func applyOverrides(ctx cliiface.Context, rollupConfig *rollup.Config) error {
 	if ctx.IsSet(opflags.CanyonOverrideFlagName) {
 		canyon := ctx.Uint64(opflags.CanyonOverrideFlagName)
 		rollupConfig.CanyonTime = &canyon
@@ -297,6 +299,18 @@ func applyOverrides(ctx cliiface.Context, rollupConfig *rollup.Config) {
 		interop := ctx.Uint64(opflags.InteropOverrideFlagName)
 		rollupConfig.InteropTime = &interop
 	}
+	if ctx.IsSet(opflags.PoPPayoutsV2OverrideFlagName) {
+		popPayoutsV2 := ctx.Uint64(opflags.PoPPayoutsV2OverrideFlagName)
+		rollupConfig.PoPPayoutsV2Time = &popPayoutsV2
+	}
+	if ctx.IsSet(opflags.PoPPayoutsV2AddressFlagName) {
+		addrStr := ctx.String(opflags.PoPPayoutsV2AddressFlagName)
+		if !common.IsHexAddress(addrStr) {
+			return fmt.Errorf("invalid PoPPayoutsV2 address format: %q", addrStr)
+		}
+		rollupConfig.PoPPayoutsV2Address = common.HexToAddress(addrStr)
+	}
+	return nil
 }
 
 func NewL1ChainConfig(chainId *big.Int, ctx cliiface.Context, log log.Logger) (*params.ChainConfig, error) {

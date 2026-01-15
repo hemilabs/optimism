@@ -189,3 +189,25 @@ func (s *EngineAPIClient) PopPayoutsByL2Keystone(ctx context.Context, abrevHash 
 	}
 	return result, nil
 }
+
+// PopPublicationsByL2Keystone retrieves PoP publications with relative BTC block heights
+// for use with PoPPayoutsV2 contract that calculates rewards based on publication timing
+func (s *EngineAPIClient) PopPublicationsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPublication, error) {
+	e := s.log.New("hash", abrevHash)
+	e.Trace("asking for publications for keystone")
+
+	method := eth.GetPublications
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var result []eth.PopPublication
+
+	err := s.RPC.CallContext(execCtx, &result, string(method), abrevHash)
+
+	e.Trace("Received publications for keystone")
+	if err != nil {
+		e.Error("Error retrieving publications", "err", err)
+		return nil, fmt.Errorf("failed to retrieve publications: %w", err)
+	}
+	return result, nil
+}

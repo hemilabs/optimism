@@ -1,13 +1,16 @@
 package sequencing
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/hemilabs/heminetwork/hemi"
 	"github.com/protolambda/ctxlock"
 
@@ -555,7 +558,7 @@ func (d *Sequencer) startBuildingBlock() {
 		}
 	}
 
-	popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1)
+	popPayoutTx, err := d.calculatePoPPayoutTx(ctx, l2Head.Number+1, uint64(attrs.Timestamp))
 	if err != nil {
 		d.emitter.Emit(ctx, rollup.CriticalErrorEvent{Err: err})
 		return
@@ -803,7 +806,7 @@ func (d *Sequencer) Close() {
 	d.asyncGossip.Stop()
 }
 
-func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uint64) ([]byte, error) {
+func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uint64, blockTimestamp uint64) ([]byte, error) {
 	// If this is a keystone block, then process PoP payouts
 	if newBlockHeight%hemi.KeystoneHeaderPeriod != 0 {
 		return nil, nil
@@ -858,8 +861,20 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 	)
 
 	d.log.Info("Calculating PoP Payout", "block containing payout", newBlockHeight,
-		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+		"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash),
+		"using_v2", d.rollupCfg.IsPoPPayoutsV2(blockTimestamp))
 
+	// Check if PoPPayoutsV2 is active for this block
+	if d.rollupCfg.IsPoPPayoutsV2(blockTimestamp) {
+		return d.calculatePoPPayoutV2Tx(ctx, newBlockHeight, payoutBlockHeight, payoutL2KeystoneAbrevHash, l2PayoutKeystone)
+	}
+
+	// Use legacy V1 payout system with fixed amounts
+	return d.calculatePoPPayoutV1Tx(ctx, newBlockHeight, payoutBlockHeight, payoutL2KeystoneAbrevHash, l2PayoutKeystone)
+}
+
+// calculatePoPPayoutV1Tx creates a PoP payout transaction using the legacy V1 format with fixed amounts
+func (d *Sequencer) calculatePoPPayoutV1Tx(ctx context.Context, newBlockHeight, payoutBlockHeight uint64, payoutL2KeystoneAbrevHash *chainhash.Hash, l2PayoutKeystone *hemi.L2Keystone) ([]byte, error) {
 	popPayouts, err := d.l2Chain.PopPayoutsByL2Keystone(ctx, *payoutL2KeystoneAbrevHash)
 	if err != nil {
 		d.log.Error("error getting pop payouts", "error", fmt.Errorf("unable to fetch PoP Payouts from op-geth: %v", err))
@@ -872,11 +887,11 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		return nil, nil
 	}
 
-	d.log.Info("Received PoP Payouts for block", "payout count", len(popPayouts),
+	d.log.Info("Received PoP Payouts for block (V1)", "payout count", len(popPayouts),
 		"block containing payout", newBlockHeight, "block paid out for", payoutBlockHeight,
 		"hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
 
-	// Create PoP payout tx
+	// Create PoP payout tx using V1 format with fixed amounts
 	popMinerAddresses := make([]common.Address, len(popPayouts))
 	popMinerAmounts := make([]*big.Int, len(popPayouts))
 
@@ -891,9 +906,106 @@ func (d *Sequencer) calculatePoPPayoutTx(ctx context.Context, newBlockHeight uin
 		popMinerAmounts)
 
 	if err != nil {
-		return nil, derive.NewCriticalError(fmt.Errorf("failed to create PoPPayoutTx: %w", err))
+		return nil, derive.NewCriticalError(fmt.Errorf("failed to create PoPPayoutTx (V1): %w", err))
 	}
 
 	return popPayoutTx, nil
+}
 
+// calculatePoPPayoutV2Tx creates a PoP payout transaction using the V2 format with relative publication heights
+func (d *Sequencer) calculatePoPPayoutV2Tx(ctx context.Context, newBlockHeight, payoutBlockHeight uint64, payoutL2KeystoneAbrevHash *chainhash.Hash, l2PayoutKeystone *hemi.L2Keystone) ([]byte, error) {
+	popPublications, err := d.l2Chain.PopPublicationsByL2Keystone(ctx, *payoutL2KeystoneAbrevHash)
+	if err != nil {
+		// CRITICAL: RPC failure means PoP miners will NOT be paid for this keystone!
+		// The block will be built without a payout transaction. This is logged prominently
+		// so operators can investigate TBC/op-geth connectivity issues.
+		// Note: Using Error level instead of Crit because we gracefully skip the payout
+		// and continue building the block. Crit would terminate the program.
+		d.log.Error("POP PAYOUT SKIPPED - failed to fetch publications from op-geth",
+			"err", err,
+			"block_containing_payout", newBlockHeight,
+			"block_paid_out_for", payoutBlockHeight,
+			"keystone_hash", payoutL2KeystoneAbrevHash.String(),
+			"impact", "PoP miners will not receive rewards for this keystone")
+		return nil, nil
+	}
+
+	if len(popPublications) == 0 {
+		d.log.Info("No PoP Publications for block", "block containing payout", newBlockHeight,
+			"block paid out for", payoutBlockHeight, "hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+		return nil, nil
+	}
+
+	d.log.Info("Received PoP Publications for block (V2)", "publication count", len(popPublications),
+		"block containing payout", newBlockHeight, "block paid out for", payoutBlockHeight,
+		"hash of payout block", fmt.Sprintf("%x", l2PayoutKeystone.EPHash))
+
+	// Sort publications by RelPubHeight ascending (lower = better score)
+	// This ensures we keep the best-scoring publications when trimming
+	// IMPORTANT: Use SliceStable with secondary sort by address for consensus determinism.
+	// Without this, nodes could produce different orderings when publications have
+	// the same RelPubHeight, causing consensus failures.
+	sort.SliceStable(popPublications, func(i, j int) bool {
+		if popPublications[i].RelPubHeight != popPublications[j].RelPubHeight {
+			return popPublications[i].RelPubHeight < popPublications[j].RelPubHeight
+		}
+		// Secondary sort by MinerAddress for deterministic ordering
+		return bytes.Compare(
+			popPublications[i].MinerAddress[:],
+			popPublications[j].MinerAddress[:],
+		) < 0
+	})
+
+	// Trim to maximum allowed publications if needed
+	if len(popPublications) > derive.MaximumPoPPayoutsInTx {
+		d.log.Info("Trimming PoP Publications to max allowed", "original_count", len(popPublications),
+			"max_allowed", derive.MaximumPoPPayoutsInTx)
+		popPublications = popPublications[:derive.MaximumPoPPayoutsInTx]
+	}
+
+	// Normalize RelPubHeights so the minimum is 0.
+	// The contract requires at least one publication with RelPubHeight = 0:
+	//   require(foundLowest, "at least one of the publications must be at earliest relative height 0")
+	// Since RelPubHeight is calculated as (BTC block mined - keystone's L1BlockNumber),
+	// and PoP transactions can only be mined AFTER the keystone is created,
+	// the raw minimum is typically >= 1. We normalize by subtracting the minimum
+	// so the earliest publisher(s) have height 0.
+	if len(popPublications) > 0 {
+		// After sorting, first element has the minimum height
+		minHeight := popPublications[0].RelPubHeight
+		if minHeight > 0 {
+			d.log.Debug("Normalizing RelPubHeights", "min_height", minHeight)
+			for i := range popPublications {
+				popPublications[i].RelPubHeight -= minHeight
+			}
+		}
+	}
+
+	// Create PoP payout tx using V2 format with relative publication heights
+	popMinerAddresses := make([]common.Address, len(popPublications))
+	relPubHeights := make([]uint32, len(popPublications))
+
+	for i := 0; i < len(popPublications); i++ {
+		popMinerAddresses[i] = popPublications[i].MinerAddress
+		relPubHeights[i] = popPublications[i].RelPubHeight
+	}
+
+	// Get the V2 contract address from config
+	// Note: Config validation in Check() ensures this is set when PoPPayoutsV2Time is set
+	targetAddress := d.rollupCfg.PoPPayoutsV2Address
+	if targetAddress == (common.Address{}) {
+		return nil, derive.NewCriticalError(fmt.Errorf("PoPPayoutsV2Address not configured but PoPPayoutsV2 is active"))
+	}
+
+	popPayoutTx, err := derive.PoPPayoutV2TxBytes(
+		payoutBlockHeight,
+		popMinerAddresses,
+		relPubHeights,
+		targetAddress)
+
+	if err != nil {
+		return nil, derive.NewCriticalError(fmt.Errorf("failed to create PoPPayoutV2Tx: %w", err))
+	}
+
+	return popPayoutTx, nil
 }

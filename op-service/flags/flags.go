@@ -24,6 +24,8 @@ const (
 	IsthmusOverrideFlagName            = "override.isthmus"
 	InteropOverrideFlagName            = "override.interop"
 	JovianOverrideFlagName             = "override.jovian"
+	PoPPayoutsV2OverrideFlagName       = "override.popv2"
+	PoPPayoutsV2AddressFlagName        = "override.popv2addr"
 )
 
 func CLIFlags(envPrefix string, category string) []cli.Flag {
@@ -95,6 +97,20 @@ func CLIFlags(envPrefix string, category string) []cli.Flag {
 			Name:     InteropOverrideFlagName,
 			Usage:    "Manually specify the Interop fork timestamp, overriding the bundled setting",
 			EnvVars:  opservice.PrefixEnvVar(envPrefix, "OVERRIDE_INTEROP"),
+			Hidden:   false,
+			Category: category,
+		},
+		&cli.Uint64Flag{
+			Name:     PoPPayoutsV2OverrideFlagName,
+			Usage:    "Manually specify the PoPPayoutsV2 activation timestamp, overriding the bundled setting",
+			EnvVars:  opservice.PrefixEnvVar(envPrefix, "OVERRIDE_POPV2"),
+			Hidden:   false,
+			Category: category,
+		},
+		&cli.StringFlag{
+			Name:     PoPPayoutsV2AddressFlagName,
+			Usage:    "Manually specify the PoPPayoutsV2 contract address, overriding the bundled setting",
+			EnvVars:  opservice.PrefixEnvVar(envPrefix, "OVERRIDE_POPV2ADDR"),
 			Hidden:   false,
 			Category: category,
 		},

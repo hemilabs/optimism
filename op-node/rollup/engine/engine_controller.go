@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	opmetrics "github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
@@ -19,10 +20,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/event"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 
 	"github.com/hemilabs/heminetwork/hemi"
-
 )
 
 type syncStatusEnum int
@@ -69,6 +68,7 @@ type ExecEngine interface {
 	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
 	NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error)
 	PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error)
+	PopPublicationsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPublication, error)
 	L2BlockRefByHash(ctx context.Context, hash common.Hash) (eth.L2BlockRef, error)
 }
 
@@ -187,18 +187,18 @@ func NewEngineController(ctx context.Context, engine ExecEngine, log log.Logger,
 	}
 
 	e := &EngineController{
-		engine:         engine,
-		log:            log,
-		metrics:        m,
-		chainSpec:      rollup.NewChainSpec(rollupCfg),
-		rollupCfg:      rollupCfg,
-		syncCfg:        syncCfg,
-		syncStatus:     syncStatus,
-		clock:          clock.SystemClock,
-		l1:             l1,
-		ctx:            ctx,
-		emitter:        emitter,
-		unsafePayloads: NewPayloadsQueue(log, maxUnsafePayloadsMemory, payloadMemSize),
+		engine:           engine,
+		log:              log,
+		metrics:          m,
+		chainSpec:        rollup.NewChainSpec(rollupCfg),
+		rollupCfg:        rollupCfg,
+		syncCfg:          syncCfg,
+		syncStatus:       syncStatus,
+		clock:            clock.SystemClock,
+		l1:               l1,
+		ctx:              ctx,
+		emitter:          emitter,
+		unsafePayloads:   NewPayloadsQueue(log, maxUnsafePayloadsMemory, payloadMemSize),
 		opgethNotifierCh: make(chan *opgethNotification, 10),
 	}
 

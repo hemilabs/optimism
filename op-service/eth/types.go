@@ -53,8 +53,9 @@ const (
 	// given keystone is invalid
 	KeystoneInvalid ExecutePayloadStatus = "INVALID"
 
-	NewKeystone EngineAPIMethod = "engine_newKeystone"
-	GetPayouts  EngineAPIMethod = "engine_popPayoutsByL2Keystone"
+	NewKeystone     EngineAPIMethod = "engine_newKeystone"
+	GetPayouts      EngineAPIMethod = "engine_popPayoutsByL2Keystone"
+	GetPublications EngineAPIMethod = "engine_popPublicationsByL2Keystone"
 )
 
 type KeystoneStatus struct {
@@ -67,6 +68,13 @@ type KeystoneStatus struct {
 type PopPayout struct {
 	MinerAddress common.Address `json:"miner_address"`
 	Amount       *big.Int       `json:"amount"`
+}
+
+// PopPublication represents a PoP miner's publication with relative BTC block height
+// Used by PoPPayoutsV2 contract which calculates rewards based on publication timing
+type PopPublication struct {
+	MinerAddress common.Address `json:"miner_address"`
+	RelPubHeight uint32         `json:"rel_pub_height"` // Relative BTC block height (0-8)
 }
 
 // InputError can be used to create rpc.Error instances with a specific error code.

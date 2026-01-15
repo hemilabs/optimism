@@ -38,6 +38,7 @@ var (
 	ErrChainIDsSame                  = errors.New("L1 and L2 chain IDs must be different")
 	ErrL1ChainIDNotPositive          = errors.New("L1 chain ID must be non-zero and positive")
 	ErrL2ChainIDNotPositive          = errors.New("L2 chain ID must be non-zero and positive")
+	ErrMissingPoPPayoutsV2Address    = errors.New("popv2_addr is required when popv2_time is set")
 )
 
 type Genesis struct {
@@ -132,6 +133,16 @@ type Config struct {
 	// InteropTime sets the activation time for an experimental feature-set, activated like a hardfork.
 	// Active if InteropTime != nil && L2 block timestamp >= *InteropTime, inactive otherwise.
 	InteropTime *uint64 `json:"interop_time,omitempty"`
+
+	// PoPPayoutsV2Time sets the activation time for the PoPPayoutsV2 contract.
+	// When active, PoP payouts use relative publication heights instead of fixed amounts.
+	// Active if PoPPayoutsV2Time != nil && L2 block timestamp >= *PoPPayoutsV2Time, inactive otherwise.
+	PoPPayoutsV2Time *uint64 `json:"popv2_time,omitempty"`
+
+	// PoPPayoutsV2Address is the L2 address of the PoPPayoutsV2 contract.
+	// This is the contract that receives mintPoPRewards calls when PoPPayoutsV2 is active.
+	// If not set, falls back to the legacy PoPPointsAddr predeploy.
+	PoPPayoutsV2Address common.Address `json:"popv2_addr,omitempty"`
 
 	// Note: below addresses are part of the block-derivation process,
 	// and required to be the same network-wide to stay in consensus.
@@ -362,6 +373,11 @@ func (cfg *Config) Check() error {
 		return err
 	}
 
+	// PoPPayoutsV2 validation: address must be set when time is set
+	if cfg.PoPPayoutsV2Time != nil && cfg.PoPPayoutsV2Address == (common.Address{}) {
+		return ErrMissingPoPPayoutsV2Address
+	}
+
 	return nil
 }
 
@@ -487,6 +503,12 @@ func (c *Config) IsInterop(timestamp uint64) bool {
 	return c.IsForkActive(forks.Interop, timestamp)
 }
 
+// IsPoPPayoutsV2 returns true if PoPPayoutsV2 is active at or past the given timestamp.
+// When active, PoP payouts use relative publication heights instead of fixed amounts.
+func (c *Config) IsPoPPayoutsV2(timestamp uint64) bool {
+	return c.PoPPayoutsV2Time != nil && timestamp >= *c.PoPPayoutsV2Time
+}
+
 func (c *Config) IsRegolithActivationBlock(l2BlockTime uint64) bool {
 	return c.IsRegolith(l2BlockTime) &&
 		l2BlockTime >= c.BlockTime &&
@@ -557,6 +579,15 @@ func (c *Config) IsInteropActivationBlock(l2BlockTime uint64) bool {
 	return c.IsInterop(l2BlockTime) &&
 		l2BlockTime >= c.BlockTime &&
 		!c.IsInterop(l2BlockTime-c.BlockTime)
+}
+
+// IsPoPPayoutsV2ActivationBlock returns whether the specified block is the first block
+// where PoPPayoutsV2 is active. This is when PoP payouts switch from fixed amounts (V1)
+// to relative publication height scoring (V2).
+func (c *Config) IsPoPPayoutsV2ActivationBlock(l2BlockTime uint64) bool {
+	return c.IsPoPPayoutsV2(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsPoPPayoutsV2(l2BlockTime-c.BlockTime)
 }
 
 func (c *Config) ActivationTime(fork ForkName) *uint64 {
@@ -833,6 +864,10 @@ func (c *Config) forEachFork(callback func(name string, logName string, time *ui
 	callback("Isthmus", "isthmus_time", c.IsthmusTime)
 	callback("Jovian", "jovian_time", c.JovianTime)
 	callback("Interop", "interop_time", c.InteropTime)
+	if c.PoPPayoutsV2Time != nil {
+		// PoPPayoutsV2 is optional - only report if configured
+		callback("PoPPayoutsV2", "popv2_time", c.PoPPayoutsV2Time)
+	}
 }
 
 func (c *Config) ParseRollupConfig(in io.Reader) error {

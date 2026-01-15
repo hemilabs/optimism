@@ -16,17 +16,19 @@ import (
 
 const (
 	PoPPayoutFuncSignature       = "mintPoPRewards(uint64,address[],uint256[])"
-	MaximumPoPPayoutsInTx        = 64  // TODO: Implement restriction, review quantity, and ensure it falls under gas allowance (or spare from gas budget?)
-	SmartContractArgumentByteLen = 32  // Each argument to smart contract is padded to 32 bytes
-	PoPPayoutDelay               = 500 // How long to wait after a block to payout PoP transactions which endorse it
+	PoPPayoutV2FuncSignature     = "mintPoPRewards(uint64,address[],uint32[])" // PoPPayoutsV2 contract
+	MaximumPoPPayoutsInTx        = 75                                          // Maximum publications per payout tx (matches PoPPayoutsV2 contract limit)
+	SmartContractArgumentByteLen = 32                                          // Each argument to smart contract is padded to 32 bytes
+	PoPPayoutDelay               = 500                                         // How long to wait after a block to payout PoP transactions which endorse it
 
 	// MinimumSerializedPoPPayoutLen based on function sig + block # + starting Positions + 1-address array + 1-amount array
 	MinimumSerializedPoPPayoutLen = 4 + 32 + (2 * 32) + (2 * 32) + (2 * 32)
 )
 
 var (
-	PoPPayoutFuncBytes4 = crypto.Keccak256([]byte(PoPPayoutFuncSignature))[:4]
-	PoPPayoutAddress    = predeploys.PoPPointsAddr
+	PoPPayoutFuncBytes4   = crypto.Keccak256([]byte(PoPPayoutFuncSignature))[:4]
+	PoPPayoutV2FuncBytes4 = crypto.Keccak256([]byte(PoPPayoutV2FuncSignature))[:4]
+	PoPPayoutAddress      = predeploys.PoPPointsAddr
 )
 
 // PoPPayout presents the information stored in a GovernanceToken.mintPoPRewards call
@@ -150,7 +152,7 @@ func (popPayout *PoPPayout) UnmarshalBinary(data []byte) error {
 	}
 
 	if addrArrayOffset != 0x60 {
-		return errors.New("address array should always start at offset 0x40")
+		return errors.New("address array should always start at offset 0x60")
 	}
 
 	amountArrayOffset, err := solabi.ReadUint64(reader)
@@ -195,11 +197,11 @@ func (popPayout *PoPPayout) UnmarshalBinary(data []byte) error {
 
 	if amountArrayLength > MaximumPoPPayoutsInTx {
 		return fmt.Errorf("encoded amount array length %d is greater than maximum allowed (%d)",
-			addressArrayLength, MaximumPoPPayoutsInTx)
+			amountArrayLength, MaximumPoPPayoutsInTx)
 	}
 
 	if addressArrayLength != amountArrayLength {
-		return fmt.Errorf("address array legnth (%d) is not the same as amount array length (%d)",
+		return fmt.Errorf("address array length (%d) is not the same as amount array length (%d)",
 			addressArrayLength, amountArrayLength)
 	}
 
@@ -272,6 +274,246 @@ func PoPPayoutTxBytes(blockRewarded uint64, popMinerAddresses []common.Address, 
 	opaquePoPTx, err := popTx.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode PoP Payout tx: %w", err)
+	}
+	return opaquePoPTx, nil
+}
+
+// ============================================================================
+// PoPPayoutV2 - For PoPPayoutsV2 contract that uses relative BTC block heights
+// ============================================================================
+
+// PoPPayoutV2 represents the information stored in a PoPPayoutsV2.mintPoPRewards call
+// This version uses relative publication heights (uint32) instead of amounts (uint256)
+type PoPPayoutV2 struct {
+	BlockRewarded     uint64
+	PoPMinerAddresses []common.Address
+	RelPubHeights     []uint32 // Relative BTC block heights (0-8)
+}
+
+// Binary Format for PoPPayoutV2
+// +---------+------------------------------+
+// | Bytes   | Field                        |
+// +---------+------------------------------+
+// | 4       | Function Signature           |
+// | 32      | Rewarded Block Number        |
+// | 32      | Starting Pos of Address Arr  |
+// | 32      | Starting Pos of Height Arr   |
+// | 32      | Address Arr Length           |
+// | 32      | First PoP Payout Address     |
+// |                  ...                   |
+// | 32      | Last PoP Payout Address      |
+// | 32      | Height Arr Length            |
+// | 32      | First RelPubHeight (uint32)  |
+// |                  ...                   |
+// | 32      | Last RelPubHeight (uint32)   |
+// +---------+------------------------------+
+
+func (popPayout *PoPPayoutV2) MarshalBinary() ([]byte, error) {
+	// Validate array lengths match
+	if len(popPayout.PoPMinerAddresses) != len(popPayout.RelPubHeights) {
+		return nil, fmt.Errorf("address array length (%d) != height array length (%d)",
+			len(popPayout.PoPMinerAddresses), len(popPayout.RelPubHeights))
+	}
+
+	// Validate maximum publications limit
+	if len(popPayout.PoPMinerAddresses) > MaximumPoPPayoutsInTx {
+		return nil, fmt.Errorf("too many publications: %d > %d",
+			len(popPayout.PoPMinerAddresses), MaximumPoPPayoutsInTx)
+	}
+
+	// See above format for calculation, assumes addresses and heights are always same length
+	popPayoutsLen := 4 +
+		SmartContractArgumentByteLen +
+		(SmartContractArgumentByteLen * 4) + // 4 used for scaffolding
+		(SmartContractArgumentByteLen * len(popPayout.PoPMinerAddresses)) +
+		(SmartContractArgumentByteLen * len(popPayout.RelPubHeights))
+
+	w := bytes.NewBuffer(make([]byte, 0, popPayoutsLen))
+	if err := solabi.WriteSignature(w, PoPPayoutV2FuncBytes4); err != nil {
+		return nil, fmt.Errorf("WriteSignature Failed: %v", err)
+	}
+
+	if err := solabi.WriteUint64(w, popPayout.BlockRewarded); err != nil {
+		return nil, fmt.Errorf("WriteUint64 for BlockRewarded Failed: %v", err)
+	}
+
+	// Address array start is always the same
+	if err := solabi.WriteUint64(w, SmartContractArgumentByteLen*3); err != nil {
+		return nil, fmt.Errorf("WriteUint64 for Addr Array Start Failed: %v", err)
+	}
+
+	// Height array start is based on address arr length
+	if err := solabi.WriteUint64(w, uint64(SmartContractArgumentByteLen*(4+len(popPayout.PoPMinerAddresses)))); err != nil {
+		return nil, fmt.Errorf("WriteUint64 for Height Array Start Failed: %v", err)
+	}
+
+	// Write length of address array
+	if err := solabi.WriteUint64(w, uint64(len(popPayout.PoPMinerAddresses))); err != nil {
+		return nil, fmt.Errorf("WriteUint64 for Length of Addr Array Failed: %v", err)
+	}
+
+	// Write each address in order, zero-padded
+	for i := 0; i < len(popPayout.PoPMinerAddresses); i++ {
+		if err := solabi.WriteAddress(w, popPayout.PoPMinerAddresses[i]); err != nil {
+			return nil, fmt.Errorf("WriteAddress for Addr index %d Array Failed: %v", i, err)
+		}
+	}
+
+	// Write length of height array (must always be same as address array)
+	if err := solabi.WriteUint64(w, uint64(len(popPayout.RelPubHeights))); err != nil {
+		return nil, fmt.Errorf("WriteUint64 for Length of Height Array Failed: %v", err)
+	}
+
+	// Write each height in order, zero-padded to 32 bytes
+	// uint32 values are written as uint256 (padded to 32 bytes)
+	for i := 0; i < len(popPayout.RelPubHeights); i++ {
+		if err := solabi.WriteUint64(w, uint64(popPayout.RelPubHeights[i])); err != nil {
+			return nil, fmt.Errorf("WriteUint64 for Height index %d Array Failed: %v", i, err)
+		}
+	}
+
+	return w.Bytes(), nil
+}
+
+func (popPayout *PoPPayoutV2) UnmarshalBinary(data []byte) error {
+	if len(data) < MinimumSerializedPoPPayoutLen {
+		return fmt.Errorf("serialized pop payout V2 data must be at least %d bytes, but only %d bytes provided",
+			MinimumSerializedPoPPayoutLen, len(data))
+	}
+
+	reader := bytes.NewReader(data)
+
+	if _, err := solabi.ReadAndValidateSignature(reader, PoPPayoutV2FuncBytes4); err != nil {
+		return err
+	}
+
+	blockRewarded, err := solabi.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	popPayout.BlockRewarded = blockRewarded
+
+	addrArrayOffset, err := solabi.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if addrArrayOffset != 0x60 {
+		return errors.New("address array should always start at offset 0x60")
+	}
+
+	heightArrayOffset, err := solabi.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+
+	addressArrayLength, err := solabi.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if addressArrayLength > MaximumPoPPayoutsInTx {
+		return fmt.Errorf("encoded address array length %d is greater than maximum allowed (%d)",
+			addressArrayLength, MaximumPoPPayoutsInTx)
+	}
+
+	// Verify height array offset
+	expectedHeightArrayOffset := SmartContractArgumentByteLen * (4 + addressArrayLength)
+	if heightArrayOffset != expectedHeightArrayOffset {
+		return fmt.Errorf("encoded height offset is %d but was expected to be %d",
+			heightArrayOffset, expectedHeightArrayOffset)
+	}
+
+	addresses := make([]common.Address, addressArrayLength)
+	for i := 0; i < len(addresses); i++ {
+		address, err := solabi.ReadAddress(reader)
+		if err != nil {
+			return err
+		}
+		addresses[i] = address
+	}
+	popPayout.PoPMinerAddresses = addresses
+
+	heightArrayLength, err := solabi.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if heightArrayLength > MaximumPoPPayoutsInTx {
+		return fmt.Errorf("encoded height array length %d is greater than maximum allowed (%d)",
+			heightArrayLength, MaximumPoPPayoutsInTx)
+	}
+	if addressArrayLength != heightArrayLength {
+		return fmt.Errorf("address array length (%d) is not the same as height array length (%d)",
+			addressArrayLength, heightArrayLength)
+	}
+
+	heights := make([]uint32, heightArrayLength)
+	for i := 0; i < len(heights); i++ {
+		// Heights are encoded as uint256 (padded to 32 bytes), read as uint64
+		height, err := solabi.ReadUint64(reader)
+		if err != nil {
+			return err
+		}
+		heights[i] = uint32(height)
+	}
+	popPayout.RelPubHeights = heights
+
+	if !solabi.EmptyReader(reader) {
+		return errors.New("too many bytes")
+	}
+
+	return nil
+}
+
+// PoPPayoutV2TxData is the inverse of PoPPayoutV2
+func PoPPayoutV2TxData(data []byte) (PoPPayoutV2, error) {
+	var popPayout PoPPayoutV2
+	err := popPayout.UnmarshalBinary(data)
+	return popPayout, err
+}
+
+// PoPPayoutV2Tx creates a special PoP Payout transaction for PoPPayoutsV2 contract
+// targetAddress is the address of the PoPPayoutsV2 contract to call
+func PoPPayoutV2Tx(blockRewarded uint64, popMinerAddresses []common.Address, relPubHeights []uint32, targetAddress common.Address) (*types.PopPayoutTx, error) {
+	popPayoutDat := PoPPayoutV2{
+		BlockRewarded:     blockRewarded,
+		PoPMinerAddresses: popMinerAddresses,
+		RelPubHeights:     relPubHeights,
+	}
+
+	data, err := popPayoutDat.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+
+	out := &types.PopPayoutTx{
+		To:   &targetAddress,
+		Gas:  20_000_000,
+		Data: data,
+	}
+	return out, nil
+}
+
+// PoPPayoutV2TxBytes returns a serialized PoP Payout transaction for PoPPayoutsV2 contract
+// targetAddress is the address of the PoPPayoutsV2 contract to call
+func PoPPayoutV2TxBytes(blockRewarded uint64, popMinerAddresses []common.Address, relPubHeights []uint32, targetAddress common.Address) ([]byte, error) {
+	if len(popMinerAddresses) != len(relPubHeights) {
+		return nil, fmt.Errorf("PoP Payout V2 tx was created with %d addresses and %d heights; "+
+			"the quantity of each must be the same",
+			len(popMinerAddresses), len(relPubHeights))
+	}
+
+	if len(popMinerAddresses) > MaximumPoPPayoutsInTx {
+		return nil, fmt.Errorf("PoP Payout V2 tx has too many publications: %d > %d",
+			len(popMinerAddresses), MaximumPoPPayoutsInTx)
+	}
+
+	dep, err := PoPPayoutV2Tx(blockRewarded, popMinerAddresses, relPubHeights, targetAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PoP Payout V2 tx: %w", err)
+	}
+	popTx := types.NewTx(dep)
+	opaquePoPTx, err := popTx.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode PoP Payout V2 tx: %w", err)
 	}
 	return opaquePoPTx, nil
 }

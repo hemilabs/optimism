@@ -1085,3 +1085,205 @@ func TestConfig_ActivateAtGenesis(t *testing.T) {
 		require.Zero(t, cfg)
 	})
 }
+
+// TestConfig_IsPoPPayoutsV2ActivationBlock tests the PoPPayoutsV2 activation block detection.
+func TestConfig_IsPoPPayoutsV2ActivationBlock(t *testing.T) {
+	tests := []struct {
+		name        string
+		blockTime   uint64
+		genesisTime uint64
+		popv2Time   *uint64
+		checkTime   uint64
+		expected    bool
+	}{
+		{
+			name:        "nil_popv2_time",
+			blockTime:   2,
+			genesisTime: 100,
+			popv2Time:   nil,
+			checkTime:   200,
+			expected:    false,
+		},
+		{
+			name:        "before_activation",
+			blockTime:   2,
+			genesisTime: 100,
+			popv2Time:   ptr.New(uint64(200)),
+			checkTime:   198,
+			expected:    false,
+		},
+		{
+			name:        "at_activation",
+			blockTime:   2,
+			genesisTime: 100,
+			popv2Time:   ptr.New(uint64(200)),
+			checkTime:   200,
+			expected:    true,
+		},
+		{
+			name:        "after_activation",
+			blockTime:   2,
+			genesisTime: 100,
+			popv2Time:   ptr.New(uint64(200)),
+			checkTime:   202,
+			expected:    false,
+		},
+		{
+			name:        "activation_at_genesis",
+			blockTime:   2,
+			genesisTime: 100,
+			popv2Time:   ptr.New(uint64(100)),
+			checkTime:   100,
+			expected:    true,
+		},
+		{
+			name:        "activation_at_zero",
+			blockTime:   2,
+			genesisTime: 0,
+			popv2Time:   ptr.New(uint64(0)),
+			checkTime:   0,
+			expected:    false, // l2BlockTime >= c.BlockTime fails when both are 0
+		},
+		{
+			name:        "activation_at_zero_check_after",
+			blockTime:   2,
+			genesisTime: 0,
+			popv2Time:   ptr.New(uint64(0)),
+			checkTime:   2,
+			expected:    false, // Fork was already active at genesis (time 0), so time 2 is not the activation block
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				BlockTime:        tc.blockTime,
+				PoPPayoutsV2Time: tc.popv2Time,
+				Genesis: Genesis{
+					L2Time: tc.genesisTime,
+				},
+			}
+			result := cfg.IsPoPPayoutsV2ActivationBlock(tc.checkTime)
+			require.Equal(t, tc.expected, result, "IsPoPPayoutsV2ActivationBlock(%d)", tc.checkTime)
+		})
+	}
+}
+
+// TestConfig_ForEachFork_IncludesPoPPayoutsV2 verifies PoPPayoutsV2 is included in forEachFork.
+func TestConfig_ForEachFork_IncludesPoPPayoutsV2(t *testing.T) {
+	popv2Time := uint64(1000)
+	cfg := &Config{
+		PoPPayoutsV2Time: &popv2Time,
+	}
+
+	foundPoPPayoutsV2 := false
+	cfg.forEachFork(func(name string, key string, ts *uint64) {
+		if name == "PoPPayoutsV2" {
+			foundPoPPayoutsV2 = true
+			require.Equal(t, "popv2_time", key)
+			require.NotNil(t, ts)
+			require.Equal(t, popv2Time, *ts)
+		}
+	})
+
+	require.True(t, foundPoPPayoutsV2, "forEachFork should include PoPPayoutsV2")
+}
+
+// TestConfig_ForEachFork_ExcludesPoPPayoutsV2WhenNil verifies PoPPayoutsV2 is excluded when nil.
+func TestConfig_ForEachFork_ExcludesPoPPayoutsV2WhenNil(t *testing.T) {
+	cfg := &Config{
+		PoPPayoutsV2Time: nil,
+	}
+
+	foundPoPPayoutsV2 := false
+	cfg.forEachFork(func(name string, key string, ts *uint64) {
+		if name == "PoPPayoutsV2" {
+			foundPoPPayoutsV2 = true
+		}
+	})
+
+	require.False(t, foundPoPPayoutsV2, "forEachFork should not include PoPPayoutsV2 when nil")
+}
+
+// TestConfig_Check_PoPPayoutsV2AddressRequired tests that PoPPayoutsV2Address must be set when PoPPayoutsV2Time is set.
+func TestConfig_Check_PoPPayoutsV2AddressRequired(t *testing.T) {
+	t.Run("popv2_time_set_address_missing", func(t *testing.T) {
+		cfg := randConfig()
+		popv2Time := uint64(1000)
+		cfg.PoPPayoutsV2Time = &popv2Time
+		cfg.PoPPayoutsV2Address = common.Address{} // zero address
+
+		err := cfg.Check()
+		require.ErrorIs(t, err, ErrMissingPoPPayoutsV2Address)
+	})
+
+	t.Run("popv2_time_set_address_set", func(t *testing.T) {
+		cfg := randConfig()
+		popv2Time := uint64(1000)
+		cfg.PoPPayoutsV2Time = &popv2Time
+		cfg.PoPPayoutsV2Address = common.HexToAddress("0x1234567890123456789012345678901234567890")
+
+		err := cfg.Check()
+		require.NoError(t, err)
+	})
+
+	t.Run("popv2_time_nil_address_missing", func(t *testing.T) {
+		cfg := randConfig()
+		cfg.PoPPayoutsV2Time = nil
+		cfg.PoPPayoutsV2Address = common.Address{}
+
+		err := cfg.Check()
+		require.NoError(t, err) // Should pass - address not required when time is nil
+	})
+}
+
+// TestConfig_IsPoPPayoutsV2 tests the IsPoPPayoutsV2 activation check.
+func TestConfig_IsPoPPayoutsV2(t *testing.T) {
+	tests := []struct {
+		name      string
+		popv2Time *uint64
+		checkTime uint64
+		expected  bool
+	}{
+		{
+			name:      "nil_time",
+			popv2Time: nil,
+			checkTime: 100,
+			expected:  false,
+		},
+		{
+			name:      "before_activation",
+			popv2Time: ptr.New(uint64(100)),
+			checkTime: 99,
+			expected:  false,
+		},
+		{
+			name:      "at_activation",
+			popv2Time: ptr.New(uint64(100)),
+			checkTime: 100,
+			expected:  true,
+		},
+		{
+			name:      "after_activation",
+			popv2Time: ptr.New(uint64(100)),
+			checkTime: 200,
+			expected:  true,
+		},
+		{
+			name:      "zero_activation_time",
+			popv2Time: ptr.New(uint64(0)),
+			checkTime: 0,
+			expected:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				PoPPayoutsV2Time: tc.popv2Time,
+			}
+			result := cfg.IsPoPPayoutsV2(tc.checkTime)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
