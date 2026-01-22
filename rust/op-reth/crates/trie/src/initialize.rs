@@ -2,25 +2,24 @@
 //! storage.
 
 use crate::{
-    OpProofsStorageError, OpProofsStore,
     api::{InitialStateAnchor, InitialStateStatus, OpProofsInitialStateStore},
     db::{HashedStorageKey, StorageTrieKey},
+    OpProofsStorageError, OpProofsStore,
 };
 use alloy_eips::BlockNumHash;
-use alloy_primitives::{B256, U256};
-use derive_more::Constructor;
+use alloy_primitives::B256;
 use reth_db::{
-    DatabaseError,
     cursor::{DbCursorRO, DbDupCursorRO},
     tables,
     transaction::DbTx,
+    DatabaseError,
 };
 use reth_primitives_traits::{Account, StorageEntry};
 use reth_trie_common::{
     BranchNodeCompact, Nibbles, StorageTrieEntry, StoredNibbles, StoredNibblesSubKey,
 };
 use std::{collections::HashMap, time::Instant};
-use tracing::{debug, info};
+use tracing::info;
 
 /// Batch size threshold for storing entries during initialization
 const INITIALIZE_STORAGE_THRESHOLD: usize = 100000;
@@ -29,10 +28,10 @@ const INITIALIZE_STORAGE_THRESHOLD: usize = 100000;
 const INITIALIZE_LOG_THRESHOLD: usize = 100000;
 
 /// Initialization job for external storage.
-#[derive(Debug, Constructor)]
-pub struct InitializationJob<Tx: DbTx, S: OpProofsStore + Send> {
+#[derive(Debug)]
+pub struct InitializationJob<'a, Tx: DbTx, S: OpProofsStore + Send> {
     storage: S,
-    tx: Tx,
+    tx: &'a Tx,
 }
 
 /// Macro to generate simple cursor iterators for tables
@@ -76,31 +75,29 @@ macro_rules! define_dup_cursor_iter {
                     return Some(res);
                 }
 
-                // If no more duplicates, find the next key with values.
-                // Use explicit match to propagate MDBX errors
-                match self.0.next_no_dup() {
-                    Ok(Some((next_key, _))) => {
-                        // Seek to the first duplicate for this key
-                        self.0.seek(next_key).transpose()
-                    }
-                    Ok(None) => None,
-                    Err(e) => Some(Err(e)),
-                }
+                // If no more duplicates, find the next key with values
+                let Some(Ok((next_key, _))) = self.0.next_no_dup().transpose() else {
+                    // If no more entries, return None
+                    return None;
+                };
+
+                // If found, seek to the first duplicate for this key
+                return self.0.seek(next_key).transpose();
             }
         }
     };
 }
 
 // Generate iterators for all 4 table types
-define_simple_cursor_iter!(HashedAccountsInit, tables::HashedAccounts, B256, Account);
-define_dup_cursor_iter!(HashedStoragesInit, tables::HashedStorages, B256, StorageEntry);
+define_simple_cursor_iter!(HashedAccountsIter, tables::HashedAccounts, B256, Account);
+define_dup_cursor_iter!(HashedStoragesIter, tables::HashedStorages, B256, StorageEntry);
 define_simple_cursor_iter!(
-    AccountsTrieInit,
+    AccountsTrieIter,
     tables::AccountsTrie,
     StoredNibbles,
     BranchNodeCompact
 );
-define_dup_cursor_iter!(StoragesTrieInit, tables::StoragesTrie, B256, StorageTrieEntry);
+define_dup_cursor_iter!(StoragesTrieIter, tables::StoragesTrie, B256, StorageTrieEntry);
 
 /// Trait to estimate the progress of a initialization job based on the key.
 trait CompletionEstimatable {
@@ -133,86 +130,160 @@ impl CompletionEstimatable for StoredNibbles {
     }
 }
 
-impl<Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
-    InitializationJob<Tx, S>
+/// Initialize a table from a source iterator to a storage function. Handles batching and logging.
+async fn initialize<
+    S: Iterator<Item = Result<(Key, Value), DatabaseError>>,
+    F: Future<Output = Result<(), OpProofsStorageError>> + Send,
+    Key: CompletionEstimatable + Clone + 'static,
+    Value: Clone + 'static,
+>(
+    name: &str,
+    source: S,
+    storage_threshold: usize,
+    log_threshold: usize,
+    save_fn: impl Fn(Vec<(Key, Value)>) -> F,
+) -> Result<u64, OpProofsStorageError> {
+    let mut entries = Vec::new();
+
+    let mut total_entries: u64 = 0;
+
+    info!("Starting {} initialization", name);
+    let start_time = Instant::now();
+
+    let mut source = source.peekable();
+    let initial_progress = source
+        .peek()
+        .map(|entry| entry.clone().map(|entry| entry.0.estimate_progress()))
+        .transpose()?;
+
+    for entry in source {
+        let Some(initial_progress) = initial_progress else {
+            // If there are any items, there must be an initial progress
+            unreachable!();
+        };
+        let entry = entry?;
+
+        entries.push(entry.clone());
+        total_entries += 1;
+
+        if total_entries.is_multiple_of(log_threshold as u64) {
+            let progress = entry.0.estimate_progress();
+            let elapsed = start_time.elapsed();
+            let elapsed_secs = elapsed.as_secs_f64();
+
+            let progress_per_second = if elapsed_secs.is_normal() {
+                (progress - initial_progress) / elapsed_secs
+            } else {
+                0.0
+            };
+            let estimated_total_time = if progress_per_second.is_normal() {
+                (1.0 - progress) / progress_per_second
+            } else {
+                0.0
+            };
+            let progress_pct = progress * 100.0;
+            info!(
+                "Processed {} {}, progress: {progress_pct:.2}%, ETA: {}s",
+                name, total_entries, estimated_total_time,
+            );
+        }
+
+        if entries.len() >= storage_threshold {
+            info!("Storing {} entries, total entries: {}", name, total_entries);
+            save_fn(entries).await?;
+            entries = Vec::new();
+        }
+    }
+
+    if !entries.is_empty() {
+        info!("Storing final {} entries", name);
+        save_fn(entries).await?;
+    }
+
+    info!("{} initialization complete: {} entries", name, total_entries);
+    Ok(total_entries)
+}
+
+impl<'a, Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
+    InitializationJob<'a, Tx, S>
 {
-    /// Initialize a table from a source iterator to a storage function. Handles batching and
-    /// logging.
-    fn initialize<
-        I: Iterator<Item = Result<(Key, Value), DatabaseError>> + InitTable<Key = Key, Value = Value>,
-        Key: CompletionEstimatable + 'static,
-        Value: 'static,
-    >(
+    /// Create a new initialization job.
+    pub const fn new(storage: S, tx: &'a Tx) -> Self {
+        Self { storage, tx }
+    }
+
+    /// Save mapping of hashed addresses to accounts to storage.
+    async fn save_hashed_accounts(
         &self,
-        name: &str,
-        source: I,
-        storage_threshold: usize,
-        log_threshold: usize,
-    ) -> Result<u64, OpProofsStorageError> {
-        info!("Starting {} initialization", name);
-        let start_time = Instant::now();
+        entries: Vec<(B256, Account)>,
+    ) -> Result<(), OpProofsStorageError> {
+        self.storage
+            .store_hashed_accounts(
+                entries.into_iter().map(|(address, account)| (address, Some(account))).collect(),
+            )
+            .await?;
 
-        let mut source = source.peekable();
-        let Some(first_entry) = source.peek() else {
-            debug!(target: "reth::cli", "No entries to store for table");
-            return Ok(0);
-        };
-        let initial_progress = match first_entry {
-            Ok(i) => i.0.estimate_progress(),
-            Err(e) => Err(e.clone())?,
-        };
+        Ok(())
+    }
 
-        let storage = &self.storage;
-        let source_size_hint = source.size_hint().0;
-        let mut batch = Vec::with_capacity(source_size_hint.min(storage_threshold));
-        let mut total_entries: usize = 0;
+    /// Save mapping of account trie paths to branch nodes to storage.
+    async fn save_account_branches(
+        &self,
+        entries: Vec<(StoredNibbles, BranchNodeCompact)>,
+    ) -> Result<(), OpProofsStorageError> {
+        self.storage
+            .store_account_branches(
+                entries.into_iter().map(|(path, branch)| (path.0, Some(branch))).collect(),
+            )
+            .await?;
 
-        for entry in source {
-            batch.push(entry?);
-            total_entries += 1;
+        Ok(())
+    }
 
-            if total_entries.is_multiple_of(log_threshold) {
-                let progress = batch.last().expect("non-empty batch").0.estimate_progress();
-                let elapsed = start_time.elapsed();
-                let elapsed_secs = elapsed.as_secs_f64();
-
-                let progress_per_second = if elapsed_secs.is_normal() {
-                    (progress - initial_progress) / elapsed_secs
-                } else {
-                    0.0
-                };
-                let estimated_total_time = if progress_per_second.is_normal() {
-                    (1.0 - progress) / progress_per_second
-                } else {
-                    0.0
-                };
-                let progress_pct = progress * 100.0;
-                info!(
-                    "Processed {} {}, progress: {progress_pct:.2}%, ETA: {}s",
-                    name, total_entries, estimated_total_time,
-                );
-            }
-
-            if batch.len() >= storage_threshold {
-                info!("Storing {} entries, total entries: {}", name, total_entries);
-                I::store_entries(storage, batch)?;
-                batch = Vec::with_capacity(
-                    (source_size_hint.saturating_sub(total_entries)).min(storage_threshold),
-                );
-            }
+    /// Save mapping of hashed addresses to storage entries to storage.
+    async fn save_hashed_storages(
+        &self,
+        entries: Vec<(B256, StorageEntry)>,
+    ) -> Result<(), OpProofsStorageError> {
+        // Group entries by hashed address
+        let mut by_address: HashMap<B256, Vec<(B256, alloy_primitives::U256)>> = HashMap::default();
+        for (address, entry) in entries {
+            by_address.entry(address).or_default().push((entry.key, entry.value));
         }
 
-        if !batch.is_empty() {
-            info!("Storing final {} entries", name);
-            I::store_entries(storage, batch)?;
+        // Store each address's storage entries
+        for (address, storages) in by_address {
+            self.storage.store_hashed_storages(address, storages).await?;
         }
 
-        info!("{} initialization complete: {} entries", name, total_entries);
-        Ok(total_entries as u64)
+        Ok(())
+    }
+
+    /// Save mapping of hashed addresses to storage trie entries to storage.
+    async fn save_storage_branches(
+        &self,
+        entries: Vec<(B256, StorageTrieEntry)>,
+    ) -> Result<(), OpProofsStorageError> {
+        // Group entries by hashed address
+        let mut by_address: HashMap<B256, Vec<(Nibbles, Option<BranchNodeCompact>)>> =
+            HashMap::default();
+        for (hashed_address, storage_entry) in entries {
+            by_address
+                .entry(hashed_address)
+                .or_default()
+                .push((storage_entry.nibbles.0, Some(storage_entry.node)));
+        }
+
+        // Store each address's storage trie branches
+        for (address, branches) in by_address {
+            self.storage.store_storage_branches(address, branches).await?;
+        }
+
+        Ok(())
     }
 
     /// Initialize hashed accounts data
-    fn initialize_hashed_accounts(
+    async fn initialize_hashed_accounts(
         &self,
         start_key: Option<B256>,
     ) -> Result<(), OpProofsStorageError> {
@@ -225,19 +296,21 @@ impl<Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
                 .ok_or(OpProofsStorageError::InitializeStorageInconsistentState)?;
         }
 
-        let source = HashedAccountsInit::new(start_cursor);
-        self.initialize(
+        let source = HashedAccountsIter::new(start_cursor);
+        initialize(
             "hashed accounts",
             source,
             INITIALIZE_STORAGE_THRESHOLD,
             INITIALIZE_LOG_THRESHOLD,
-        )?;
+            |entries| self.save_hashed_accounts(entries),
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Initialize hashed storage data
-    fn initialize_hashed_storages(
+    async fn initialize_hashed_storages(
         &self,
         start_key: Option<HashedStorageKey>,
     ) -> Result<(), OpProofsStorageError> {
@@ -250,19 +323,21 @@ impl<Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
                 .ok_or(OpProofsStorageError::InitializeStorageInconsistentState)?;
         }
 
-        let source = HashedStoragesInit::new(start_cursor);
-        self.initialize(
+        let source = HashedStoragesIter::new(start_cursor);
+        initialize(
             "hashed storage",
             source,
             INITIALIZE_STORAGE_THRESHOLD,
             INITIALIZE_LOG_THRESHOLD,
-        )?;
+            |entries| self.save_hashed_storages(entries),
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Initialize accounts trie data
-    fn initialize_accounts_trie(
+    async fn initialize_accounts_trie(
         &self,
         start_key: Option<StoredNibbles>,
     ) -> Result<(), OpProofsStorageError> {
@@ -275,19 +350,21 @@ impl<Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
                 .ok_or(OpProofsStorageError::InitializeStorageInconsistentState)?;
         }
 
-        let source = AccountsTrieInit::new(start_cursor);
-        self.initialize(
+        let source = AccountsTrieIter::new(start_cursor);
+        initialize(
             "accounts trie",
             source,
             INITIALIZE_STORAGE_THRESHOLD,
             INITIALIZE_LOG_THRESHOLD,
-        )?;
+            |entries| self.save_account_branches(entries),
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Initialize storage trie data
-    fn initialize_storages_trie(
+    async fn initialize_storages_trie(
         &self,
         start_key: Option<StorageTrieKey>,
     ) -> Result<(), OpProofsStorageError> {
@@ -303,23 +380,28 @@ impl<Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
                 .ok_or(OpProofsStorageError::InitializeStorageInconsistentState)?;
         }
 
-        let source = StoragesTrieInit::new(start_cursor);
-        self.initialize(
+        let source = StoragesTrieIter::new(start_cursor);
+        initialize(
             "storage trie",
             source,
             INITIALIZE_STORAGE_THRESHOLD,
             INITIALIZE_LOG_THRESHOLD,
-        )?;
+            |entries| self.save_storage_branches(entries),
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Run complete initialization of all preimage data
-    fn initialize_trie(&self, anchor: InitialStateAnchor) -> Result<(), OpProofsStorageError> {
-        self.initialize_hashed_accounts(anchor.latest_hashed_account_key)?;
-        self.initialize_hashed_storages(anchor.latest_hashed_storage_key)?;
-        self.initialize_storages_trie(anchor.latest_storage_trie_key)?;
-        self.initialize_accounts_trie(anchor.latest_account_trie_key)?;
+    async fn initialize_trie(
+        &self,
+        anchor: InitialStateAnchor,
+    ) -> Result<(), OpProofsStorageError> {
+        self.initialize_hashed_accounts(anchor.latest_hashed_account_key).await?;
+        self.initialize_hashed_storages(anchor.latest_hashed_storage_key).await?;
+        self.initialize_storages_trie(anchor.latest_storage_trie_key).await?;
+        self.initialize_accounts_trie(anchor.latest_account_trie_key).await?;
         Ok(())
     }
 
@@ -339,123 +421,23 @@ impl<Tx: DbTx + Sync, S: OpProofsStore + OpProofsInitialStateStore + Send>
     }
 
     /// Run the initialization job.
-    pub fn run(&self, best_number: u64, best_hash: B256) -> Result<(), OpProofsStorageError> {
-        let anchor = self.storage.initial_state_anchor()?;
+    pub async fn run(&self, best_number: u64, best_hash: B256) -> Result<(), OpProofsStorageError> {
+        let anchor = self.storage.initial_state_anchor().await?;
 
         match anchor.status {
             InitialStateStatus::Completed => return Ok(()),
             InitialStateStatus::NotStarted => {
-                self.storage.set_initial_state_anchor(BlockNumHash::new(best_number, best_hash))?;
+                self.storage
+                    .set_initial_state_anchor(BlockNumHash::new(best_number, best_hash))
+                    .await?;
             }
             InitialStateStatus::InProgress => {
                 self.validate_anchor_block(&anchor, best_number, best_hash)?;
             }
         }
 
-        self.initialize_trie(anchor)?;
-        self.storage.commit_initial_state()?;
-
-        Ok(())
-    }
-}
-
-/// Handles storing entries for a particular KV-pair type.
-trait InitTable {
-    /// Key of target table.
-    type Key: CompletionEstimatable + 'static;
-    /// Value of target table.
-    type Value: 'static;
-
-    /// Writes given entries to given storage.
-    fn store_entries(
-        store: &impl OpProofsInitialStateStore,
-        entries: impl IntoIterator<Item = (Self::Key, Self::Value)>,
-    ) -> Result<(), OpProofsStorageError>;
-}
-
-impl<C> InitTable for HashedAccountsInit<C> {
-    type Key = B256;
-    type Value = Account;
-
-    /// Save mapping of hashed addresses to accounts to storage.
-    fn store_entries(
-        store: &impl OpProofsInitialStateStore,
-        entries: impl IntoIterator<Item = (Self::Key, Self::Value)>,
-    ) -> Result<(), OpProofsStorageError> {
-        store.store_hashed_accounts(
-            entries.into_iter().map(|(address, account)| (address, Some(account))).collect(),
-        )?;
-        Ok(())
-    }
-}
-
-impl<C> InitTable for HashedStoragesInit<C> {
-    type Key = B256;
-    type Value = StorageEntry;
-
-    /// Save mapping of hashed addresses to storage entries to storage.
-    fn store_entries(
-        store: &impl OpProofsInitialStateStore,
-        entries: impl IntoIterator<Item = (Self::Key, Self::Value)>,
-    ) -> Result<(), OpProofsStorageError> {
-        let entries_iter = entries.into_iter();
-        let mut by_address: HashMap<B256, Vec<(B256, U256)>> =
-            HashMap::with_capacity(entries_iter.size_hint().0);
-
-        // Group entries by hashed address
-        for (address, entry) in entries_iter {
-            by_address.entry(address).or_default().push((entry.key, entry.value));
-        }
-        // Store each address's storage entries
-        for (address, storages) in by_address {
-            store.store_hashed_storages(address, storages)?;
-        }
-
-        Ok(())
-    }
-}
-
-impl<C> InitTable for AccountsTrieInit<C> {
-    type Key = StoredNibbles;
-    type Value = BranchNodeCompact;
-
-    /// Save mapping of account trie paths to branch nodes to storage.
-    fn store_entries(
-        store: &impl OpProofsInitialStateStore,
-        entries: impl IntoIterator<Item = (Self::Key, Self::Value)>,
-    ) -> Result<(), OpProofsStorageError> {
-        store.store_account_branches(
-            entries.into_iter().map(|(path, branch)| (path.0, Some(branch))).collect(),
-        )?;
-
-        Ok(())
-    }
-}
-
-impl<C> InitTable for StoragesTrieInit<C> {
-    type Key = B256;
-    type Value = StorageTrieEntry;
-
-    /// Save mapping of hashed addresses to storage trie entries to storage.
-    fn store_entries(
-        store: &impl OpProofsInitialStateStore,
-        entries: impl IntoIterator<Item = (Self::Key, Self::Value)>,
-    ) -> Result<(), OpProofsStorageError> {
-        let entries_iter = entries.into_iter();
-        let mut by_address: HashMap<B256, Vec<(Nibbles, Option<BranchNodeCompact>)>> =
-            HashMap::with_capacity(entries_iter.size_hint().0);
-
-        // Group entries by hashed address
-        for (hashed_address, storage_entry) in entries_iter {
-            by_address
-                .entry(hashed_address)
-                .or_default()
-                .push((storage_entry.nibbles.0, Some(storage_entry.node)));
-        }
-        // Store each address's storage trie branches
-        for (address, branches) in by_address {
-            store.store_storage_branches(address, branches)?;
-        }
+        self.initialize_trie(anchor).await?;
+        self.storage.commit_initial_state().await?;
 
         Ok(())
     }
@@ -465,14 +447,14 @@ impl<C> InitTable for StoragesTrieInit<C> {
 mod tests {
     use super::*;
     use crate::MdbxProofsStorage;
-    use alloy_primitives::{Address, U256, keccak256};
+    use alloy_primitives::{keccak256, Address, U256};
     use reth_db::{
-        Database, cursor::DbCursorRW, test_utils::create_test_rw_db, transaction::DbTxMut,
+        cursor::DbCursorRW, test_utils::create_test_rw_db, transaction::DbTxMut, Database,
     };
     use reth_primitives_traits::Account;
     use reth_trie::{
-        BranchNodeCompact, StorageTrieEntry, StoredNibbles, StoredNibblesSubKey, TrieMask,
-        hashed_cursor::HashedCursor, trie_cursor::TrieCursor,
+        hashed_cursor::HashedCursor, trie_cursor::TrieCursor, BranchNodeCompact, StorageTrieEntry,
+        StoredNibbles, StoredNibblesSubKey, TrieMask,
     };
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -499,8 +481,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_initialize_hashed_accounts() {
+    #[tokio::test]
+    async fn test_initialize_hashed_accounts() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let storage = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
@@ -535,8 +517,8 @@ mod tests {
 
         // Run initialization
         let tx = db.tx().unwrap();
-        let job = InitializationJob::new(storage.clone(), tx);
-        job.initialize_hashed_accounts(None).unwrap();
+        let job = InitializationJob::new(storage.clone(), &tx);
+        job.initialize_hashed_accounts(None).await.unwrap();
 
         // Verify data was stored (will be in sorted order)
         let mut account_cursor = storage.account_hashed_cursor(100).unwrap();
@@ -550,8 +532,8 @@ mod tests {
         assert_eq!(count, 3);
     }
 
-    #[test]
-    fn test_initialize_hashed_storage() {
+    #[tokio::test]
+    async fn test_initialize_hashed_storage() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let storage = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
@@ -586,8 +568,8 @@ mod tests {
 
         // Run initialization
         let tx = db.tx().unwrap();
-        let job = InitializationJob::new(storage.clone(), tx);
-        job.initialize_hashed_storages(None).unwrap();
+        let job = InitializationJob::new(storage.clone(), &tx);
+        job.initialize_hashed_storages(None).await.unwrap();
 
         // Verify data was stored for addr1
         let mut storage_cursor = storage.storage_hashed_cursor(addr1, 100).unwrap();
@@ -609,8 +591,8 @@ mod tests {
         assert_eq!(found[0], (storage_entries[2].1.key, storage_entries[2].1.value));
     }
 
-    #[test]
-    fn test_initialize_accounts_trie() {
+    #[tokio::test]
+    async fn test_initialize_accounts_trie() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let storage = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
@@ -623,7 +605,7 @@ mod tests {
         let nodes = vec![
             (StoredNibbles(Nibbles::from_nibbles_unchecked(vec![1])), branch.clone()),
             (StoredNibbles(Nibbles::from_nibbles_unchecked(vec![2])), branch.clone()),
-            (StoredNibbles(Nibbles::from_nibbles_unchecked(vec![3])), branch),
+            (StoredNibbles(Nibbles::from_nibbles_unchecked(vec![3])), branch.clone()),
         ];
 
         for (path, node) in &nodes {
@@ -634,21 +616,21 @@ mod tests {
 
         // Run initialization
         let tx = db.tx().unwrap();
-        let job = InitializationJob::new(storage.clone(), tx);
-        job.initialize_accounts_trie(None).unwrap();
+        let job = InitializationJob::new(storage.clone(), &tx);
+        job.initialize_accounts_trie(None).await.unwrap();
 
         // Verify data was stored
         let mut trie_cursor = storage.account_trie_cursor(100).unwrap();
         let mut count = 0;
         while let Some((path, _node)) = trie_cursor.next().unwrap() {
-            assert_eq!(path, nodes[count].0.0);
+            assert_eq!(path, nodes[count].0 .0);
             count += 1;
         }
         assert_eq!(count, 3);
     }
 
-    #[test]
-    fn test_initialize_storages_trie() {
+    #[tokio::test]
+    async fn test_initialize_storages_trie() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let storage = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
@@ -680,7 +662,7 @@ mod tests {
                 addr2,
                 StorageTrieEntry {
                     nibbles: StoredNibblesSubKey(Nibbles::from_nibbles_unchecked(vec![3])),
-                    node: branch,
+                    node: branch.clone(),
                 },
             ),
         ];
@@ -693,8 +675,8 @@ mod tests {
 
         // Run initialization
         let tx = db.tx().unwrap();
-        let job = InitializationJob::new(storage.clone(), tx);
-        job.initialize_storages_trie(None).unwrap();
+        let job = InitializationJob::new(storage.clone(), &tx);
+        job.initialize_storages_trie(None).await.unwrap();
 
         // Verify data was stored for addr1
         let mut trie_cursor = storage.storage_trie_cursor(addr1, 100).unwrap();
@@ -716,8 +698,8 @@ mod tests {
         assert_eq!(found[0], nodes[2].1.nibbles.0);
     }
 
-    #[test]
-    fn test_full_initialize_run() {
+    #[tokio::test]
+    async fn test_full_initialize_run() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let storage = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
@@ -770,18 +752,21 @@ mod tests {
 
         // Run full initialization
         let tx = db.tx().unwrap();
-        let job = InitializationJob::new(storage.clone(), tx);
+        let job = InitializationJob::new(storage.clone(), &tx);
         let best_number = 100;
         let best_hash = B256::repeat_byte(0x42);
 
         // Should be None initially
-        assert_eq!(storage.initial_state_anchor().unwrap().block, None);
-        assert_eq!(storage.get_earliest_block_number().unwrap(), None);
+        assert_eq!(storage.initial_state_anchor().await.unwrap().block, None);
+        assert_eq!(storage.get_earliest_block_number().await.unwrap(), None);
 
-        job.run(best_number, best_hash).unwrap();
+        job.run(best_number, best_hash).await.unwrap();
 
         // Should be set after initialization
-        assert_eq!(storage.get_earliest_block_number().unwrap(), Some((best_number, best_hash)));
+        assert_eq!(
+            storage.get_earliest_block_number().await.unwrap(),
+            Some((best_number, best_hash))
+        );
 
         // Verify data was initialized
         let mut account_cursor = storage.account_hashed_cursor(100).unwrap();
@@ -797,8 +782,8 @@ mod tests {
         assert!(storage_trie_cursor.next().unwrap().is_some());
     }
 
-    #[test]
-    fn test_initialize_run_skips_if_already_done() {
+    #[tokio::test]
+    async fn test_initialize_run_skips_if_already_done() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let storage = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
@@ -806,18 +791,19 @@ mod tests {
         // set and commit initial state anchor
         storage
             .set_initial_state_anchor(BlockNumHash::new(50, B256::repeat_byte(0x01)))
+            .await
             .expect("set anchor");
-        storage.commit_initial_state().expect("commit anchor");
+        storage.commit_initial_state().await.expect("commit anchor");
 
         let tx = db.tx().unwrap();
-        let job = InitializationJob::new(storage.clone(), tx);
+        let job = InitializationJob::new(storage.clone(), &tx);
 
         // Run initialization - should skip
-        job.run(100, B256::repeat_byte(0x42)).unwrap();
+        job.run(100, B256::repeat_byte(0x42)).await.unwrap();
 
         // Should still have the old anchor
         let anchor_block =
-            storage.initial_state_anchor().expect("get anchor").block.expect("block");
+            storage.initial_state_anchor().await.expect("get anchor").block.expect("block");
         assert_eq!(
             Some((anchor_block.number, anchor_block.hash)),
             Some((50, B256::repeat_byte(0x01)))
@@ -825,18 +811,21 @@ mod tests {
 
         // Should still have the old earliest block
         assert_eq!(
-            storage.get_earliest_block_number().unwrap(),
+            storage.get_earliest_block_number().await.unwrap(),
             Some((50, B256::repeat_byte(0x01)))
         );
     }
 
-    #[test]
-    fn test_initialize_resumes_hashed_accounts_with_no_dups() {
+    #[tokio::test]
+    async fn test_initialize_resumes_hashed_accounts_with_no_dups() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
 
-        store.set_initial_state_anchor(BlockNumHash::new(0, B256::default())).expect("set anchor");
+        store
+            .set_initial_state_anchor(BlockNumHash::new(0, B256::default()))
+            .await
+            .expect("set anchor");
 
         // Phase 1 in source: k1, k2
         let k1 = k(1);
@@ -854,13 +843,13 @@ mod tests {
         // Initialization #1
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_hashed_accounts(None).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_hashed_accounts(None).await.unwrap();
         }
 
         // Resume point must be k2 (max)
         assert_eq!(
-            store.initial_state_anchor().expect("get anchor").latest_hashed_account_key,
+            store.initial_state_anchor().await.expect("get anchor").latest_hashed_account_key,
             Some(k2)
         );
 
@@ -880,13 +869,13 @@ mod tests {
         // Initialization #2 (restart)
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_hashed_accounts(Some(k2)).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_hashed_accounts(Some(k2)).await.unwrap();
         }
 
         // Now resume point must be k4
         assert_eq!(
-            store.initial_state_anchor().expect("get anchor").latest_hashed_account_key,
+            store.initial_state_anchor().await.expect("get anchor").latest_hashed_account_key,
             Some(k4)
         );
 
@@ -910,13 +899,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_initialize_resumes_hashed_storages_with_no_dups() {
+    #[tokio::test]
+    async fn test_initialize_resumes_hashed_storages_with_no_dups() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
 
-        store.set_initial_state_anchor(BlockNumHash::new(0, B256::default())).expect("set anchor");
+        store
+            .set_initial_state_anchor(BlockNumHash::new(0, B256::default()))
+            .await
+            .expect("set anchor");
 
         let a1 = k(0x10);
         let a2 = k(0x20);
@@ -941,13 +933,14 @@ mod tests {
         // Initialization #1
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_hashed_storages(None).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_hashed_storages(None).await.unwrap();
         }
 
         // Latest key must be (a2, s21) because a2 > a1
         let last1 = store
             .initial_state_anchor()
+            .await
             .expect("get anchor")
             .latest_hashed_storage_key
             .expect("ok");
@@ -965,13 +958,14 @@ mod tests {
         // Initialization #2
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_hashed_storages(Some(HashedStorageKey::new(a2, s21))).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_hashed_storages(Some(HashedStorageKey::new(a2, s21))).await.unwrap();
         }
 
         // Latest key now must be (a2, s22)
         let last2 = store
             .initial_state_anchor()
+            .await
             .expect("get anchor")
             .latest_hashed_storage_key
             .expect("ok");
@@ -1001,13 +995,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_initialize_resumes_accounts_trie_with_no_dups() {
+    #[tokio::test]
+    async fn test_initialize_resumes_accounts_trie_with_no_dups() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
 
-        store.set_initial_state_anchor(BlockNumHash::new(0, B256::default())).expect("set anchor");
+        store
+            .set_initial_state_anchor(BlockNumHash::new(0, B256::default()))
+            .await
+            .expect("set anchor");
 
         let p1 = StoredNibbles(Nibbles::from_nibbles_unchecked(vec![1]));
         let p2 = StoredNibbles(Nibbles::from_nibbles_unchecked(vec![2]));
@@ -1026,12 +1023,12 @@ mod tests {
         // Initialization #1
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_accounts_trie(None).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_accounts_trie(None).await.unwrap();
         }
 
         assert_eq!(
-            store.initial_state_anchor().expect("get anchor").latest_account_trie_key,
+            store.initial_state_anchor().await.expect("get anchor").latest_account_trie_key,
             Some(p2.clone())
         );
 
@@ -1047,12 +1044,12 @@ mod tests {
         // Initialization #2
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_accounts_trie(Some(p2.clone())).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_accounts_trie(Some(p2.clone())).await.unwrap();
         }
 
         assert_eq!(
-            store.initial_state_anchor().expect("get anchor").latest_account_trie_key,
+            store.initial_state_anchor().await.expect("get anchor").latest_account_trie_key,
             Some(p4.clone())
         );
 
@@ -1069,13 +1066,16 @@ mod tests {
         assert_eq!(got[3], p4.0);
     }
 
-    #[test]
-    fn test_initialize_resumes_storages_trie_with_no_dups() {
+    #[tokio::test]
+    async fn test_initialize_resumes_storages_trie_with_no_dups() {
         let db = create_test_rw_db();
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MdbxProofsStorage::new(dir.path()).expect("env"));
 
-        store.set_initial_state_anchor(BlockNumHash::new(0, B256::default())).expect("set anchor");
+        store
+            .set_initial_state_anchor(BlockNumHash::new(0, B256::default()))
+            .await
+            .expect("set anchor");
 
         let a1 = k(0x10);
         let a2 = k(0x20);
@@ -1104,13 +1104,17 @@ mod tests {
         // Initialization #1
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
-            job.initialize_storages_trie(None).unwrap();
+            let job = InitializationJob::new(store.clone(), &tx);
+            job.initialize_storages_trie(None).await.unwrap();
         }
 
         // Latest must be (a2, n2) because a2 > a1
-        let last1 =
-            store.initial_state_anchor().expect("get anchor").latest_storage_trie_key.expect("ok");
+        let last1 = store
+            .initial_state_anchor()
+            .await
+            .expect("get anchor")
+            .latest_storage_trie_key
+            .expect("ok");
         assert_eq!(last1.hashed_address, a2);
         assert_eq!(last1.path.0, n2.0);
 
@@ -1129,14 +1133,19 @@ mod tests {
         // Initialization #2
         {
             let tx = db.tx().unwrap();
-            let job = InitializationJob::new(store.clone(), tx);
+            let job = InitializationJob::new(store.clone(), &tx);
             job.initialize_storages_trie(Some(StorageTrieKey::new(a2, StoredNibbles::from(n2.0))))
+                .await
                 .unwrap();
         }
 
         // Latest must now be (a2,n3)
-        let last2 =
-            store.initial_state_anchor().expect("get anchor").latest_storage_trie_key.expect("ok");
+        let last2 = store
+            .initial_state_anchor()
+            .await
+            .expect("get anchor")
+            .latest_storage_trie_key
+            .expect("ok");
         assert_eq!(last2.hashed_address, a2);
         assert_eq!(last2.path.0, n3.0);
 
