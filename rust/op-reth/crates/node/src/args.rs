@@ -4,6 +4,7 @@
 
 use clap::builder::ArgPredicate;
 use op_alloy_consensus::interop::SafetyLevel;
+use reth_optimism_txpool::supervisor::DEFAULT_SUPERVISOR_URL;
 use std::{path::PathBuf, time::Duration};
 use url::Url;
 
@@ -38,9 +39,13 @@ pub struct RollupArgs {
     #[arg(long = "rollup.enable-tx-conditional", default_value = "false")]
     pub enable_tx_conditional: bool,
 
-    /// HTTP endpoint for the supervisor. When not set, interop transaction validation is disabled.
-    #[arg(long = "rollup.supervisor-http", value_name = "SUPERVISOR_HTTP_URL")]
-    pub supervisor_http: Option<String>,
+    /// HTTP endpoint for the supervisor
+    #[arg(
+        long = "rollup.supervisor-http",
+        value_name = "SUPERVISOR_HTTP_URL",
+        default_value = DEFAULT_SUPERVISOR_URL
+    )]
+    pub supervisor_http: String,
 
     /// Safety level for the supervisor
     #[arg(
@@ -149,7 +154,7 @@ impl Default for RollupArgs {
             compute_pending_block: false,
             discovery_v4: false,
             enable_tx_conditional: false,
-            supervisor_http: None,
+            supervisor_http: DEFAULT_SUPERVISOR_URL.to_string(),
             supervisor_safety_level: SafetyLevel::CrossUnsafe,
             sequencer_headers: Vec::new(),
             historical_rpc: None,
