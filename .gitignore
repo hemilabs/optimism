@@ -1,68 +1,24 @@
-### Hemi
-/bin/
-/dist/
-/pkg/
-/.gocache/
+.DS_Store
+node_modules
+results
+temp
+coverage.json
+**/lcov.info
+**/lcov-upgrade.info
+**/lcov-all.info
 
-## Tests
-/service/tbc/.testleveldb/
+yarn-error.log
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+.pnp.*
 
-### Common editors
-## Vim
-# Swap
-[._]*.s[a-v][a-z]
-!*.svg
-[._]*.sw[a-p]
-[._]s[a-rt-v][a-z]
-[._]ss[a-gi-z]
-[._]sw[a-p]
-# Session
-Session.vim
-Sessionx.vim
-# Temporary
-.netrwhist
-# Auto-generated tag files
-tags
-# Persistent undo
-[._]*.un~
+dist
+artifacts
+cache
 
-## Emacs
-# -*- mode: gitignore; -*-
-*~
-\#*\#
-/.emacs.desktop
-/.emacs.desktop.lock
-*.elc
-auto-save-list
-tramp
-.\#*
-# Org-mode
-.org-id-locations
-*_archive
-# flymake-mode
-*_flymake.*
-# eshell files
-/eshell/history
-/eshell/lastdir
-# elpa packages
-/elpa/
-# reftex files
-*.rel
-# AUCTeX auto folder
-/auto/
-# cask packages
-.cask/
-dist/
-# Flycheck
-flycheck_*.el
-# server auth directory
-/server/
-# projectiles files
-.projectile
-# directory configuration
-.dir-locals.el
-# network security
-/network-security.data
+!op-chain-ops/foundry/testdata/srcmaps/cache
+!op-chain-ops/foundry/testdata/srcmaps/artifacts
 
 !op-deployer/pkg/deployer/artifacts
 
@@ -73,7 +29,6 @@ packages/contracts-bedrock/deployments/anvil
 
 # jetbrains
 .idea/
-*.iml
 
 .secrets
 .env

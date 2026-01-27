@@ -5,13 +5,13 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-core/forks"
-	op_service "github.com/ethereum-optimism/optimism/op-service"
 
 	"github.com/ethereum-optimism/superchain-registry/validation"
 
+	"github.com/ethereum/go-ethereum/superchain"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/superchain"
 )
 
 const (
@@ -33,6 +33,8 @@ const (
 	Eip1559Denominator              uint64 = 50
 	Eip1559Elasticity               uint64 = 6
 
+	UseRevenueShare = true
+
 	ContractsV160Tag        = "op-contracts/v1.6.0"
 	ContractsV180Tag        = "op-contracts/v1.8.0-rc.4"
 	ContractsV170Beta1L2Tag = "op-contracts/v1.7.0-beta.1+l2-contracts"
@@ -40,8 +42,11 @@ const (
 	ContractsV300Tag        = "op-contracts/v3.0.0"
 	ContractsV400Tag        = "op-contracts/v4.0.0-rc.7"
 	ContractsV410Tag        = "op-contracts/v4.1.0"
-	CurrentTag              = ContractsV410Tag
+	ContractsV500Tag        = "op-contracts/v5.0.0"
+	CurrentTag              = ContractsV500Tag
 )
+
+var L1FeesDepositor = common.HexToAddress("0xed9B99a703BaD32AC96FDdc313c0652e379251Fd")
 
 var DisputeAbsolutePrestate = common.HexToHash("0x038512e02c4c3f7bdaec27d00edf55b7155e0905301e1a88083e4e0a6764d54c")
 
@@ -53,7 +58,7 @@ func L1VersionsFor(chainID uint64) (validation.Versions, error) {
 	switch chainID {
 	case 1:
 		return validation.StandardVersionsMainnet, nil
-	case 11155111, 1337:
+	case 11155111:
 		return validation.StandardVersionsSepolia, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -64,7 +69,7 @@ func GuardianAddressFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.Guardian), nil
-	case 11155111, 1337:
+	case 11155111:
 		return common.Address(validation.StandardConfigRolesSepolia.Guardian), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -75,7 +80,7 @@ func ChallengerAddressFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.Challenger), nil
-	case 11155111, 1337:
+	case 11155111:
 		return common.Address(validation.StandardConfigRolesSepolia.Challenger), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -120,7 +125,7 @@ func SuperchainProxyAdminAddrFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.HexToAddress("0x543bA4AADBAb8f9025686Bd03993043599c6fB04"), nil
-	case 11155111, 1337:
+	case 11155111:
 		return common.HexToAddress("0x189aBAAaa82DfC015A588A7dbaD6F13b1D3485Bc"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -131,7 +136,7 @@ func L1ProxyAdminOwner(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.L1ProxyAdminOwner), nil
-	case 11155111, 1337:
+	case 11155111:
 		return common.Address(validation.StandardConfigRolesSepolia.L1ProxyAdminOwner), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -142,7 +147,7 @@ func L2ProxyAdminOwner(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.L2ProxyAdminOwner), nil
-	case 11155111, 1337:
+	case 11155111:
 		return common.Address(validation.StandardConfigRolesSepolia.L2ProxyAdminOwner), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -153,39 +158,17 @@ func ProtocolVersionsOwner(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
 		return common.Address(validation.StandardConfigRolesMainnet.ProtocolVersionsOwner), nil
-	case 11155111, 1337:
+	case 11155111:
 		return common.Address(validation.StandardConfigRolesSepolia.ProtocolVersionsOwner), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
 }
 
-// DefaultHardforkScheduleForTag is used to determine which hardforks should be activated by default given a
-// contract tag. For example, passing in v1.6.0 will return all hardforks up to and including Granite. This allows
-// OP Deployer to set sane defaults for hardforks. This is not an ideal solution, but it will have to work until we get
-// to MCP L2.
-func DefaultHardforkScheduleForTag(tag string) *genesis.UpgradeScheduleDeployConfig {
-	sched := &genesis.UpgradeScheduleDeployConfig{
-		L2GenesisRegolithTimeOffset: op_service.U64UtilPtr(0),
-		L2GenesisCanyonTimeOffset:   op_service.U64UtilPtr(0),
-		L2GenesisDeltaTimeOffset:    op_service.U64UtilPtr(0),
-		L2GenesisEcotoneTimeOffset:  op_service.U64UtilPtr(0),
-		L2GenesisFjordTimeOffset:    op_service.U64UtilPtr(0),
-		L2GenesisGraniteTimeOffset:  op_service.U64UtilPtr(0),
-	}
-
-	switch tag {
-	case ContractsV160Tag, ContractsV170Beta1L2Tag:
-		return sched
-	case ContractsV180Tag, ContractsV200Tag, ContractsV300Tag:
-		sched.ActivateForkAtGenesis(forks.Holocene)
-	case ContractsV400Tag, ContractsV410Tag:
-		sched.ActivateForkAtGenesis(forks.Holocene)
-		sched.ActivateForkAtGenesis(forks.Isthmus)
-	default:
-		sched.ActivateForkAtGenesis(forks.Holocene)
-		sched.ActivateForkAtGenesis(forks.Isthmus)
-	}
+// DefaultHardforkSchedule is used to determine which hardforks should be activated by default.
+func DefaultHardforkSchedule() *genesis.UpgradeScheduleDeployConfig {
+	sched := &genesis.UpgradeScheduleDeployConfig{}
+	sched.ActivateForkAtGenesis(forks.Jovian)
 
 	return sched
 }

@@ -13,9 +13,9 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum-optimism/optimism/op-service/solabi"
 )
 
@@ -502,9 +502,7 @@ func L1InfoDeposit(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, 
 		// Apply Cancun blob base fee calculation if this chain needs the L1 Pectra
 		// blob schedule fix (mostly Holesky and Sepolia OP-Stack chains).
 		if t := rollupCfg.PectraBlobScheduleTime; t != nil && block.Time() < *t {
-			if rollupCfg.L2ChainID.Cmp(big.NewInt(43111)) == 0 && l2Timestamp < 1750870800 {
-				// Special case for Hemi mainnet, do nothing below this timestamp
-			} else if ebg := block.ExcessBlobGas(); ebg != nil {
+			if ebg := block.ExcessBlobGas(); ebg != nil {
 				l1BlockInfo.BlobBaseFee = eth.CalcBlobFeeCancun(*ebg)
 			} else {
 				// If L1 isn't on Cancun yet. It should already have been set

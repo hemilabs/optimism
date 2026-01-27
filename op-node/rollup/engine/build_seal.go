@@ -104,18 +104,7 @@ func (e *EngineController) onBuildSeal(ctx context.Context, ev BuildSealEvent) {
 		return
 	}
 
-	forwardDrift := int64(ref.Time*1000) - time.Now().UnixMilli()
-	if forwardDrift > 0 {
-		// Block we are sealing is ahead of local clock, delay sealing accordingly
-		e.log.Debug(fmt.Sprintf("Block sealer waiting for %d ms", forwardDrift))
-		time.Sleep(time.Duration(forwardDrift) * time.Millisecond)
-		e.log.Debug("Done waiting, proceeding to seal")
-	}
-
 	now := time.Now()
-
-	e.log.Trace(fmt.Sprintf("ref.Time: %d, time.Now().Unix(): %d", ref.Time, time.Now().Unix()))
-
 	sealTime := now.Sub(sealingStart)
 	buildTime := now.Sub(ev.BuildStarted)
 	e.metrics.RecordSequencerSealingTime(sealTime)

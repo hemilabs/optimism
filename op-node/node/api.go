@@ -10,8 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/hemilabs/heminetwork/api/bfgapi"
-	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -178,19 +176,6 @@ func (n *nodeAPI) DependencySet(_ context.Context) (depset.DependencySet, error)
 
 func (n *nodeAPI) Version(ctx context.Context) (string, error) {
 	return version.Version + "-" + version.Meta, nil
-}
-
-// TODO: fix me
-func (n *nodeAPI) BtcFinalityByRecentKeystones(ctx context.Context, numRecentKeystones hexutil.Uint) (interface{}, error) {
-	return nil, errors.New("not yet")
-}
-
-func (n *nodeAPI) BtcFinalityByKeystones(ctx context.Context, l2Keystones []hemi.L2Keystone) (interface{}, error) {
-	return nil, errors.New("not yet")
-}
-
-func (n *nodeAPI) BtcFinalityByBlockHash(ctx context.Context, blockHash common.Hash, bfgURL string) (bfgapi.L2KeystoneBitcoinFinalityResponse, error) {
-	return getBTCFinalityForBlockHash(ctx, blockHash, n.client, n.dr, bfgURL)
 }
 
 type opstackAPI struct {

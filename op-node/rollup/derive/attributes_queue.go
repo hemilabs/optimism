@@ -84,7 +84,7 @@ func (aq *AttributesQueue) NextAttributes(ctx context.Context, parent eth.L2Bloc
 	if aq.batch == nil {
 		batch, concluding, err := aq.prev.NextBatch(ctx, parent)
 		if err != nil {
-			return nil, fmt.Errorf("error getting next batch: %w", err)
+			return nil, err
 		}
 		aq.batch = batch
 		aq.concluding = concluding
@@ -92,7 +92,7 @@ func (aq *AttributesQueue) NextAttributes(ctx context.Context, parent eth.L2Bloc
 
 	// Actually generate the next attributes
 	if attrs, err := aq.createNextAttributes(ctx, aq.batch, parent); err != nil {
-		return nil, fmt.Errorf("error creating next attributes: %w", err)
+		return nil, err
 	} else {
 		// Clear out the local state once we will succeed
 		attr := AttributesWithParent{

@@ -14,9 +14,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/ethereum-optimism/optimism/op-core/forks"
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
@@ -49,7 +49,7 @@ func jovianArgs() matchArgs {
 		validTxData, _        = validTx.MarshalBinary()
 		minBaseFee            = uint64(1e9)
 
-		validJovianExtraData = eth.BytesMax32(eip1559.EncodeMinBaseFeeExtraData(
+		validJovianExtraData = eth.BytesMax32(rollup.EncodeJovianExtraData(
 			*defaultOpConfig.EIP1559DenominatorCanyon, defaultOpConfig.EIP1559Elasticity, minBaseFee))
 		validJovianEIP1559Params = new(eth.Bytes8)
 	)
@@ -347,7 +347,7 @@ func TestAttributesMatch(t *testing.T) {
 		{
 			args:      jovianArgsMinBaseFeeMissingFromBlock(),
 			rollupCfg: cfg(forks.Jovian),
-			err:       "invalid block extraData: MinBaseFee extraData should be 17 bytes, got 9",
+			err:       "invalid block extraData: Jovian extraData should be 17 bytes, got 9",
 			desc:      "missingMinBaseFee",
 		},
 		{

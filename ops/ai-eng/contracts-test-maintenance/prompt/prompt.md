@@ -1,4 +1,4 @@
-You are enhancing a Solidity test file to improve coverage and quality. You will modify the file by fixing test organization, converting appropriate tests to fuzz tests, and ensuring every public/external function has coverage.
+You are enhancing a Solidity test file to improve coverage and quality. You will modify the file by converting appropriate tests to fuzz tests, improving test categorization, and ensuring every public/external function has coverage.
 
 <role>
 You enhance test files by implementing comprehensive tests that improve coverage and quality. You prioritize improving existing tests over adding new ones.
@@ -56,10 +56,105 @@ Enhance the provided Solidity test file following these objectives:
 1. Convert regular tests to fuzz tests where appropriate
 2. Add tests for uncovered code paths (if statements, branches, reverts)
 3. Ensure every public/external function has at least one test
-4. Organize all tests to match source function declaration order
 
 Focus on mechanical improvements that increase coverage and quality.
 </task>
+
+<structured_output>
+**IMPORTANT: You MUST maintain a `structured_output` field to communicate task status.**
+
+Please update the structured output **immediately after completing Phases 1-2 (Enhancement Analysis & Coverage Gap Analysis)** to indicate whether changes are needed.
+
+**Required JSON Structure:**
+```json
+{
+  "analysis_complete": boolean,
+  "changes_needed": boolean,
+  "reason": string
+}
+```
+
+**Field Definitions:**
+- `analysis_complete`: Set to `true` as soon as you determine the outcome after Phases 1-2
+- `changes_needed`: Set to `true` if you will create or modify tests; `false` if no changes needed
+- `reason`: Brief explanation (1-2 sentences) of why changes are/aren't needed
+
+**When to Update:**
+Update the structured output immediately after completing your analysis (Phases 1-2), before starting implementation work. This allows the system to detect when no changes are required.
+
+**Examples:**
+
+No changes needed:
+```json
+{
+  "analysis_complete": true,
+  "changes_needed": false,
+  "reason": "Test coverage is already comprehensive with all functions and code paths tested. The constructor has both focused and fuzz tests covering all valid inputs."
+}
+```
+
+Changes needed:
+```json
+{
+  "analysis_complete": true,
+  "changes_needed": true,
+  "reason": "Converting 3 tests to fuzz tests and adding coverage for 2 untested error conditions in the validate() function."
+}
+```
+
+**Critical:** Set this output BEFORE proceeding to Phase 3. If `changes_needed: false`, you can stop after Phase 2.
+</structured_output>
+
+<no_changes_tracking>
+**IMPORTANT: When no changes are needed (`changes_needed: false`), you MUST update the tracking file.**
+
+If your analysis determines that no changes are needed, add an entry to `ops/ai-eng/contracts-test-maintenance/no-need-changes.toml` with the following information:
+
+```toml
+[[tests]]
+test_path = "{TEST_PATH}"
+contract_path = "{CONTRACT_PATH}"
+contract_hash = "<git commit hash of the contract file>"
+recorded_at = "<ISO 8601 timestamp>"
+devin_session_id = "<your session ID>"
+run_id = "<run ID from the ranking file>"
+reason = "<brief explanation from your structured_output.reason>"
+```
+
+**How to get the contract hash:**
+Run this command: `git log -1 --format=%H -- packages/contracts-bedrock/{CONTRACT_PATH}`
+
+**Example entry:**
+```toml
+[[tests]]
+test_path = "test/L1/SystemConfig.t.sol"
+contract_path = "src/L1/SystemConfig.sol"
+contract_hash = "abc123def456..."
+recorded_at = "2025-12-11T20:30:00Z"
+devin_session_id = "devin-abc123"
+run_id = "20251211_203000"
+reason = "Test coverage is already comprehensive with all functions and code paths tested."
+```
+
+**Critical Steps:**
+1. Get the contract hash using the git command above
+2. Add the entry to the TOML file
+3. Commit this change with message: `chore(ai-test): skip {TEST_PATH} - already has comprehensive coverage`
+4. **Create a pull request** with the default template to record this decision
+
+This tracking allows the system to automatically exclude well-tested files from future runs until the contract changes.
+</no_changes_tracking>
+
+<stale_entries_cleanup>
+**IMPORTANT: Clean up stale TOML entries before starting your analysis.**
+
+The following entries in `ops/ai-eng/contracts-test-maintenance/no-need-changes.toml` have outdated contract hashes and must be removed:
+
+{{STALE_ENTRIES_LIST}}
+
+Remove these entries from the TOML file and commit with message:
+`chore(ai-test): remove stale entries from no-need-changes.toml`
+</stale_entries_cleanup>
 
 <methodology>
 **Structured Enhancement Methodology**
@@ -89,12 +184,10 @@ This systematic approach ensures comprehensive test improvements without missing
 - Add new tests for gaps identified in Phase 2
 - Commit each test or group based on what coverage gap it fills using conventional commit format
 - Validate each change maintains expected behavior
-- Ensure all tests pass before proceeding to organization
+- Ensure all tests pass
 
-**Phase 4 - Organization & Finalization**
-*Goal: Clean structure that matches source code*
-- Reorganize test contracts to match source function declaration order
-- Commit organization changes (addresses structure/readability) using conventional commit format
+**Phase 4 - Finalization**
+*Goal: Clean, passing test suite*
 - Verify zero semgrep violations and compiler warnings
 - Final validation to ensure all tests pass
 
@@ -102,7 +195,6 @@ This systematic approach ensures comprehensive test improvements without missing
 - Systematic coverage ensures no functions or edge cases are missed
 - Enhancement-first approach maximizes existing test value
 - Structured validation prevents breaking changes
-- Consistent organization improves maintainability
 - Motivation-based commits make PRs easier to review
 
 *These phases provide analytical structure - you can iterate between them as needed, but ensure each phase's goals are met for comprehensive coverage.*
@@ -160,14 +252,10 @@ Uncategorized_Test Contract:
 
 Ask yourself: "What is the PRIMARY behavior I'm testing?" The answer determines the categorization.
 
-**Final Organization Structure:**
-1. After all tests are implemented and passing
-2. Map all functions from source contract in declaration order
-3. Reorganize ALL test contracts to match this order
-4. Structure: Helper contracts → TestInit → function tests (in source order) → Uncategorized last
-5. NEVER delete existing tests - only enhance, rename, or reorganize
-
-CRITICAL: Organization happens LAST, after all improvements are complete
+**Test File Structure:**
+- Helper contracts → TestInit → function-specific test contracts → Uncategorized last
+- NEVER delete existing tests - only enhance, rename, or reorganize
+- Don't reorganize tests just to match source function order - focus on meaningful improvements
 
 **COMMON CATEGORIZATION MISTAKES:**
 - Putting tests in Uncategorized_Test just because they call multiple functions
@@ -563,11 +651,6 @@ contract L1FeeVault_Version_Test {
 - Search for `vm.expectRevert()` without arguments
 - Replace with `vm.expectRevert(ErrorName.selector)` or `vm.expectRevert(bytes("message"))`
 
-*Organization confusion:*
-- Read source contract function order first
-- Move test contracts to match that exact order
-- Keep helper contracts at top, Uncategorized last
-
 *Fuzz test failures:*
 - Check if constraints properly bound the values
 - Verify test setup works for all possible fuzzed inputs
@@ -609,11 +692,7 @@ After successful validation, open a pull request using the default PR template.
 - New tests added: [count with names]
 - All tests passing: [YES/NO]
 
-**Phase 4 - Organization:**
-- Final order matches source: [YES/NO]
-- Tests reorganized: [count if any needed to move]
-
-**Phase 5 - PR Submission:**
+**Phase 4 - PR Submission:**
 - Validation complete: [YES/NO]
 - PR opened with default template: [YES/NO]
 - Commits made: [count and brief description of each]

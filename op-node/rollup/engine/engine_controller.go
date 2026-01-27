@@ -7,10 +7,12 @@ import (
 	gosync "sync"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	opmetrics "github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -19,10 +21,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/event"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-
-	"github.com/hemilabs/heminetwork/hemi"
-
 )
 
 type syncStatusEnum int
@@ -65,11 +63,12 @@ type ExecEngine interface {
 	ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error)
 	NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error)
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
+	L2BlockRefByHash(ctx context.Context, hash common.Hash) (eth.L2BlockRef, error)
+	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
 	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
 	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
 	NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error)
 	PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error)
-	L2BlockRefByHash(ctx context.Context, hash common.Hash) (eth.L2BlockRef, error)
 }
 
 type opgethNotification struct {
@@ -147,6 +146,8 @@ type EngineController struct {
 	backupUnsafeHead eth.L2BlockRef
 
 	needFCUCall bool
+	// Safe head debouncing: buffer safe head updates until other updates occur
+	needSafeHeadUpdate bool
 	// Track when the rollup node changes the forkchoice to restore previous
 	// known unsafe chain. e.g. Unsafe Reorg caused by Invalid span batch.
 	// This update does not retry except engine returns non-input error
@@ -154,16 +155,12 @@ type EngineController struct {
 	// of the chain.
 	needFCUCallForBackupUnsafeReorg bool
 
-	// Building State
-	buildingOnto eth.L2BlockRef
-	buildingInfo eth.PayloadInfo
-	buildingSafe bool
-
-	opgethNotifierCh chan *opgethNotification
 	// For clearing safe head db when EL sync started
 	// EngineController is first initialized and used to initialize SyncDeriver.
 	// Embed SyncDeriver into EngineController after initializing SyncDeriver
 	SyncDeriver SyncDeriver
+
+	opgethNotifierCh chan *opgethNotification
 
 	// Components that need to be notified during force reset
 	attributesResetter     AttributesForceResetter
@@ -187,19 +184,19 @@ func NewEngineController(ctx context.Context, engine ExecEngine, log log.Logger,
 	}
 
 	e := &EngineController{
-		engine:         engine,
-		log:            log,
-		metrics:        m,
-		chainSpec:      rollup.NewChainSpec(rollupCfg),
-		rollupCfg:      rollupCfg,
-		syncCfg:        syncCfg,
-		syncStatus:     syncStatus,
-		clock:          clock.SystemClock,
-		l1:             l1,
-		ctx:            ctx,
-		emitter:        emitter,
-		unsafePayloads: NewPayloadsQueue(log, maxUnsafePayloadsMemory, payloadMemSize),
-		opgethNotifierCh: make(chan *opgethNotification, 10),
+		engine:           engine,
+		log:              log,
+		metrics:          m,
+		chainSpec:        rollup.NewChainSpec(rollupCfg),
+		rollupCfg:        rollupCfg,
+		syncCfg:          syncCfg,
+		syncStatus:       syncStatus,
+		clock:            clock.SystemClock,
+		l1:               l1,
+		ctx:              ctx,
+		emitter:          emitter,
+		unsafePayloads:   NewPayloadsQueue(log, maxUnsafePayloadsMemory, payloadMemSize),
+		opgethNotifierCh: make(chan *opgethNotification),
 	}
 
 	// XXX see if there is a better place to start this goroutine.
@@ -207,7 +204,6 @@ func NewEngineController(ctx context.Context, engine ExecEngine, log log.Logger,
 
 	return e
 }
-
 func (e *EngineController) UnsafeL2Head() eth.L2BlockRef {
 	return e.unsafeHead
 }
@@ -243,13 +239,13 @@ func (e *EngineController) requestForkchoiceUpdate(ctx context.Context) {
 	})
 }
 
-func (e *EngineController) IsEngineSyncing() bool {
+func (e *EngineController) IsEngineInitialELSyncing() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.isEngineSyncing()
+	return e.isEngineInitialELSyncing()
 }
 
-func (e *EngineController) isEngineSyncing() bool {
+func (e *EngineController) isEngineInitialELSyncing() bool {
 	return e.syncStatus == syncStatusWillStartEL ||
 		e.syncStatus == syncStatusStartedEL ||
 		e.syncStatus == syncStatusFinishedELButNotFinalized
@@ -260,6 +256,7 @@ func (e *EngineController) SetFinalizedHead(r eth.L2BlockRef) {
 	e.metrics.RecordL2Ref("l2_finalized", r)
 	e.finalizedHead = r
 	e.needFCUCall = true
+	e.needSafeHeadUpdate = false
 }
 
 // SetPendingSafeL2Head implements LocalEngineControl.
@@ -279,6 +276,8 @@ func (e *EngineController) SetSafeHead(r eth.L2BlockRef) {
 	e.metrics.RecordL2Ref("l2_safe", r)
 	e.safeHead = r
 	e.needFCUCall = true
+	// Instead of immediately calling FCU, buffer this update
+	e.needSafeHeadUpdate = true
 }
 
 // SetUnsafeHead sets the local-unsafe head.
@@ -286,6 +285,7 @@ func (e *EngineController) SetUnsafeHead(r eth.L2BlockRef) {
 	e.metrics.RecordL2Ref("l2_unsafe", r)
 	e.unsafeHead = r
 	e.needFCUCall = true
+	e.needSafeHeadUpdate = false
 	e.chainSpec.CheckForkActivation(e.log, r)
 }
 
@@ -299,15 +299,8 @@ func (e *EngineController) SetCrossUnsafeHead(r eth.L2BlockRef) {
 func (e *EngineController) SetBackupUnsafeL2Head(r eth.L2BlockRef, triggerReorg bool) {
 	e.metrics.RecordL2Ref("l2_backup_unsafe", r)
 	e.backupUnsafeHead = r
+	e.flushPendingSafeHead()
 	e.needFCUCallForBackupUnsafeReorg = triggerReorg
-}
-
-// Engine Methods
-
-func (e *EngineController) resetBuildingState() {
-	e.buildingInfo = eth.PayloadInfo{}
-	e.buildingOnto = eth.L2BlockRef{}
-	e.buildingSafe = false
 }
 
 func (e *EngineController) SetCrossUpdateHandler(handler CrossUpdateHandler) {
@@ -384,6 +377,11 @@ func (e *EngineController) checkNewPayloadStatus(status eth.ExecutePayloadStatus
 		// Allow SYNCING and ACCEPTED if engine EL sync is enabled
 		return status == eth.ExecutionValid || status == eth.ExecutionSyncing || status == eth.ExecutionAccepted
 	}
+	// if SyncModeReqResp is false, meaning we no longer use Req/Res P2P protocol, we should also tolerate SYNCING response, when in sync.CLSync mode, so that
+	// the CL node can get to making an FCU call after NewPayload returns SYNCING, and can trigger the EL sync behavior.
+	if !e.syncCfg.SyncModeReqResp {
+		return status == eth.ExecutionValid || status == eth.ExecutionSyncing
+	}
 	return status == eth.ExecutionValid
 }
 
@@ -454,7 +452,7 @@ func (e *EngineController) tryUpdateEngineInternal(ctx context.Context) error {
 	if !e.needFCUCall {
 		return ErrNoFCUNeeded
 	}
-	if e.isEngineSyncing() {
+	if e.isEngineInitialELSyncing() {
 		e.log.Warn("Attempting to update forkchoice state while EL syncing")
 	}
 	if err := e.initializeUnknowns(ctx); err != nil {
@@ -494,6 +492,7 @@ func (e *EngineController) tryUpdateEngineInternal(ctx context.Context) error {
 		e.SetBackupUnsafeL2Head(eth.L2BlockRef{}, false)
 	}
 	e.needFCUCall = false
+	e.needSafeHeadUpdate = false
 
 	envelope, err := e.engine.PayloadByHash(ctx, e.unsafeHead.Hash)
 	if err != nil {
@@ -555,6 +554,7 @@ func (e *EngineController) insertUnsafePayload(ctx context.Context, envelope *et
 	if err != nil {
 		return derive.NewTemporaryError(fmt.Errorf("failed to update insert payload: %w", err))
 	}
+	e.log.Debug("insertUnsafePayload e.NewPayload returned", "ref", ref, "status", status.Status)
 	if status.Status == eth.ExecutionInvalid {
 		e.emitter.Emit(ctx, PayloadInvalidEvent{
 			Envelope: envelope,
@@ -601,6 +601,7 @@ func (e *EngineController) insertUnsafePayload(ctx context.Context, envelope *et
 			return derive.NewTemporaryError(fmt.Errorf("failed to update forkchoice to prepare for new unsafe payload: %w", err))
 		}
 	}
+	e.log.Debug("insertUnsafePayload e.ForkchoiceUpdate returned", "ref", ref, "status", fcRes.PayloadStatus.Status)
 	if !e.checkForkchoiceUpdatedStatus(fcRes.PayloadStatus.Status) {
 		payload := envelope.ExecutionPayload
 		return derive.NewTemporaryError(fmt.Errorf("cannot prepare unsafe chain for new payload: new - %v; parent: %v; err: %w",
@@ -609,17 +610,12 @@ func (e *EngineController) insertUnsafePayload(ctx context.Context, envelope *et
 	fcu2Finish := time.Now()
 	e.SetUnsafeHead(ref)
 	e.needFCUCall = false
+	e.needSafeHeadUpdate = false
 	e.emitter.Emit(ctx, UnsafeUpdateEvent{Ref: ref})
 
 	if e.syncStatus == syncStatusFinishedELButNotFinalized {
 		e.log.Info("Finished EL sync", "sync_duration", e.clock.Since(e.elStart), "finalized_block", ref.ID().String())
 		e.syncStatus = syncStatusFinishedEL
-	}
-
-	e.log.Info("checking whether to notify opgeth from InsertUnsafePayload")
-
-	if err := e.parseAndNotifyOpgeth(ctx, envelope); err != nil {
-		return err
 	}
 
 	if fcRes.PayloadStatus.Status == eth.ExecutionValid {
@@ -639,45 +635,13 @@ func (e *EngineController) insertUnsafePayload(ctx context.Context, envelope *et
 	return nil
 }
 
-func (e *EngineController) parseAndNotifyOpgeth(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
-	bn := &opgethNotification{
-		unsafeL2: *envelope.ExecutionPayload,
+// flushPendingSafeHead applies any pending safe head update to the current forkchoice state.
+// This should be called before any FCU call to ensure the latest safe head is included.
+func (e *EngineController) flushPendingSafeHead() {
+	if e.needSafeHeadUpdate {
+		e.needFCUCall = true
+		e.needSafeHeadUpdate = false
 	}
-
-	l2BlockHeight := envelope.ExecutionPayload.BlockNumber
-
-	prevKeystoneHeight := int64(l2BlockHeight-(l2BlockHeight%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
-	if l2BlockHeight%hemi.KeystoneHeaderPeriod != 0 {
-		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
-	}
-
-	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
-
-	var prevKeystoneRef *eth.L2BlockRef = nil
-	if prevKeystoneHeight > 0 && e.syncCfg.SyncMode == sync.CLSync {
-		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
-		if err != nil {
-			return derive.NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
-		}
-
-		ref, err := derive.PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
-		if err != nil {
-			return derive.NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
-		}
-		prevKeystoneRef = &ref
-	}
-
-	if prevKeystoneRef != nil {
-		bn.unsafeL2PrevKeystone = *prevKeystoneRef
-	}
-
-	select {
-	case e.opgethNotifierCh <- bn:
-	default:
-		e.log.Warn("opgeth notifier channel full, dropping event...")
-	}
-
-	return nil
 }
 
 // shouldTryBackupUnsafeReorg checks reorging(restoring) unsafe head to backupUnsafeHead is needed.
@@ -687,7 +651,7 @@ func (e *EngineController) shouldTryBackupUnsafeReorg() bool {
 		return false
 	}
 	// This method must be never called when EL sync. If EL sync is in progress, early return.
-	if e.isEngineSyncing() {
+	if e.isEngineInitialELSyncing() {
 		e.log.Warn("Attempting to unsafe reorg using backupUnsafe while EL syncing")
 		return false
 	}
@@ -712,6 +676,8 @@ func (e *EngineController) tryBackupUnsafeReorg(ctx context.Context) (bool, erro
 		// Do not need to perform FCU.
 		return false, nil
 	}
+	// Flush pending safe head updates since backup unsafe reorgs are complex
+	e.flushPendingSafeHead()
 	// Only try FCU once because execution engine may forgot backupUnsafeHead
 	// or backupUnsafeHead is not part of the chain.
 	// Exception: Retry when forkChoiceUpdate returns non-input error.
@@ -759,78 +725,6 @@ func (e *EngineController) tryBackupUnsafeReorg(ctx context.Context) (bool, erro
 	// Execution engine could not reorg back to previous unsafe head.
 	return true, derive.NewTemporaryError(fmt.Errorf("cannot restore unsafe chain using backupUnsafe: err: %w",
 		eth.ForkchoiceUpdateErr(fcRes.PayloadStatus)))
-}
-
-// ResetBuildingState implements LocalEngineControl.
-func (e *EngineController) ResetBuildingState() {
-	e.resetBuildingState()
-}
-
-func (e *EngineController) opgethNotifier() {
-	ctx := context.Background()
-	for {
-		bn := <-e.opgethNotifierCh
-
-		var l1OriginNumber uint64
-
-		unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
-		if err != nil {
-			e.log.Warn(err.Error())
-		} else {
-			l1OriginNumber = unsafeL2BlockRef.L1Origin.Number
-		}
-
-		// Keystone based on L2 block number
-		if bn.unsafeL2.BlockNumber == 0 || bn.unsafeL2.BlockNumber%hemi.KeystoneHeaderPeriod != 0 {
-			continue
-		}
-
-		e.log.Info(fmt.Sprintf("Sending opgeth keystone notification for L2 block %v with L1 origin %v",
-			bn.unsafeL2.BlockNumber, l1OriginNumber))
-
-		if err := e.notifyOpgethKeystone(ctx, bn); err != nil {
-			e.log.Warn("Failed to notify opgeth of keystone", "err", err)
-			continue
-		}
-		e.log.Info("opgeth notified of keystone")
-	}
-}
-
-func (e *EngineController) notifyOpgethKeystone(ctx context.Context, bn *opgethNotification) error {
-	prevKeystoneHash := [common.HashLength]byte{}
-
-	if &bn.unsafeL2PrevKeystone != nil {
-		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
-	}
-
-	unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
-	if err != nil {
-		return err
-	}
-
-	l2Keystone := hemi.L2Keystone{
-		Version:            0x01,
-		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
-		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
-		ParentEPHash:       unsafeL2BlockRef.ParentHash[:],
-		PrevKeystoneEPHash: prevKeystoneHash[:],
-		StateRoot:          bn.unsafeL2.StateRoot[:],
-		EPHash:             unsafeL2BlockRef.Hash[:],
-	}
-
-	e.log.Info("Sending notification to opgeth of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
-		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
-		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
-		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
-		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
-
-	_, err = e.engine.NewKeystone(ctx, l2Keystone)
-	if err != nil {
-		e.log.Warn("Failed to insert keystone in opgeth", "err", err)
-		return err
-	}
-
-	return nil
 }
 
 func (e *EngineController) TryUpdateEngine(ctx context.Context) {
@@ -1002,11 +896,11 @@ func (e *EngineController) SetOriginSelectorResetter(resetter OriginSelectorForc
 func (e *EngineController) ForceReset(ctx context.Context, localUnsafe, crossUnsafe, localSafe, crossSafe, finalized eth.L2BlockRef) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.forceReset(ctx, localUnsafe, crossUnsafe, localSafe, crossSafe, finalized)
+	e.forceReset(ctx, localUnsafe, crossUnsafe, localSafe, crossSafe, finalized, false)
 }
 
 // forceReset performs a forced reset to the specified block references
-func (e *EngineController) forceReset(ctx context.Context, localUnsafe, crossUnsafe, localSafe, crossSafe, finalized eth.L2BlockRef) {
+func (e *EngineController) forceReset(ctx context.Context, localUnsafe, crossUnsafe, localSafe, crossSafe, finalized eth.L2BlockRef, signalOnlySeq bool) {
 	// Reset other components before resetting the engine
 	if e.attributesResetter != nil {
 		e.attributesResetter.ForceReset(ctx, localUnsafe, crossUnsafe, localSafe, crossSafe, finalized)
@@ -1025,8 +919,19 @@ func (e *EngineController) forceReset(ctx context.Context, localUnsafe, crossUns
 		e.emitter.Emit(ctx, derive.ConfirmPipelineResetEvent{})
 	}
 
-	// Time to apply the changes to the underlying engine
-	e.tryUpdateEngine(ctx)
+	if signalOnlySeq {
+		// Intentionally not propagating ForkchoiceUpdateEvent to other event Deriver avoiding side effects.
+		// If we do tryUpdateEngine instead, it will eventually emit ForkchoiceUpdateEvent, causing block building
+		// to never begin. Use fine grained ForkchoiceUpdateInitEvent to only propagate info to the sequencer component.
+		e.emitter.Emit(ctx, ForkchoiceUpdateInitEvent{
+			UnsafeL2Head:    e.unsafeHead,
+			SafeL2Head:      e.safeHead,
+			FinalizedL2Head: e.finalizedHead,
+		})
+	} else {
+		// Time to apply the changes to the underlying engine
+		e.tryUpdateEngine(ctx)
+	}
 
 	v := EngineResetConfirmedEvent{
 		LocalUnsafe: e.unsafeHead,
@@ -1046,17 +951,16 @@ func (e *EngineController) forceReset(ctx context.Context, localUnsafe, crossUns
 	)
 }
 
-// LowestQueuedUnsafeBlock retrieves the first queued-up L2 unsafe payload, or a zeroed reference if there is none.
-func (e *EngineController) LowestQueuedUnsafeBlock() eth.L2BlockRef {
+func (e *EngineController) PeekUnsafePayload() (*eth.ExecutionPayloadEnvelope, eth.L2BlockRef) {
 	payload := e.unsafePayloads.Peek()
 	if payload == nil {
-		return eth.L2BlockRef{}
+		return nil, eth.L2BlockRef{}
 	}
 	ref, err := derive.PayloadToBlockRef(e.rollupCfg, payload.ExecutionPayload)
 	if err != nil {
-		return eth.L2BlockRef{}
+		return nil, eth.L2BlockRef{}
 	}
-	return ref
+	return payload, ref
 }
 
 // onInvalidPayload checks if the first next-up payload matches the invalid payload.
@@ -1156,7 +1060,7 @@ func (e *EngineController) AddUnsafePayload(ctx context.Context, envelope *eth.E
 	}
 	p := e.unsafePayloads.Peek()
 	e.metrics.RecordUnsafePayloadsBuffer(uint64(e.unsafePayloads.Len()), e.unsafePayloads.MemSize(), p.ExecutionPayload.ID())
-	e.log.Trace("Next unsafe payload to process", "next", p.ExecutionPayload.ID(), "timestamp", uint64(p.ExecutionPayload.Timestamp))
+	e.log.Debug("Next unsafe payload to process", "next", p.ExecutionPayload.ID(), "timestamp", uint64(p.ExecutionPayload.Timestamp))
 
 	// request forkchoice update directly so we can process the payload
 	e.requestForkchoiceUpdate(ctx)
@@ -1171,7 +1075,28 @@ func (e *EngineController) onResetEngineRequest(ctx context.Context) {
 		})
 		return
 	}
-	e.forceReset(ctx, result.Unsafe, result.Unsafe, result.Safe, result.Safe, result.Finalized)
+	e.forceReset(ctx, result.Unsafe, result.Unsafe, result.Safe, result.Safe, result.Finalized, false)
+}
+
+// TryInitialResetEngineForSequencer resets engine controller with the info from FindL2Heads and only propagates
+// ForkchoiceUpdateEvent info to the sequencer to trigger sequencer block building, but not propagating
+// ForkchoiceUpdateEvent to other event Deriver avoiding side effects
+func (e *EngineController) TryInitialResetEngineForSequencer(ctx context.Context) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.unsafeHead != (eth.L2BlockRef{}) {
+		// Engine already initialized unsafe head. Early return
+		return
+	}
+	e.log.Info("EngineController Unsafe head was not initialized at the start of the reset")
+	result, err := sync.FindL2Heads(e.ctx, e.rollupCfg, e.l1, e.engine, e.log, e.syncCfg)
+	if err != nil {
+		e.log.Warn("Failed to find L2 Heads to start from while initial reset: %w", err)
+		// Do not emit ResetEvent because it will end propagating ForkchoiceUpdateEvent
+		// Because the engine controller failed to initialize, the next SyncStep will retry this method
+		return
+	}
+	e.forceReset(ctx, result.Unsafe, result.Unsafe, result.Safe, result.Safe, result.Finalized, true)
 }
 
 var ErrEngineSyncing = errors.New("engine is syncing")
@@ -1226,4 +1151,174 @@ func (e *EngineController) startPayload(ctx context.Context, fc eth.ForkchoiceSt
 	default:
 		return eth.PayloadID{}, BlockInsertTemporaryErr, eth.ForkchoiceUpdateErr(fcRes.PayloadStatus)
 	}
+}
+
+func (e *EngineController) FollowSource(eSafeBlockRef, eFinalizedRef eth.L2BlockRef) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	followExternalRefs := func(updateUnsafe bool) {
+		// Assume the sanity of external safe and finalized are checked
+		if updateUnsafe {
+			// May interrupt ongoing EL Sync to update the target, or trigger EL Sync
+			e.tryUpdateUnsafe(e.ctx, eSafeBlockRef)
+		}
+		e.tryUpdateLocalSafe(e.ctx, eSafeBlockRef, true, eth.L1BlockRef{})
+		// Directly update the Engine Controller state, bypassing finalizer
+		if e.finalizedHead.Number <= eFinalizedRef.Number {
+			e.promoteFinalized(e.ctx, eFinalizedRef)
+		}
+	}
+
+	logger := e.log.With(
+		"currentUnsafe", e.unsafeHead,
+		"currentSafe", e.safeHead,
+		"externalSafe", eSafeBlockRef,
+		"externalFinalized", eFinalizedRef,
+	)
+
+	logger.Info("Follow Source: Process external refs")
+
+	if e.unsafeHead.Number < eSafeBlockRef.Number {
+		// EL Sync target may be updated
+		logger.Debug("Follow Source: EL Sync: External safe ahead of current unsafe")
+		followExternalRefs(true)
+		return
+	}
+
+	fetchedSafe, err := e.engine.L2BlockRefByNumber(e.ctx, eSafeBlockRef.Number)
+	if errors.Is(err, ethereum.NotFound) {
+		// We queried a block before the EngineController unsafe head number,
+		// but it is not found. This indicates the underlying EL is still syncing.
+		// We do not know if the current EL sync is targeting a chain that will
+		// eventually reorg out this target. So we do not interrupt EL sync;
+		// we only update the local safe head.
+		logger.Debug("Follow Source: EL Sync in progress")
+		followExternalRefs(false)
+		return
+	}
+	if err != nil {
+		logger.Debug("Follow Source: Failed to fetch external safe from local EL", "err", err)
+		return
+	}
+
+	if fetchedSafe == eSafeBlockRef {
+		// External safe is found locally and matches.
+		logger.Debug("Follow Source: Consolidation")
+		followExternalRefs(false)
+		return
+	}
+
+	// External safe is found locally but they differ so trigger reorg.
+	// Reorging may trigger EL Sync, or updating the EL Sync target.
+	logger.Warn("Follow Source: Reorg. May Trigger EL sync")
+	followExternalRefs(true)
+}
+
+func (e *EngineController) opgethNotifier() {
+	ctx := context.Background()
+	for {
+		bn := <-e.opgethNotifierCh
+
+		var l1OriginNumber uint64
+
+		unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+		if err != nil {
+			e.log.Warn(err.Error())
+		} else {
+			l1OriginNumber = unsafeL2BlockRef.L1Origin.Number
+		}
+
+		// Keystone based on L2 block number
+		if bn.unsafeL2.BlockNumber == 0 || bn.unsafeL2.BlockNumber%hemi.KeystoneHeaderPeriod != 0 {
+			continue
+		}
+
+		e.log.Info(fmt.Sprintf("Sending opgeth keystone notification for L2 block %v with L1 origin %v",
+			bn.unsafeL2.BlockNumber, l1OriginNumber))
+
+		if err := e.notifyOpgethKeystone(ctx, bn); err != nil {
+			e.log.Warn("Failed to notify opgeth of keystone", "err", err)
+			continue
+		}
+		e.log.Info("opgeth notified of keystone")
+	}
+}
+
+func (e *EngineController) notifyOpgethKeystone(ctx context.Context, bn *opgethNotification) error {
+	prevKeystoneHash := [common.HashLength]byte{}
+
+	if &bn.unsafeL2PrevKeystone != nil {
+		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
+	}
+
+	unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+	if err != nil {
+		return err
+	}
+
+	l2Keystone := hemi.L2Keystone{
+		Version:            0x01,
+		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
+		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
+		ParentEPHash:       unsafeL2BlockRef.ParentHash[:],
+		PrevKeystoneEPHash: prevKeystoneHash[:],
+		StateRoot:          bn.unsafeL2.StateRoot[:],
+		EPHash:             unsafeL2BlockRef.Hash[:],
+	}
+
+	e.log.Info("Sending notification to opgeth of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
+		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
+		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
+		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
+		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
+
+	_, err = e.engine.NewKeystone(ctx, l2Keystone)
+	if err != nil {
+		e.log.Warn("Failed to insert keystone in opgeth", "err", err)
+		return err
+	}
+
+	return nil
+}
+
+func (e *EngineController) parseAndNotifyOpgeth(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
+	bn := &opgethNotification{
+		unsafeL2: *envelope.ExecutionPayload,
+	}
+
+	l2BlockHeight := envelope.ExecutionPayload.BlockNumber
+
+	prevKeystoneHeight := int64(l2BlockHeight-(l2BlockHeight%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
+	if l2BlockHeight%hemi.KeystoneHeaderPeriod != 0 {
+		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
+	}
+
+	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
+
+	var prevKeystoneRef *eth.L2BlockRef = nil
+	if prevKeystoneHeight > 0 && e.syncCfg.SyncMode == sync.CLSync {
+		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+		if err != nil {
+			return derive.NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+		}
+
+		ref, err := derive.PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		if err != nil {
+			return derive.NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+		}
+		prevKeystoneRef = &ref
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
+	select {
+	case e.opgethNotifierCh <- bn:
+	default:
+		e.log.Warn("opgeth notifier channel full, dropping event...")
+	}
+
+	return nil
 }

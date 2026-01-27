@@ -73,6 +73,8 @@ func (los *L1OriginSelector) OnEvent(ctx context.Context, ev event.Event) bool {
 // FindL1Origin determines what the next L1 Origin should be.
 // The L1 Origin is either the L2 Head's Origin, or the following L1 block
 // if the next L2 block's time is greater than or equal to the L2 Head's Origin.
+// The origin selection relies purely on block numbers and it is the caller's
+// responsibility to detect and handle L1 reorgs.
 func (los *L1OriginSelector) FindL1Origin(ctx context.Context, l2Head eth.L2BlockRef) (eth.L1BlockRef, error) {
 	currentOrigin, nextOrigin, err := los.CurrentAndNextOrigin(ctx, l2Head)
 	if err != nil {
@@ -170,8 +172,10 @@ func (los *L1OriginSelector) maybeSetNextOrigin(nextOrigin eth.L1BlockRef) {
 	los.mu.Lock()
 	defer los.mu.Unlock()
 
-	// Set the next origin if it is the immediate child of the current origin.
-	if nextOrigin.ParentHash == los.currentOrigin.Hash {
+	// Set the next origin if it is the subsequent block by number.
+	// On reorgs, this might not be the immediate child of the current origin
+	// since the hash is not checked.
+	if nextOrigin.Number == los.currentOrigin.Number+1 {
 		los.nextOrigin = nextOrigin
 	}
 }
@@ -206,7 +210,7 @@ func (los *L1OriginSelector) tryFetchNextOrigin(ctx context.Context, currentOrig
 
 	if _, err := los.fetch(ctx, currentOrigin.Number+1); err != nil {
 		if errors.Is(err, ethereum.NotFound) {
-			los.log.Debug("No next potential L1 origin found", "currentOrigin.Number+1", currentOrigin.Number+1)
+			los.log.Debug("No next potential L1 origin found")
 		} else {
 			los.log.Error("Failed to get next origin", "err", err)
 		}

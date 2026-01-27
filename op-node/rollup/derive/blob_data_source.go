@@ -23,26 +23,24 @@ type blobOrCalldata struct {
 // BlobDataSource fetches blobs or calldata as appropriate and transforms them into usable rollup
 // data.
 type BlobDataSource struct {
-	data            []blobOrCalldata
-	ref             eth.L1BlockRef
-	batcherAddr     common.Address
-	dsCfg           DataSourceConfig
-	fetcher         L1TransactionFetcher
-	blobsFetcher    L1BlobsFetcher
-	log             log.Logger
-	hemitrapEnabled bool
+	data         []blobOrCalldata
+	ref          eth.L1BlockRef
+	batcherAddr  common.Address
+	dsCfg        DataSourceConfig
+	fetcher      L1TransactionFetcher
+	blobsFetcher L1BlobsFetcher
+	log          log.Logger
 }
 
 // NewBlobDataSource creates a new blob data source.
-func NewBlobDataSource(ctx context.Context, log log.Logger, dsCfg DataSourceConfig, fetcher L1TransactionFetcher, blobsFetcher L1BlobsFetcher, ref eth.L1BlockRef, batcherAddr common.Address, hemitrapEnabled bool) DataIter {
+func NewBlobDataSource(ctx context.Context, log log.Logger, dsCfg DataSourceConfig, fetcher L1TransactionFetcher, blobsFetcher L1BlobsFetcher, ref eth.L1BlockRef, batcherAddr common.Address) DataIter {
 	return &BlobDataSource{
-		ref:             ref,
-		dsCfg:           dsCfg,
-		fetcher:         fetcher,
-		log:             log.New("origin", ref),
-		batcherAddr:     batcherAddr,
-		blobsFetcher:    blobsFetcher,
-		hemitrapEnabled: hemitrapEnabled,
+		ref:          ref,
+		dsCfg:        dsCfg,
+		fetcher:      fetcher,
+		log:          log.New("origin", ref),
+		batcherAddr:  batcherAddr,
+		blobsFetcher: blobsFetcher,
 	}
 }
 
@@ -95,24 +93,15 @@ func (ds *BlobDataSource) open(ctx context.Context) ([]blobOrCalldata, error) {
 		return data, nil
 	}
 
-	var blobs []*eth.Blob
-
-	if ds.hemitrapEnabled {
-		blobs = make([]*eth.Blob, len(data))
-		for i := range data {
-			blobs[i] = &eth.Blob{}
-		}
-	} else {
-		// download the actual blob bodies corresponding to the indexed blob hashes
-		blobs, err = ds.blobsFetcher.GetBlobs(ctx, ds.ref, hashes)
-		if errors.Is(err, ethereum.NotFound) {
-			// If the L1 block was available, then the blobs should be available too. The only
-			// exception is if the blob retention window has expired, which we will ultimately handle
-			// by failing over to a blob archival service.
-			return nil, NewResetError(fmt.Errorf("failed to fetch blobs: %w", err))
-		} else if err != nil {
-			return nil, NewTemporaryError(fmt.Errorf("failed to fetch blobs: %w", err))
-		}
+	// download the actual blob bodies corresponding to the indexed blob hashes
+	blobs, err := ds.blobsFetcher.GetBlobs(ctx, ds.ref, hashes)
+	if errors.Is(err, ethereum.NotFound) {
+		// If the L1 block was available, then the blobs should be available too. The only
+		// exception is if the blob retention window has expired, which we will ultimately handle
+		// by failing over to a blob archival service.
+		return nil, NewResetError(fmt.Errorf("failed to fetch blobs: %w", err))
+	} else if err != nil {
+		return nil, NewTemporaryError(fmt.Errorf("failed to fetch blobs: %w", err))
 	}
 
 	// go back over the data array and populate the blob pointers

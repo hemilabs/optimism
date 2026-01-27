@@ -1,9 +1,7 @@
 package pipeline
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -59,26 +57,11 @@ func SealL1DevGenesis(env *Env, intent *state.Intent, st *state.State) error {
 	}
 	// Combine the two into a valid genesis
 	genesisTemplate.Alloc = dump.Accounts
-
-	// when creating an l1 genesis json file with the
-	// "deployment strategy" = genesis, I could not find a way to include the
-	// allocs, so dump them here for later use.
-	// the allocs are what populates/prefunds addresses that are needed for the
-	// network to work
-	b, err := json.Marshal(genesisTemplate.Alloc)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile("l1allocs.json", b, 0644); err != nil {
-		return err
-	}
-
 	// Compute the genesis state root (by turning it into a block, which will apply the defaults, chain-config, etc.)
 	l1GenesisBlock := genesisTemplate.ToBlock()
-
 	// Cache the genesis state-root, and de-dup the state-copy we maintain, by using the state-hash attribute.
-	genesisTemplate.Alloc = nil
 	h := l1GenesisBlock.Root()
+	genesisTemplate.Alloc = nil
 	genesisTemplate.StateHash = &h
 	st.L1DevGenesis = genesisTemplate
 	lgr.Info("Sealed L1 dev genesis", "blockHash", l1GenesisBlock.Hash(), "stateRoot", h)

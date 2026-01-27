@@ -267,7 +267,7 @@ func simulate(ctx context.Context, logger log.Logger, conf *params.ChainConfig,
 	}
 	for addr, acc := range dump {
 		state.CreateAccount(addr)
-		state.SetBalance(addr, uint256.MustFromBig((*big.Int)(&acc.Balance)), tracing.BalanceChangeUnspecified)
+		state.SetBalance(addr, uint256.MustFromBig((*big.Int)(&acc.Balance)))
 		state.SetNonce(addr, acc.Nonce, tracing.NonceChangeUnspecified)
 		state.SetCode(addr, acc.Code)
 		state.SetStorage(addr, acc.Storage)

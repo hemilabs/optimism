@@ -34,6 +34,7 @@ golang-docker: ## Builds Docker images for Go components using buildx
 	GIT_COMMIT=$$(git rev-parse HEAD) \
 	GIT_DATE=$$(git show -s --format='%ct') \
 	IMAGE_TAGS=$$(git rev-parse HEAD),latest \
+	KONA_VERSION=$$(jq -r .version kona-proofs/version.json) \
 	docker buildx bake \
 			--progress plain \
 			--load \
@@ -49,6 +50,10 @@ docker-builder: ## Creates a Docker buildx builder
 	docker buildx create \
 		--driver=docker-container --name=buildx-build --bootstrap --use
 .PHONY: docker-builder
+
+compute-git-versions: ## Computes GIT_VERSION for all images and outputs JSON
+	@GIT_COMMIT=$$(git rev-parse HEAD) ./ops/scripts/compute-git-versions.sh
+.PHONY: compute-git-versions
 
 # add --print to dry-run
 cross-op-node: ## Builds cross-platform Docker image for op-node
@@ -123,6 +128,10 @@ op-supernode: ## Builds op-supernode binary
 	just $(JUSTFLAGS) ./op-supernode/op-supernode
 .PHONY: op-supernode
 
+op-interop-filter: ## Builds op-interop-filter binary
+	just $(JUSTFLAGS) ./op-interop-filter/op-interop-filter
+.PHONY: op-interop-filter
+
 op-program: ## Builds op-program binary
 	make -C ./op-program op-program
 .PHONY: op-program
@@ -138,23 +147,6 @@ reproducible-prestate:   ## Builds reproducible-prestate binary
 cannon-prestates: cannon op-program
 	go run ./op-program/builder/main.go build-all-prestates
 .PHONY: cannon-prestates
-
-cannon-prestate: op-program cannon ## Generates prestate using cannon and op-program
-	./cannon/bin/cannon load-elf --type singlethreaded-2 --path op-program/bin/op-program-client.elf --out op-program/bin/prestate.bin.gz --meta op-program/bin/meta.json
-	./cannon/bin/cannon run --proof-at '=0'  --stop-at '=1' --input op-program/bin/prestate.bin.gz --meta op-program/bin/meta.json --proof-fmt 'op-program/bin/%d.json' --output ""
-	mv op-program/bin/0.json op-program/bin/prestate-proof.json
-
-cannon-prestate-mt64: op-program cannon ## Generates prestate using cannon and op-program in the latest 64-bit multithreaded cannon format
-	./cannon/bin/cannon load-elf --type multithreaded64-3 --path op-program/bin/op-program-client64.elf --out op-program/bin/prestate-mt64.bin.gz --meta op-program/bin/meta-mt64.json
-	./cannon/bin/cannon run --proof-at '=0' --stop-at '=1' --input op-program/bin/prestate-mt64.bin.gz --meta op-program/bin/meta-mt64.json --proof-fmt 'op-program/bin/%d-mt64.json' --output ""
-	mv op-program/bin/0-mt64.json op-program/bin/prestate-proof-mt64.json
-.PHONY: cannon-prestate-mt64
-
-cannon-prestate-interop: op-program cannon ## Generates interop prestate using cannon and op-program in the latest 64-bit multithreaded cannon format
-	./cannon/bin/cannon load-elf --type multithreaded64-3 --path op-program/bin/op-program-client-interop.elf --out op-program/bin/prestate-interop.bin.gz --meta op-program/bin/meta-interop.json
-	./cannon/bin/cannon run --proof-at '=0' --stop-at '=1' --input op-program/bin/prestate-interop.bin.gz --meta op-program/bin/meta-interop.json --proof-fmt 'op-program/bin/%d-interop.json' --output ""
-	mv op-program/bin/0-interop.json op-program/bin/prestate-proof-interop.json
-.PHONY: cannon-prestate-interop
 
 mod-tidy: ## Cleans up unused dependencies in Go modules
 	# Below GOPRIVATE line allows mod-tidy to be run immediately after
@@ -247,7 +239,8 @@ TEST_PKGS := \
 	./op-deployer/pkg/deployer/standard/... \
 	./op-deployer/pkg/deployer/state/... \
 	./op-deployer/pkg/deployer/verify/... \
-	./op-sync-tester/...
+	./op-sync-tester/... \
+	./op-supernode/...
 
 FRAUD_PROOF_TEST_PKGS := \
 	./op-e2e/faultproofs/...
