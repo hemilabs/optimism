@@ -163,26 +163,6 @@
             "internalType": "address",
             "name": "resolvedDelegateProxy",
             "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionedDisputeGame1",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionedDisputeGame2",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionlessDisputeGame1",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionlessDisputeGame2",
-            "type": "address"
           }
         ],
         "internalType": "struct OPContractsManager.Blueprints",
@@ -312,6 +292,11 @@
             "internalType": "Duration",
             "name": "disputeMaxClockDuration",
             "type": "uint64"
+          },
+          {
+            "internalType": "bool",
+            "name": "useCustomGasToken",
+            "type": "bool"
           }
         ],
         "internalType": "struct OPContractsManager.DeployInput",

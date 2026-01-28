@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hemilabs/heminetwork/api/bfgapi"
 	"github.com/urfave/cli/v2"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
@@ -16,6 +15,7 @@ import (
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
+	"github.com/ethereum-optimism/optimism/op-service/ptr"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 )
@@ -50,12 +50,6 @@ func prefixEnvVars(names ...string) []string {
 
 var (
 	/* Required Flags */
-	BFGNodeAddr = &cli.StringFlag{
-		Name:    "bfg",
-		Usage:   "Address of bfg endpoint to use",
-		Value:   bfgapi.DefaultListenAddress,
-		EnvVars: prefixEnvVars("BFG_WS"),
-	}
 	L1NodeAddr = &cli.StringFlag{
 		Name:     "l1",
 		Usage:    "Address of L1 User JSON-RPC endpoint to use (eth namespace required)",
@@ -85,12 +79,6 @@ var (
 		Category: RollupCategory,
 	}
 	/* Optional Flags */
-	HemitrapEnabled = &cli.BoolFlag{
-		Name:     "hemitrap.enabled",
-		Usage:    "skips some validation checks during sequencing for use with hemitrap",
-		Required: false,
-		EnvVars:  prefixEnvVars("HEMITRAP_ENABLED"),
-	}
 	BeaconHeader = &cli.StringFlag{
 		Name:     "l1.beacon-header",
 		Usage:    "Optional HTTP header to add to all requests to the L1 Beacon endpoint. Format: 'X-Key: Value'",
@@ -122,13 +110,17 @@ var (
 		Category: L1RPCCategory,
 	}
 	SyncModeFlag = &cli.GenericFlag{
-		Name:    "syncmode",
-		Usage:   fmt.Sprintf("Blockchain sync mode (options: %s)", openum.EnumString(sync.ModeStrings)),
-		EnvVars: prefixEnvVars("SYNCMODE"),
-		Value: func() *sync.Mode {
-			out := sync.CLSync
-			return &out
-		}(),
+		Name:     "syncmode",
+		Usage:    fmt.Sprintf("Blockchain sync mode (options: %s)", openum.EnumString(sync.ModeStrings)),
+		EnvVars:  prefixEnvVars("SYNCMODE"),
+		Value:    ptr.New(sync.CLSync),
+		Category: RollupCategory,
+	}
+	SyncModeReqRespFlag = &cli.BoolFlag{
+		Name:     "syncmode.req-resp",
+		Required: false,
+		Value:    true,
+		EnvVars:  prefixEnvVars("SYNCMODE_REQ_RESP"),
 		Category: RollupCategory,
 	}
 	RPCAdminPersistence = &cli.StringFlag{
@@ -225,6 +217,20 @@ var (
 		Value:    time.Second * 10,
 		Category: RollupCategory,
 	}
+	L2FollowSource = &cli.StringFlag{
+		Name:     "l2.follow.source",
+		Usage:    "Address of L2 CL RPC HTTP endpoint to follow source",
+		EnvVars:  prefixEnvVars("L2_FOLLOW_SOURCE"),
+		Category: RollupCategory,
+		Required: false,
+	}
+	L2FollowSourceRpcTimeout = &cli.DurationFlag{
+		Name:     "l2.follow.source.rpc-timeout",
+		Usage:    "L2 follow source client rpc timeout",
+		EnvVars:  prefixEnvVars("L2_FOLLOW_SOURCE_RPC_TIMEOUT"),
+		Value:    time.Second * 10,
+		Category: RollupCategory,
+	}
 	VerifierL1Confs = &cli.Uint64Flag{
 		Name:     "verifier.l1-confs",
 		Usage:    "Number of L1 blocks to keep distance from the L1 head before deriving L2 data from. Reorgs are supported, but may be slow to perform.",
@@ -264,6 +270,18 @@ var (
 		EnvVars:  prefixEnvVars("SEQUENCER_RECOVER"),
 		Value:    false,
 		Category: SequencerCategory,
+	}
+	FinalityLookbackFlag = &cli.Uint64Flag{
+		Name:     "finality.lookback",
+		Usage:    "Number of L1 blocks to look back for finality verification. Uses default calculation if 0 (considers alt-DA challenge/resolve windows if applicable).",
+		EnvVars:  prefixEnvVars("FINALITY_LOOKBACK"),
+		Category: RollupCategory,
+	}
+	FinalityDelayFlag = &cli.Uint64Flag{
+		Name:     "finality.delay",
+		Usage:    "Number of L1 blocks to traverse before trying to finalize L2 blocks again. Uses default (64) if 0.",
+		EnvVars:  prefixEnvVars("FINALITY_DELAY"),
+		Category: RollupCategory,
 	}
 	L1EpochPollIntervalFlag = &cli.DurationFlag{
 		Name:     "l1.epoch-poll-interval",
@@ -449,6 +467,7 @@ var optionalFlags = []cli.Flag{
 	BeaconCheckIgnore,
 	BeaconFetchAllSidecars,
 	SyncModeFlag,
+	SyncModeReqRespFlag,
 	FetchWithdrawalRootFromState,
 	L1TrustRPC,
 	L1RPCProviderKind,
@@ -463,6 +482,8 @@ var optionalFlags = []cli.Flag{
 	SequencerMaxSafeLagFlag,
 	SequencerL1Confs,
 	SequencerRecoverMode,
+	FinalityLookbackFlag,
+	FinalityDelayFlag,
 	L1EpochPollIntervalFlag,
 	RuntimeConfigReloadIntervalFlag,
 	RPCAdminPersistence,
@@ -479,12 +500,12 @@ var optionalFlags = []cli.Flag{
 	L1ChainConfig,
 	L2EngineKind,
 	L2EngineRpcTimeout,
+	L2FollowSource,
 	InteropRPCAddr,
 	InteropRPCPort,
 	InteropJWTSecret,
 	InteropDependencySet,
 	IgnoreMissingPectraBlobSchedule,
-	HemitrapEnabled,
 	ExperimentalOPStackAPI,
 }
 

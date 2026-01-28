@@ -49,11 +49,9 @@ type AttributesHandler struct {
 	sentAttributes bool
 
 	engineController EngineController
-
-	hemitrapEnabled bool
 }
 
-func NewAttributesHandler(log log.Logger, cfg *rollup.Config, ctx context.Context, l2 L2, engController EngineController, hemitrapEnabled bool) *AttributesHandler {
+func NewAttributesHandler(log log.Logger, cfg *rollup.Config, ctx context.Context, l2 L2, engController EngineController) *AttributesHandler {
 	if engController == nil {
 		panic("engController cannot be nil")
 	}
@@ -64,7 +62,6 @@ func NewAttributesHandler(log log.Logger, cfg *rollup.Config, ctx context.Contex
 		l2:               l2,
 		engineController: engController,
 		attributes:       nil,
-		hemitrapEnabled: hemitrapEnabled,
 	}
 }
 
@@ -190,6 +187,7 @@ func (eq *AttributesHandler) onPendingSafeUpdate(ctx context.Context, x engine.P
 		} else {
 			// append to tip otherwise
 			eq.sentAttributes = true
+			eq.log.Debug("emitting build start event", "attributes", eq.attributes)
 			eq.emitter.Emit(ctx, engine.BuildStartEvent{Attributes: eq.attributes})
 		}
 	}
@@ -216,7 +214,7 @@ func (eq *AttributesHandler) consolidateNextSafeAttributes(attributes *derive.At
 		})
 		return
 	}
-	if err := AttributesMatchBlock(eq.cfg, attributes.Attributes, onto.Hash, envelope, eq.log); err != nil && !eq.hemitrapEnabled {
+	if err := AttributesMatchBlock(eq.cfg, attributes.Attributes, onto.Hash, envelope, eq.log); err != nil {
 		eq.log.Warn("L2 reorg: existing unsafe block does not match derived attributes from L1",
 			"err", err, "unsafe", envelope.ExecutionPayload.ID(), "pending_safe", onto)
 

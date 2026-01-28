@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/params"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -21,12 +20,14 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 type Config struct {
+	L1 L1EndpointSetup
+	L2 L2EndpointSetup
+
 	Beacon L1BeaconEndpointSetup
-	L1     L1EndpointSetup
-	L2     L2EndpointSetup
 
 	InteropConfig interop.Setup
 
@@ -67,6 +68,9 @@ type Config struct {
 	// Optional
 	Tracer tracer.Tracer
 
+	// Optional
+	L2FollowSource L2FollowSourceEndpointSetup
+
 	Sync sync.Config
 
 	// To halt when detecting the node does not support a signaled protocol version
@@ -86,8 +90,6 @@ type Config struct {
 
 	IgnoreMissingPectraBlobSchedule bool
 	FetchWithdrawalRootFromState    bool
-
-	HemitrapEnabled bool
 
 	// Experimental. Enables new opstack RPC namespace. Used by op-test-sequencer.
 	ExperimentalOPStackAPI bool

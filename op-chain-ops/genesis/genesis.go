@@ -6,8 +6,9 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -23,7 +24,7 @@ const defaultGasLimit = 30_000_000
 var HoloceneExtraData = eip1559.EncodeHoloceneExtraData(250, 6)
 
 // MinBaseFeeExtraData represents the default extra data for Jovian-genesis chains.
-var MinBaseFeeExtraData = eip1559.EncodeMinBaseFeeExtraData(250, 6, 0)
+var MinBaseFeeExtraData = rollup.EncodeJovianExtraData(250, 6, 0)
 
 // NewL2Genesis will create a new L2 genesis
 func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Genesis, error) {
@@ -123,7 +124,7 @@ func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Gene
 	if optimismChainConfig.IsIsthmus(genesis.Timestamp) {
 		genesis.Alloc[params.HistoryStorageAddress] = types.Account{Nonce: 1, Code: params.HistoryStorageCode, Balance: common.Big0}
 	}
-	if optimismChainConfig.IsMinBaseFee(genesis.Timestamp) {
+	if optimismChainConfig.IsJovian(genesis.Timestamp) {
 		genesis.ExtraData = MinBaseFeeExtraData
 	}
 

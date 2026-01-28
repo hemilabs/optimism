@@ -36,13 +36,9 @@ abstract contract FeatureFlags {
             console.log("Setup: DEV_FEATURE__OPTIMISM_PORTAL_INTEROP is enabled");
             devFeatureBitmap |= DevFeatures.OPTIMISM_PORTAL_INTEROP;
         }
-        if (Config.devFeatureCannonKona()) {
-            console.log("Setup: DEV_FEATURE__CANNON_KONA is enabled");
-            devFeatureBitmap |= DevFeatures.CANNON_KONA;
-        }
-        if (Config.devFeatureDeployV2DisputeGames()) {
-            console.log("Setup: DEV_FEATURE__DEPLOY_V2_DISPUTE_GAMES is enabled");
-            devFeatureBitmap |= DevFeatures.DEPLOY_V2_DISPUTE_GAMES;
+        if (Config.devFeatureOpcmV2()) {
+            console.log("Setup: DEV_FEATURE__OPCM_V2 is enabled");
+            devFeatureBitmap |= DevFeatures.OPCM_V2;
         }
     }
 

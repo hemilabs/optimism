@@ -1,15 +1,17 @@
-FROM golang:1.24.2-alpine3.21@sha256:7772cb5322baa875edd74705556d08f0eeca7b9c4b5367754ce3f2f00041ccee AS builder
-
-RUN apk add --update git make cargo bash
+FROM golang:1.25.5-trixie@sha256:ef151f0384896831258e71065176f1e63f5a90bcbe6a98ec679a1990011a2655 AS builder
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="${PATH}:/root/.cargo/bin"
-RUN echo "export PATH=$PATH" >> /etc/profile
 
 WORKDIR /git
 RUN git clone https://github.com/casey/just
 WORKDIR /git/just
+# 1.46.0
+RUN git checkout f028de5b258a0cc4696b9dea729cc7d4d5828baa
 RUN cargo install just
+
+RUN apt update
+RUN apt install -y git make bash
 
 ARG VERSION=v0.0.0 TARGETOS TARGETARCH
 
@@ -28,9 +30,6 @@ RUN just op-batcher
 WORKDIR /optimism/op-proposer
 RUN just op-proposer
 
-WORKDIR /optimism/op-conductor
-RUN just op-conductor
-
 FROM alpine:3.20@sha256:b89d9c93e9ed3597455c90a0b88a8bbb5cb7188438f70953fede212a0c4394e0
 
 COPY --from=builder /optimism/op-node/bin/op-node /bin/op-node
@@ -38,7 +37,5 @@ COPY --from=builder /optimism/op-node/bin/op-node /bin/op-node
 COPY --from=builder /optimism/op-batcher/bin/op-batcher /bin/op-batcher
 
 COPY --from=builder /optimism/op-proposer/bin/op-proposer /bin/op-proposer
-
-COPY --from=builder /optimism/op-conductor/bin/op-conductor /bin/op-conductor
 
 CMD ['op-node']

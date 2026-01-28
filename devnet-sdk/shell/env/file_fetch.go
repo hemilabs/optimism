@@ -33,16 +33,11 @@ func (f *fileFetcher) fetchFileData(u *url.URL) (*descriptors.DevnetEnvironment,
 	if err := json.Unmarshal(body, &config); err != nil {
 		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
-<<<<<<< HEAD
-	config.Name = basename
-
-=======
 
 	// If the name is not set, use the basename of the file
 	if config.Name == "" {
 		config.Name = basename
 	}
->>>>>>> op-node/v1.16.1
 	return &config, nil
 }
 

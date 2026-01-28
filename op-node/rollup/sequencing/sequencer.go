@@ -132,14 +132,14 @@ type Sequencer struct {
 	l2Chain L2Chain
 }
 
-var _ SequencerIface = (*Sequencer)(nil)
-
 type L2Chain interface {
 	engine.Engine
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	L2BlockRefByHash(ctx context.Context, l2Hash common.Hash) (eth.L2BlockRef, error)
 	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
 }
+
+var _ SequencerIface = (*Sequencer)(nil)
 
 func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.Config,
 	attributesBuilder derive.AttributesBuilder,
@@ -148,8 +148,8 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 	conductor conductor.SequencerConductor,
 	asyncGossip AsyncGossiper,
 	metrics Metrics,
-	l2Chain L2Chain,
 	eng attributes.EngineController,
+	l2Chain L2Chain,
 ) *Sequencer {
 	return &Sequencer{
 		ctx:              driverCtx,
@@ -211,6 +211,8 @@ func (d *Sequencer) OnEvent(ctx context.Context, ev event.Event) bool {
 		d.onEngineResetConfirmedEvent(x)
 	case engine.ForkchoiceUpdateEvent:
 		d.onForkchoiceUpdate(x)
+	case engine.ForkchoiceUpdateInitEvent:
+		d.onForkchoiceUpdate(engine.ForkchoiceUpdateEvent(x))
 	default:
 		return false
 	}

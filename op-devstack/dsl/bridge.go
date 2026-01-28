@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/crossdomain"
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/stack/match"
 	nodebindings "github.com/ethereum-optimism/optimism/op-node/bindings"
@@ -18,7 +19,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
 	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/bindings"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/contractio"
 	"github.com/ethereum/go-ethereum/common"
@@ -605,7 +605,7 @@ func gasCost(rcpt *types.Receipt, rollupCfg *rollup.Config, blockTimestamp *uint
 		}
 		operatorCost := new(big.Int).SetUint64(rcpt.GasUsed)
 		operatorCost.Mul(operatorCost, new(big.Int).SetUint64(*rcpt.OperatorFeeScalar))
-		if rollupCfg.IsOperatorFeeFix(*blockTimestamp) {
+		if rollupCfg.IsJovian(*blockTimestamp) {
 			operatorCost.Mul(operatorCost, big.NewInt(100))
 		} else {
 			operatorCost.Div(operatorCost, big.NewInt(1_000_000))
