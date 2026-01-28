@@ -1,6 +1,6 @@
 //! Node luncher with proof history support.
 
-use crate::{OpNode, args::RollupArgs};
+use crate::{args::RollupArgs, OpNode};
 use eyre::ErrReport;
 use futures_util::FutureExt;
 use reth_db::DatabaseEnv;
@@ -12,7 +12,7 @@ use reth_optimism_rpc::{
     debug::{DebugApiExt, DebugApiOverrideServer},
     eth::proofs::{EthApiExt, EthApiOverrideServer},
 };
-use reth_optimism_trie::{OpProofsStorage, db::MdbxProofsStorage};
+use reth_optimism_trie::{db::MdbxProofsStorage, OpProofsStorage};
 use reth_tasks::TaskExecutor;
 use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
@@ -22,7 +22,7 @@ use tracing::info;
 /// - in-mem proofs storage,
 /// - MDBX proofs storage.
 pub async fn launch_node_with_proof_history(
-    builder: WithLaunchContext<NodeBuilder<DatabaseEnv, OpChainSpec>>,
+    builder: WithLaunchContext<NodeBuilder<Arc<DatabaseEnv>, OpChainSpec>>,
     args: RollupArgs,
 ) -> eyre::Result<(), ErrReport> {
     let RollupArgs {
@@ -70,7 +70,6 @@ pub async fn launch_node_with_proof_history(
                     .boxed())
             })
             .extend_rpc_modules(move |ctx| {
-                info!(target: "reth::cli", "Installing proofs-history RPC overrides (eth_getProof, debug_executePayload)");
                 let api_ext = EthApiExt::new(ctx.registry.eth_api().clone(), storage.clone());
                 let debug_ext = DebugApiExt::new(
                     ctx.node().provider().clone(),
@@ -79,9 +78,8 @@ pub async fn launch_node_with_proof_history(
                     Box::new(ctx.node().task_executor().clone()),
                     ctx.node().evm_config().clone(),
                 );
-                let eth_replaced = ctx.modules.replace_configured(api_ext.into_rpc())?;
-                let debug_replaced = ctx.modules.replace_configured(debug_ext.into_rpc())?;
-                info!(target: "reth::cli", eth_replaced, debug_replaced, "Proofs-history RPC overrides installed");
+                ctx.modules.replace_configured(api_ext.into_rpc())?;
+                ctx.modules.replace_configured(debug_ext.into_rpc())?;
                 Ok(())
             });
     }
@@ -96,7 +94,7 @@ fn spawn_proofs_db_metrics(
     storage: Arc<MdbxProofsStorage>,
     metrics_report_interval: Duration,
 ) {
-    executor.spawn_critical_task("op-proofs-storage-metrics", async move {
+    executor.spawn_critical("op-proofs-storage-metrics", async move {
         info!(
             target: "reth::cli",
             ?metrics_report_interval,
