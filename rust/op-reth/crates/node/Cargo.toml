@@ -43,11 +43,7 @@ reth-optimism-txpool.workspace = true
 reth-optimism-chainspec.workspace = true
 reth-optimism-consensus = { workspace = true, features = ["std"] }
 reth-optimism-forks.workspace = true
-reth-optimism-primitives = { workspace = true, features = [
-  "serde",
-  "serde-bincode-compat",
-  "reth-codec",
-] }
+reth-optimism-primitives = { workspace = true, features = ["serde", "serde-bincode-compat", "reth-codec"] }
 reth-optimism-exex = { workspace = true, features = ["metrics"] }
 reth-optimism-trie = { workspace = true, features = ["metrics"] }
 
@@ -78,6 +74,8 @@ serde.workspace = true
 eyre.workspace = true
 url.workspace = true
 humantime.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
 
 # test-utils dependencies
 reth-db-api = { workspace = true, optional = true, features = ["op"] }
@@ -90,7 +88,6 @@ reth-optimism-node = { workspace = true, features = ["test-utils"] }
 reth-db = { workspace = true, features = ["op", "test-utils"] }
 reth-node-builder = { workspace = true, features = ["test-utils"] }
 reth-provider = { workspace = true, features = ["test-utils"] }
-reth-tasks.workspace = true
 reth-payload-util.workspace = true
 reth-revm = { workspace = true, features = ["std"] }
 reth-rpc.workspace = true
