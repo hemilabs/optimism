@@ -9,6 +9,7 @@ RUN echo "export PATH=$PATH" >> /etc/profile
 WORKDIR /git
 RUN git clone https://github.com/casey/just
 WORKDIR /git/just
+RUN git checkout f028de5b258a0cc4696b9dea729cc7d4d5828baa
 RUN cargo install just
 
 ARG VERSION=v0.0.0 TARGETOS TARGETARCH
