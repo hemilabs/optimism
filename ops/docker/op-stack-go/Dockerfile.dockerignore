@@ -26,6 +26,10 @@
 !/op-alt-da
 !/op-faucet
 !/op-interop-mon
+!/rust
+# Exclude large rust build artifacts
+rust/target
+rust/.git
 !/go.mod
 !/go.sum
 !/justfiles
@@ -36,3 +40,6 @@
 **/bin
 **/testdata
 **/tests
+
+# Re-include rust/bin which is excluded by **/bin above
+!/rust/**/bin
