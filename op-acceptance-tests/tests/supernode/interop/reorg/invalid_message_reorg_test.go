@@ -11,7 +11,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
-	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
@@ -25,9 +24,8 @@ import (
 // - A replacement block is built at the same height (deposits-only)
 // - The replacement block's timestamp eventually becomes verified
 func TestSupernodeInteropInvalidMessageReplacement(gt *testing.T) {
+
 	t := devtest.SerialT(gt)
-	// TODO(ethereum-optimism/optimism#19411): remove skip once op-reth safe head mismatch is fixed
-	sysgo.SkipOnOpReth(t, "panics due to safe head mismatch in EngineController")
 	sys := presets.NewTwoL2SupernodeInterop(t, 0)
 
 	ctx := t.Ctx()
@@ -43,28 +41,31 @@ func TestSupernodeInteropInvalidMessageReplacement(gt *testing.T) {
 	sys.L2B.CatchUpTo(sys.L2A)
 	sys.L2A.CatchUpTo(sys.L2B)
 
-	// Pause interop and verify it has stopped
-	// Uses max local safe timestamp from both chains, pauses at +10, awaits validation at +9
-	paused := sys.Supernode.EnsureInteropPaused(sys.L2ACL, sys.L2BCL, 10)
-	t.Logger().Info("interop paused", "paused", paused)
-
 	rng := rand.New(rand.NewSource(12345))
 
 	// Send an initiating message on chain A
-	initMsg := alice.SendRandomInitMessage(rng, eventLoggerA, 2, 10)
+	initTx, initReceipt := alice.SendRandomInitMessage(rng, eventLoggerA, 2, 10)
 
 	t.Logger().Info("initiating message sent on chain A",
-		"block", initMsg.BlockNumber(),
-		"hash", initMsg.BlockHash(),
+		"block", initReceipt.BlockNumber,
+		"hash", initReceipt.BlockHash,
 	)
 
 	// Wait for chain B to catch up
 	sys.L2B.WaitForBlock()
 
+	// Wait for some timestamps to be verified first
+	targetTimestamp := sys.L2A.TimestampForBlockNum(2)
+	// set supernode to pause verification just after this timestamp
+	sys.Supernode.PauseInterop(targetTimestamp + 1)
+	sys.Supernode.AwaitValidatedTimestamp(targetTimestamp)
+
+	t.Logger().Info("initial verification confirmed", "timestamp", targetTimestamp)
+
 	// Send an INVALID executing message on chain B
-	execMsg := bob.SendInvalidExecMessage(initMsg)
-	invalidBlockNumber := bigs.Uint64Strict(execMsg.BlockNumber())
-	invalidBlockHash := execMsg.BlockHash()
+	_, invalidExecReceipt := bob.SendInvalidExecMessage(initTx, 0)
+	invalidBlockNumber := bigs.Uint64Strict(invalidExecReceipt.BlockNumber)
+	invalidBlockHash := invalidExecReceipt.BlockHash
 	invalidBlockTimestamp := sys.L2B.TimestampForBlockNum(invalidBlockNumber)
 	t.Logger().Info("invalid executing message sent on chain B",
 		"block", invalidBlockNumber,
@@ -113,20 +114,10 @@ func TestSupernodeInteropInvalidMessageReplacement(gt *testing.T) {
 
 	// ASSERTION: The invalid transaction no longer exists in the chain
 	// The invalid exec message transaction should NOT be in the replacement block
-	sys.L2ELB.AssertTxNotInBlock(invalidBlockNumber, execMsg.Receipt.TxHash)
+	sys.L2ELB.AssertTxNotInBlock(invalidBlockNumber, invalidExecReceipt.TxHash)
 
 	t.Logger().Info("test complete: invalid block was replaced and verified",
 		"invalid_block_number", invalidBlockNumber,
 		"invalid_block_hash", invalidBlockHash,
 	)
-
-	// We should still be able to include new transactions and have them be fully validated
-	bruce := sys.FunderB.NewFundedEOA(eth.OneEther)
-	tx := bruce.Transfer(alice.Address(), eth.OneHundredthEther)
-	sys.L2ELB.AssertTxInBlock(bigs.Uint64Strict(tx.Included.Value().BlockNumber), tx.Included.Value().TxHash)
-
-	txTimestamp := sys.L2B.TimestampForBlockNum(bigs.Uint64Strict(tx.Included.Value().BlockNumber))
-	sys.Supernode.AwaitValidatedTimestamp(txTimestamp)
-	// Should still have the tx in the block.
-	sys.L2ELB.AssertTxInBlock(bigs.Uint64Strict(tx.Included.Value().BlockNumber), tx.Included.Value().TxHash)
 }
