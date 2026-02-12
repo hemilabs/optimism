@@ -191,9 +191,12 @@ func (l *BatchSubmitter) loadBlockIntoState(ctx context.Context, blockNumber uin
 		return nil, fmt.Errorf("getting L2 client: %w", err)
 	}
 	block, err := l2Client.BlockByNumber(ctx, new(big.Int).SetUint64(blockNumber))
+
 	if err != nil {
 		return nil, fmt.Errorf("getting L2 block: %w", err)
 	}
+
+	log.Info("batcher got block at number", "number", blockNumber, "hash", block.Hash().String())
 
 	if err := l.state.AddL2Block(block); err != nil {
 		return nil, fmt.Errorf("adding L2 block to state: %w", err)
