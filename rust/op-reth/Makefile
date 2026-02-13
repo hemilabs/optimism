@@ -16,7 +16,47 @@ include ../../justfiles/deprecated.mk
 # macro can't handle Make's build-% / build-native-% patterns.
 # These forward to the parameterized just recipes.
 
-.PHONY: build-native-%
+# List of features to use when building. Can be overridden via the environment.
+# No jemalloc on Windows
+ifeq ($(OS),Windows_NT)
+    FEATURES ?= asm-keccak min-debug-logs
+else
+    FEATURES ?= jemalloc asm-keccak min-debug-logs
+endif
+
+# Cargo profile for builds. Default is for local builds, CI uses an override.
+PROFILE ?= release
+
+# Extra flags for Cargo
+CARGO_INSTALL_EXTRA_FLAGS ?=
+
+# The docker image name
+DOCKER_IMAGE_NAME ?= ghcr.io/paradigmxyz/op-reth
+
+##@ Help
+
+.PHONY: help
+help: ## Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+##@ Build
+
+.PHONY: install
+install: ## Build and install the op-reth binary under `$(CARGO_HOME)/bin`.
+	cargo install --path bin --bin op-reth --force --locked \
+		--features "$(FEATURES)" \
+		--profile "$(PROFILE)" \
+		$(CARGO_INSTALL_EXTRA_FLAGS)
+
+.PHONY: build
+build: ## Build the op-reth binary into `target` directory.
+	cargo build --bin op-reth --features "$(FEATURES)" --profile "$(PROFILE)"
+
+.PHONY: build-debug
+build-debug: ## Build the op-reth binary into `target/debug` directory.
+	cargo build --bin op-reth --features "$(FEATURES)"
+
+# Builds the op-reth binary natively.
 build-native-%:
 	@echo
 	@printf '%s\n' '$(call banner-style,Deprecated make call: make build-native-$*)'
