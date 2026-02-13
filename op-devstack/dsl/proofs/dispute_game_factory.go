@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
 	challengerConfig "github.com/ethereum-optimism/optimism/op-challenger/config"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/cannon"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/outputs"
@@ -33,6 +32,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl/contract"
+	"github.com/ethereum-optimism/optimism/op-devstack/stack"
 	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/bindings"
@@ -49,7 +49,7 @@ type DisputeGameFactory struct {
 	addr          common.Address
 	l2CL          *dsl.L2CLNode
 	l2EL          *dsl.L2ELNode
-	superNode     *dsl.Supernode
+	superNode     stack.Supernode
 	gameHelper    *GameHelper
 	challengerCfg *challengerConfig.Config
 
@@ -63,7 +63,7 @@ func NewDisputeGameFactory(
 	dgfAddr common.Address,
 	l2CL *dsl.L2CLNode,
 	l2EL *dsl.L2ELNode,
-	superNode *dsl.Supernode,
+	superNode stack.Supernode,
 	challengerCfg *challengerConfig.Config,
 ) *DisputeGameFactory {
 	dgf := bindings.NewDisputeGameFactory(bindings.WithClient(ethClient), bindings.WithTo(dgfAddr), bindings.WithTest(t))
@@ -488,11 +488,7 @@ func (f *DisputeGameFactory) RunFPP(startTimestamp uint64, endTimestamp uint64) 
 	for i := uint64(0); i < (endTimestamp-startTimestamp)*super.StepsPerTimestamp+3; i++ {
 		pos := challengerTypes.NewPosition(splitDepth, new(big.Int).SetUint64(i))
 
-		timestamp, step, err := traceProvider.ComputeStep(pos)
-		f.require.NoError(err, "Failed to compute step")
-
 		// Create LocalGameInputs using the previous claim (or anchor state) as agreed and current as disputed
-		f.log.Info("Getting preimage bytes at position", "position", pos, "timestamp", timestamp, "step", step, "i", i)
 		claimedPreimage, err := traceProvider.GetPreimageBytes(f.t.Ctx(), pos)
 		f.require.NoError(err, "Failed to get claim at position %v", pos)
 		inputs := utils.LocalGameInputs{
@@ -506,12 +502,6 @@ func (f *DisputeGameFactory) RunFPP(startTimestamp uint64, endTimestamp uint64) 
 			"index", pos.IndexAtDepth(),
 			"l1Head", inputs.L1Head,
 			"l2Claim", inputs.L2Claim,
-			"startTimestamp", startTimestamp,
-			"endTimestamp", endTimestamp,
-			"timestamp", timestamp,
-			"step", step,
-			"invalidTransition", super.InvalidTransition,
-			"invalidTransitionHash", super.InvalidTransitionHash,
 		)
 
 		runFPPForStep(f, tmpDir, inputs)
@@ -531,9 +521,8 @@ func runFPPForStep(f *DisputeGameFactory, tmpDir string, inputs utils.LocalGameI
 	f.require.NoError(err, "Failed to get absolute path to executable")
 	cmd := exec.Command(exePath, oracleCommand[1:]...)
 	cmd.Dir = tmpDir
-	log := f.log.New("role", "fpp-trace")
-	cmd.Stdout = &mipsevm.LoggingWriter{Log: log}
-	cmd.Stderr = &mipsevm.LoggingWriter{Log: log}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Env = append(append(cmd.Env, os.Environ()...), "NO_COLOR=1")
 	err = cmd.Run()
 	f.require.NoError(err, "Failed to execute game")
