@@ -1200,11 +1200,7 @@ workflows:
           context: *rust-ci-context
 
       # Docs build
-      - op-reth-docs-build:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-
-      - kona-docs-build:
+      - rust-docs-build:
           context:
             - circleci-repo-readonly-authenticated-github-token
 
