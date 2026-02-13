@@ -531,9 +531,8 @@ func runFPPForStep(f *DisputeGameFactory, tmpDir string, inputs utils.LocalGameI
 	f.require.NoError(err, "Failed to get absolute path to executable")
 	cmd := exec.Command(exePath, oracleCommand[1:]...)
 	cmd.Dir = tmpDir
-	log := f.log.New("role", "fpp-trace")
-	cmd.Stdout = &mipsevm.LoggingWriter{Log: log}
-	cmd.Stderr = &mipsevm.LoggingWriter{Log: log}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Env = append(append(cmd.Env, os.Environ()...), "NO_COLOR=1")
 	err = cmd.Run()
 	f.require.NoError(err, "Failed to execute game")
