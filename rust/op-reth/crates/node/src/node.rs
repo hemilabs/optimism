@@ -217,14 +217,17 @@ impl OpNode {
     /// ```no_run
     /// use reth_optimism_chainspec::OpChainSpecBuilder;
     /// use reth_optimism_node::OpNode;
-    /// use reth_provider::providers::{RocksDBProvider, StaticFileProvider};
+    /// use reth_provider::providers::ReadOnlyConfig;
     ///
-    /// let factory = OpNode::provider_factory_builder()
-    ///     .db(open_db_read_only("db", Default::default()).unwrap())
-    ///     .chainspec(OpChainSpecBuilder::base_mainnet().build().into())
-    ///     .static_file(StaticFileProvider::read_only("db/static_files", false).unwrap())
-    ///     .rocksdb_provider(RocksDBProvider::builder("db/rocksdb").build().unwrap())
-    ///     .build_provider_factory();
+    /// fn demo(runtime: reth_tasks::Runtime) {
+    ///     let factory = OpNode::provider_factory_builder()
+    ///         .open_read_only(
+    ///             OpChainSpecBuilder::base_mainnet().build().into(),
+    ///             ReadOnlyConfig::from_datadir("datadir").no_watch(),
+    ///             runtime,
+    ///         )
+    ///         .unwrap();
+    /// }
     /// ```
     pub fn provider_factory_builder() -> ProviderFactoryBuilder<Self> {
         ProviderFactoryBuilder::default()

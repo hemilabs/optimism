@@ -24,9 +24,7 @@ mod payload;
 pub use payload::{FlashBlock, PendingFlashBlock};
 
 mod sequence;
-pub use sequence::{
-    FlashBlockCompleteSequence, FlashBlockPendingSequence, SequenceExecutionOutcome,
-};
+pub use sequence::{FlashBlockCompleteSequence, FlashBlockPendingSequence};
 
 mod service;
 pub use service::{
@@ -39,13 +37,6 @@ pub use worker::FlashblockCachedReceipt;
 
 mod cache;
 
-mod pending_state;
-pub use pending_state::{PendingBlockState, PendingStateRegistry};
-
-pub mod validation;
-
-mod tx_cache;
-pub use tx_cache::TransactionCache;
 #[cfg(test)]
 mod test_utils;
 

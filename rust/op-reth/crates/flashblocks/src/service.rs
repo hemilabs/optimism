@@ -458,16 +458,9 @@ where
         let (result_tx, result_rx) = oneshot::channel();
         let builder = self.builder.clone();
         self.spawner.spawn_blocking(move || {
-            let result = builder.execute(args, Some(&mut tx_cache));
-            let _ = result_tx.send((result, tx_cache));
+            let _ = tx.send(builder.execute(args));
         });
-        self.job = Some(BuildJob {
-            start_time: Instant::now(),
-            epoch: self.state_epoch,
-            ticket,
-            result_rx,
-        });
-        true
+        self.job = Some((Instant::now(), rx));
     }
 }
 
