@@ -1,7 +1,5 @@
 set positional-arguments
 
-NIGHTLY := "nightly-2026-02-20"
-
 # Aliases
 alias t := test
 alias l := lint
@@ -11,12 +9,6 @@ alias b := build
 # default recipe to display help information
 default:
   @just --list
-
-############################### Toolchain ############################
-
-# Install the pinned nightly toolchain
-install-nightly:
-  rustup toolchain install {{NIGHTLY}} --component rustfmt
 
 ############################### Build ###############################
 
@@ -31,6 +23,10 @@ build-release *args='':
 # Build the rollup node
 build-node:
   cargo build --release --bin kona-node
+
+# Build the supervisor
+build-supervisor:
+  cargo build --release --bin kona-supervisor
 
 # Build op-reth
 build-op-reth:
@@ -60,11 +56,11 @@ lint: fmt-check lint-clippy lint-docs
 
 # Check formatting (requires nightly)
 fmt-check:
-  cargo +{{NIGHTLY}} fmt --all -- --check
+  cargo +nightly fmt --all -- --check
 
 # Fix formatting (requires nightly)
 fmt-fix:
-  cargo +{{NIGHTLY}} fmt --all
+  cargo +nightly fmt --all
 
 # Run clippy
 lint-clippy:
@@ -72,8 +68,7 @@ lint-clippy:
 
 # Lint Rust documentation
 lint-docs:
-  RUSTDOCFLAGS="--cfg docsrs -D warnings --show-type-layout --generate-link-to-definition -Zunstable-options" \
-    cargo +{{NIGHTLY}} doc --workspace --all-features --no-deps --document-private-items
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 
 ############################ no_std #################################
 
@@ -130,13 +125,9 @@ bench:
 
 ########################## Misc tools ###############################
 
-# Audit dependencies for licenses, advisories, and bans
-deny:
-  cargo deny --all-features check all
-
 # Check for unused dependencies (requires nightly + cargo-udeps)
 check-udeps:
-  cargo +{{NIGHTLY}} udeps --release --workspace --all-features --all-targets
+  cargo +nightly udeps --release --workspace --all-features --all-targets
 
 # Run cargo hack for feature powerset checking
 # shuffle: "true" to shuffle package order before partitioning (spreads heavy/light crates more evenly)
@@ -160,22 +151,6 @@ hack partition="" shuffle="false" seed="default":
   fi
 
   cargo hack check --each-feature --no-dev-deps $PKG_FLAGS {{ if partition != "" { "--partition " + partition } else { "" } }}
-
-######################### Documentation ################################
-
-DOCS_DIR := justfile_directory() / "docs"
-
-# Start the documentation development server
-docs-dev:
-    cd "{{DOCS_DIR}}" && just docs-dev
-
-# Build the documentation for production
-docs-build:
-    cd "{{DOCS_DIR}}" && just docs-build
-
-# Preview the built documentation
-docs-preview:
-    cd "{{DOCS_DIR}}" && just docs-preview
 
 ######################### Documentation ################################
 
