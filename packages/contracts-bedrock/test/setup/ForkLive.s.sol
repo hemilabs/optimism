@@ -179,15 +179,22 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
             IDisputeGameFactory(artifacts.mustGetAddress("DisputeGameFactoryProxy"));
 
         // The PermissionedDisputeGame and PermissionedDelayedWETHProxy are not listed in the registry for OP, so we
-        // look it up onchain
-        IFaultDisputeGame permissionedDisputeGame =
-            IFaultDisputeGame(address(disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON)));
-        artifacts.save("PermissionedDisputeGame", address(permissionedDisputeGame));
-        artifacts.save("PermissionedDelayedWETHProxy", address(permissionedDisputeGame.weth()));
+        // look it up onchain.
+        address permissionedGameImpl = address(disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON));
+        artifacts.save("PermissionedDisputeGame", permissionedGameImpl);
 
-        // The SR seems out-of-date, so pull the DelayedWETH addresses from the PermissionedDisputeGame.
-        artifacts.save("DelayedWETHProxy", address(permissionedDisputeGame.weth()));
-        artifacts.save("DelayedWETHImpl", EIP1967Helper.getImplementation(address(permissionedDisputeGame.weth())));
+        // Get DelayedWETH for PERMISSIONED games
+        IDelayedWETH permissionedDelayedWeth =
+            DisputeGames.getGameImplDelayedWeth(disputeGameFactory, GameTypes.PERMISSIONED_CANNON);
+        artifacts.save("PermissionedDelayedWETHProxy", address(permissionedDelayedWeth));
+
+        // Get DelayedWETH for PERMISSIONLESS games (CANNON)
+        IDelayedWETH permissionlessDelayedWeth =
+            DisputeGames.getGameImplDelayedWeth(disputeGameFactory, GameTypes.CANNON);
+
+        // The SR seems out-of-date, so pull the DelayedWETH addresses from the games.
+        artifacts.save("DelayedWETHProxy", address(permissionlessDelayedWeth));
+        artifacts.save("DelayedWETHImpl", EIP1967Helper.getImplementation(address(permissionlessDelayedWeth)));
     }
 
     /// @notice Calls to the Deploy.s.sol contract etched by Setup.sol to a deterministic address, sets up the
