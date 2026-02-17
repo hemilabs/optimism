@@ -326,6 +326,7 @@ reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", rev = 
 reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f", default-features = false }
 reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f" }
 reth-exex = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f" }
+reth-exex-test-utils = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f" }
 reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f", default-features = false }
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f", default-features = false }
 reth-fs-util = { git = "https://github.com/paradigmxyz/reth", rev = "2c5d00f" }
@@ -527,7 +528,8 @@ proptest-derive = "0.7"
 proptest-arbitrary-interop = "0.1.0"
 rstest = "0.26.1"
 similar-asserts = { version = "1.7.0", features = ["serde"] }
-tempfile = "3.25.0"
+tempfile = "3.24.0"
+serial_test = "3"
 test-case = "3"
 test-fuzz = "7.2.5"
 

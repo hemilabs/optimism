@@ -1343,7 +1343,8 @@ workflows:
           target: "cannon-client"
           context: *rust-ci-context
 
-      - required-rust-ci:
+      - kona-coverage:
+          context: *rust-ci-context
           requires:
             - rust-tests
             - op-reth-integration-tests
