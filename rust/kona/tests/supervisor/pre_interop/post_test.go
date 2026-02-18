@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
+	"github.com/ethereum-optimism/optimism/op-devstack/stack/match"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	stypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 	"github.com/ethereum/go-ethereum/common"
@@ -46,12 +47,12 @@ func testSupervisorActivationBlock(t devtest.T, sys *presets.SimpleInterop, net 
 // test case modified to check the correctness of the supervisor activation block as well
 func TestPostInbox(gt *testing.T) {
 	t := devtest.ParallelT(gt)
-	sys := newMinimalPreInterop(t)
+	sys := presets.NewSimpleInterop(t)
 	devtest.RunParallel(t, sys.L2Networks(), func(t devtest.T, net *dsl.L2Network) {
 		require := t.Require()
 		activationBlock := net.AwaitActivation(t, forks.Interop)
 
-		el := net.PrimaryEL()
+		el := net.Escape().L2ELNode(match.FirstL2EL)
 		implAddrBytes, err := el.EthClient().GetStorageAt(t.Ctx(), predeploys.CrossL2InboxAddr,
 			genesis.ImplementationSlot, activationBlock.Hash.String())
 		require.NoError(err)
@@ -68,7 +69,7 @@ func TestPostInbox(gt *testing.T) {
 // Acceptance Test: https://github.com/ethereum-optimism/optimism/blob/develop/op-acceptance-tests/tests/interop/upgrade/post_test.go
 func TestPostInteropUpgradeComprehensive(gt *testing.T) {
 	t := devtest.ParallelT(gt)
-	sys := newMinimalPreInterop(t)
+	sys := presets.NewSimpleInterop(t)
 	require := t.Require()
 	logger := t.Logger()
 
