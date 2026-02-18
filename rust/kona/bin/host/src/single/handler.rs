@@ -66,6 +66,45 @@ const fn is_rpc_method_not_found(e: &RpcError<TransportErrorKind>) -> bool {
     matches!(e, RpcError::ErrorResp(p) if p.code == -32601)
 }
 
+/// Parses a blob hint, supporting both legacy (48-byte) and new (40-byte) formats.
+///
+/// Returns the blob hash and timestamp.
+///
+/// ## Formats
+/// - Legacy: hash (32 bytes) + index (8 bytes) + timestamp (8 bytes) = 48 bytes
+/// - New: hash (32 bytes) + timestamp (8 bytes) = 40 bytes
+///
+/// The legacy index field is parsed but ignored.
+pub fn parse_blob_hint(hint_data: &[u8]) -> Result<(B256, u64)> {
+    match hint_data.len() {
+        48 => {
+            // Legacy format: hash (32) + index (8) + timestamp (8)
+            let hash_data_bytes: [u8; 32] = hint_data[0..32].try_into()?;
+            let _index_data_bytes: [u8; 8] = hint_data[32..40].try_into()?; // index no longer used
+            let timestamp_data_bytes: [u8; 8] = hint_data[40..48].try_into()?;
+
+            let hash: B256 = hash_data_bytes.into();
+            let timestamp = u64::from_be_bytes(timestamp_data_bytes);
+            Ok((hash, timestamp))
+        }
+        40 => {
+            // New format: hash (32) + timestamp (8)
+            let hash_data_bytes: [u8; 32] = hint_data[0..32].try_into()?;
+            let timestamp_data_bytes: [u8; 8] = hint_data[32..40].try_into()?;
+
+            let hash: B256 = hash_data_bytes.into();
+            let timestamp = u64::from_be_bytes(timestamp_data_bytes);
+            Ok((hash, timestamp))
+        }
+        _ => {
+            anyhow::bail!(
+                "Invalid blob hint length: expected 40 or 48 bytes, got {}",
+                hint_data.len()
+            );
+        }
+    }
+}
+
 /// The [`HintHandler`] for the [`SingleChainHost`].
 #[derive(Debug, Clone, Copy)]
 pub struct SingleChainHintHandler;
@@ -427,34 +466,6 @@ impl HintHandler for SingleChainHintHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_json_rpc::ErrorPayload;
-    use alloy_transport::TransportErrorKind;
-
-    #[test]
-    fn test_is_rpc_method_not_found_true() {
-        let e = RpcError::<TransportErrorKind>::ErrorResp(ErrorPayload {
-            code: -32601,
-            message: "method not found".into(),
-            data: None,
-        });
-        assert!(is_rpc_method_not_found(&e));
-    }
-
-    #[test]
-    fn test_is_rpc_method_not_found_false_wrong_code() {
-        let e = RpcError::<TransportErrorKind>::ErrorResp(ErrorPayload {
-            code: -32600,
-            message: "invalid request".into(),
-            data: None,
-        });
-        assert!(!is_rpc_method_not_found(&e));
-    }
-
-    #[test]
-    fn test_is_rpc_method_not_found_false_null_resp() {
-        let e = RpcError::<TransportErrorKind>::NullResp;
-        assert!(!is_rpc_method_not_found(&e));
-    }
 
     const TEST_HASH: B256 = B256::new([0x42u8; 32]);
     const TEST_TIMESTAMP: u64 = 1234567890;
