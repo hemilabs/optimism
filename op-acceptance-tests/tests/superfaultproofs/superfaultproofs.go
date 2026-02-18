@@ -361,6 +361,86 @@ func buildTransitionTests(
 	}
 }
 
+// RunTraceExtensionActivationTest verifies that trace extension correctly
+// activates (or not) based on whether the claim timestamp has been reached.
+func RunTraceExtensionActivationTest(t devtest.T, sys *presets.SimpleInterop) {
+	t.Require().NotNil(sys.SuperRoots, "supernode is required for this test")
+
+	chains := orderedChains(sys)
+	t.Require().Len(chains, 2, "expected exactly 2 interop chains")
+
+	endTimestamp := uint64(time.Now().Unix())
+	sys.SuperRoots.AwaitValidatedTimestamp(endTimestamp)
+	l1Head := latestRequiredL1(sys.SuperRoots.SuperRootAtTimestamp(endTimestamp + 1))
+
+	startTimestamp := endTimestamp - 1
+	agreedSuperRoot := superRootAtTimestamp(t, chains, endTimestamp)
+	agreedClaim := agreedSuperRoot.Marshal()
+
+	// The disputed claim transitions to the next timestamp by including the
+	// first chain's optimistic block at endTimestamp+1.
+	firstOptimistic := optimisticBlockAtTimestamp(t, chains[0], endTimestamp+1)
+	disputedClaim := marshalTransition(agreedSuperRoot, 1, firstOptimistic)
+	disputedTraceIndex := int64(stepsPerTimestamp)
+
+	tests := []*transitionTest{
+		{
+			Name:               "CorrectlyDidNotActivate",
+			AgreedClaim:        agreedClaim,
+			DisputedClaim:      disputedClaim,
+			DisputedTraceIndex: disputedTraceIndex,
+			L1Head:             l1Head,
+			// Trace extension does not activate because we have not reached the proposal timestamp yet.
+			ClaimTimestamp: endTimestamp + 1,
+			ExpectValid:    true,
+		},
+		{
+			Name:               "IncorrectlyDidNotActivate",
+			AgreedClaim:        agreedClaim,
+			DisputedClaim:      disputedClaim,
+			DisputedTraceIndex: disputedTraceIndex,
+			L1Head:             l1Head,
+			// Trace extension should have activated because we have reached the proposal timestamp.
+			ClaimTimestamp: endTimestamp,
+			ExpectValid:    false,
+		},
+		{
+			Name:               "CorrectlyActivated",
+			AgreedClaim:        agreedClaim,
+			DisputedClaim:      agreedClaim,
+			DisputedTraceIndex: disputedTraceIndex,
+			L1Head:             l1Head,
+			// Trace extension activated at the proposal timestamp, claim stays the same.
+			ClaimTimestamp: endTimestamp,
+			ExpectValid:    true,
+		},
+		{
+			Name:               "IncorrectlyActivated",
+			AgreedClaim:        agreedClaim,
+			DisputedClaim:      agreedClaim,
+			DisputedTraceIndex: disputedTraceIndex,
+			L1Head:             l1Head,
+			// Trace extension should not have activated because we haven't reached the proposal timestamp.
+			ClaimTimestamp: endTimestamp + 1,
+			ExpectValid:    false,
+		},
+	}
+
+	challengerCfg := sys.L2ChainA.Escape().L2Challengers()[0].Config()
+	gameDepth := sys.DisputeGameFactory().GameImpl(gameTypes.SuperCannonKonaGameType).SplitDepth()
+
+	for _, test := range tests {
+		t.Run(test.Name+"-fpp", func(t devtest.T) {
+			runKonaInteropProgram(t, challengerCfg.CannonKona, test.L1Head.Hash,
+				test.AgreedClaim, crypto.Keccak256Hash(test.DisputedClaim),
+				test.ClaimTimestamp, test.ExpectValid)
+		})
+		t.Run(test.Name+"-challenger", func(t devtest.T) {
+			runChallengerProviderTest(t, sys.SuperRoots.QueryAPI(), gameDepth, startTimestamp, test.ClaimTimestamp, test)
+		})
+	}
+}
+
 // RunSuperFaultProofTest encapsulates the basic super fault proof test flow.
 func RunSuperFaultProofTest(t devtest.T, sys *presets.SimpleInterop) {
 	t.Require().NotNil(sys.SuperRoots, "supernode is required for this test")
