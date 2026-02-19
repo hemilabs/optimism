@@ -1,6 +1,6 @@
 [package]
 name = "reth-optimism-flashblocks"
-version = "1.11.3"
+version = "1.11.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -31,7 +31,6 @@ reth-metrics.workspace = true
 alloy-eips = { workspace = true, features = ["serde"] }
 alloy-primitives = { workspace = true, features = ["serde"] }
 alloy-rpc-types-engine = { workspace = true, features = ["serde"] }
-alloy-rpc-types.workspace = true
 alloy-consensus.workspace = true
 
 # op-alloy
@@ -58,10 +57,4 @@ derive_more.workspace = true
 [dev-dependencies]
 test-case.workspace = true
 alloy-consensus.workspace = true
-alloy-network.workspace = true
-alloy-signer-local.workspace = true
 op-alloy-consensus.workspace = true
-op-revm.workspace = true
-reth-optimism-chainspec.workspace = true
-reth-optimism-evm.workspace = true
-reth-provider = { workspace = true, features = ["test-utils"] }
