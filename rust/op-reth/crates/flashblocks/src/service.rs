@@ -1,11 +1,10 @@
 use crate::{
     FlashBlock, FlashBlockCompleteSequence, FlashBlockCompleteSequenceRx, InProgressFlashBlockRx,
     PendingFlashBlock,
-    cache::{BuildApplyOutcome, BuildTicket, SequenceManager},
+    cache::SequenceManager,
     pending_state::PendingStateRegistry,
-    tx_cache::TransactionCache,
-    validation::{CanonicalBlockFingerprint, ReconciliationStrategy},
-    worker::{BuildResult, FlashBlockBuilder, FlashblockCachedReceipt},
+    validation::ReconciliationStrategy,
+    worker::{BuildResult, FlashBlockBuilder},
 };
 use alloy_primitives::B256;
 use futures_util::{FutureExt, Stream, StreamExt};
@@ -40,10 +39,6 @@ const CANONICAL_BLOCK_CHANNEL_CAPACITY: usize = 128;
 pub struct CanonicalBlockNotification {
     /// The canonical block number.
     pub block_number: u64,
-    /// Canonical block hash.
-    pub block_hash: B256,
-    /// Canonical parent hash.
-    pub parent_hash: B256,
     /// Transaction hashes in the canonical block.
     pub tx_hashes: Vec<B256>,
 }
@@ -76,15 +71,6 @@ pub struct FlashBlockService<
     sequences: SequenceManager<N::SignedTx>,
     /// Registry for pending block states to enable speculative building.
     pending_states: PendingStateRegistry<N>,
-    /// Transaction execution cache for incremental flashblock building.
-    tx_cache: TransactionCache<N>,
-
-    /// Epoch counter for state invalidation.
-    ///
-    /// Incremented whenever speculative state is cleared (reorg, catch-up, depth limit).
-    /// Used to detect and discard stale build results from in-flight jobs that were
-    /// started before the state was invalidated.
-    state_epoch: u64,
 
     /// Maximum depth for pending blocks ahead of canonical before clearing.
     max_depth: u64,
@@ -130,8 +116,6 @@ where
             job: None,
             sequences: SequenceManager::new(compute_state_root),
             pending_states: PendingStateRegistry::new(),
-            tx_cache: TransactionCache::new(),
-            state_epoch: 0,
             max_depth: DEFAULT_MAX_DEPTH,
             metrics: FlashBlockServiceMetrics::default(),
         }
@@ -243,8 +227,12 @@ where
                     match result {
                         Ok(Some(build_result)) => {
                             let pending = build_result.pending_flashblock;
-                            let apply_outcome = self.sequences
-                                .on_build_complete(job.ticket, Some((pending.clone(), build_result.cached_reads)));
+                            let parent_hash = pending.parent_hash();
+                            self.sequences
+                                .on_build_complete(parent_hash, Some((pending.clone(), build_result.cached_reads)));
+
+                            // Record pending state for speculative building of subsequent blocks
+                            self.pending_states.record_build(build_result.pending_state);
 
                             if apply_outcome.is_applied() {
                                 // Record pending state for speculative building of subsequent blocks
@@ -347,35 +335,20 @@ where
         }
     }
 
-    /// Attempts to start the next build after a completion and records outcome metrics.
-    fn schedule_followup_build(&mut self) {
-        self.metrics.drain_followup_attempts.increment(1);
-        if self.try_start_build_job() {
-            self.metrics.drain_followup_started.increment(1);
-        } else {
-            self.metrics.drain_followup_noop.increment(1);
-        }
-    }
-
     /// Processes a canonical block notification and reconciles pending state.
     fn process_canonical_block(&mut self, notification: CanonicalBlockNotification) {
-        let canonical_fingerprint = CanonicalBlockFingerprint {
-            block_number: notification.block_number,
-            block_hash: notification.block_hash,
-            parent_hash: notification.parent_hash,
-            tx_hashes: notification.tx_hashes,
-        };
-
-        let strategy =
-            self.sequences.process_canonical_block(canonical_fingerprint, self.max_depth);
+        let strategy = self.sequences.process_canonical_block(
+            notification.block_number,
+            &notification.tx_hashes,
+            self.max_depth,
+        );
 
         // Record metrics based on strategy
         if matches!(strategy, ReconciliationStrategy::HandleReorg) {
             self.metrics.reorg_count.increment(1);
         }
 
-        // Clear pending states and transaction cache for strategies that invalidate speculative
-        // state. Also increment the state epoch to invalidate any in-flight build jobs.
+        // Clear pending states for strategies that invalidate speculative state
         if matches!(
             strategy,
             ReconciliationStrategy::HandleReorg |
@@ -383,14 +356,6 @@ where
                 ReconciliationStrategy::DepthLimitExceeded { .. }
         ) {
             self.pending_states.clear();
-            self.tx_cache.clear();
-            self.state_epoch = self.state_epoch.wrapping_add(1);
-            trace!(
-                target: "flashblocks",
-                new_epoch = self.state_epoch,
-                ?strategy,
-                "State invalidated, incremented epoch"
-            );
         }
     }
 
@@ -425,16 +390,10 @@ where
             return false;
         };
 
-        // Prefer parent-hash-specific speculative context for the current pending sequence.
-        // Fall back to the latest speculative state when no exact parent match is found.
-        let pending_parent = self
-            .sequences
-            .pending()
-            .payload_base()
-            .and_then(|base| self.pending_states.get_state_for_parent(base.parent_hash).cloned())
-            .or_else(|| self.pending_states.current().cloned());
+        // Get pending parent state for speculative building (if enabled and available)
+        let pending_parent = self.pending_states.current().cloned();
 
-        let Some(candidate) =
+        let Some(args) =
             self.sequences.next_buildable_args(latest.hash(), latest.timestamp(), pending_parent)
         else {
             return false; // Nothing buildable
@@ -475,22 +434,7 @@ pub struct FlashBlockBuildInfo {
     pub block_number: u64,
 }
 
-/// A running build job with metadata for tracking and invalidation.
-#[derive(Debug)]
-struct BuildJob<N: NodePrimitives> {
-    /// When the job was started.
-    start_time: Instant,
-    /// The state epoch when this job was started.
-    ///
-    /// If the service's `state_epoch` has changed by the time this job completes,
-    /// the result should be discarded as the speculative state has been invalidated.
-    epoch: u64,
-    /// Opaque ticket identifying the exact sequence snapshot targeted by this build job.
-    ticket: BuildTicket,
-    /// Receiver for the build result and returned transaction cache.
-    #[allow(clippy::type_complexity)]
-    result_rx: oneshot::Receiver<(eyre::Result<Option<BuildResult<N>>>, TransactionCache<N>)>,
-}
+type BuildJob<N> = (Instant, oneshot::Receiver<eyre::Result<Option<BuildResult<N>>>>);
 
 /// Creates a bounded channel for canonical block notifications.
 ///
@@ -517,20 +461,4 @@ struct FlashBlockServiceMetrics {
     current_index: Gauge,
     /// Number of reorgs detected during canonical block reconciliation.
     reorg_count: Counter,
-    /// Number of build results discarded due to state invalidation (reorg during build).
-    stale_builds_discarded: Counter,
-    /// Number of completions rejected because pending sequence identity no longer matched.
-    build_reject_pending_sequence_mismatch: Counter,
-    /// Number of completions rejected because pending revision no longer matched.
-    build_reject_pending_revision_stale: Counter,
-    /// Number of completions rejected because referenced cached sequence was missing.
-    build_reject_cached_sequence_missing: Counter,
-    /// Number of completions skipped due to missing build result payload.
-    build_reject_missing_build_result: Counter,
-    /// Number of follow-up drain scheduling attempts after build completion.
-    drain_followup_attempts: Counter,
-    /// Number of follow-up attempts that successfully started another build.
-    drain_followup_started: Counter,
-    /// Number of follow-up attempts where no buildable work was available.
-    drain_followup_noop: Counter,
 }

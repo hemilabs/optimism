@@ -37,8 +37,12 @@ pub use worker::FlashblockCachedReceipt;
 
 mod cache;
 
+mod pending_state;
+pub use pending_state::{PendingBlockState, PendingStateRegistry};
+
 #[cfg(test)]
 mod test_utils;
+pub mod validation;
 
 mod ws;
 pub use ws::{FlashBlockDecoder, WsConnect, WsFlashBlockStream};

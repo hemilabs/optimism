@@ -7,15 +7,11 @@ use crate::{
     FlashBlock, FlashBlockCompleteSequence, PendingFlashBlock,
     pending_state::PendingBlockState,
     sequence::{FlashBlockPendingSequence, SequenceExecutionOutcome},
-    validation::{
-        CanonicalBlockFingerprint, CanonicalBlockReconciler, ReconciliationStrategy, ReorgDetector,
-        TrackedBlockFingerprint,
-    },
+    validation::{CanonicalBlockReconciler, ReconciliationStrategy, ReorgDetector},
     worker::BuildArgs,
 };
 use alloy_eips::eip2718::WithEncoded;
 use alloy_primitives::B256;
-use alloy_rpc_types_engine::PayloadId;
 use reth_primitives_traits::{
     NodePrimitives, Recovered, SignedTransaction, transaction::TxHashRef,
 };
@@ -232,8 +228,6 @@ pub(crate) struct SequenceManager<T: SignedTransaction> {
     /// Ring buffer of recently completed sequences bundled with their decoded transactions (FIFO,
     /// size 3)
     completed_cache: AllocRingBuffer<(FlashBlockCompleteSequence, Vec<WithEncoded<Recovered<T>>>)>,
-    /// Cached sequence identities that already had a build completion applied.
-    applied_cached_sequences: HashSet<SequenceId>,
     /// Cached minimum block number currently present in `completed_cache`.
     cached_min_block_number: Option<u64>,
     /// Broadcast channel for completed sequences
@@ -249,7 +243,6 @@ impl<T: SignedTransaction> SequenceManager<T> {
         Self {
             pending: PendingSequence::new(),
             completed_cache: AllocRingBuffer::new(CACHE_SIZE),
-            applied_cached_sequences: HashSet::new(),
             cached_min_block_number: None,
             block_broadcaster,
             compute_state_root,
@@ -300,7 +293,11 @@ impl<T: SignedTransaction> SequenceManager<T> {
 
             // Bundle completed sequence with its decoded transactions and push to cache
             // Ring buffer automatically evicts oldest entry when full
+            let txs = std::mem::take(&mut self.pending_transactions);
             self.push_completed_sequence(completed, txs);
+
+            // ensure cache is wiped on new flashblock
+            let _ = self.pending.take_cached_reads();
         }
 
         self.pending.insert_flashblock(flashblock)?;
@@ -314,23 +311,11 @@ impl<T: SignedTransaction> SequenceManager<T> {
         txs: Vec<WithEncoded<Recovered<T>>>,
     ) {
         let block_number = completed.block_number();
-        let completed_sequence_id = SequenceId::from_complete(&completed);
         let evicted_block_number = if self.completed_cache.is_full() {
             self.completed_cache.front().map(|(seq, _)| seq.block_number())
         } else {
             None
         };
-        let evicted_sequence_id = if self.completed_cache.is_full() {
-            self.completed_cache.front().map(|(seq, _)| SequenceId::from_complete(seq))
-        } else {
-            None
-        };
-
-        if let Some(sequence_id) = evicted_sequence_id {
-            self.applied_cached_sequences.remove(&sequence_id);
-        }
-        // Re-tracking a sequence identity should always start as unapplied.
-        self.applied_cached_sequences.remove(&completed_sequence_id);
 
         self.completed_cache.enqueue((completed, txs));
 
@@ -347,31 +332,6 @@ impl<T: SignedTransaction> SequenceManager<T> {
     /// Recomputes the minimum block number in `completed_cache`.
     fn recompute_cache_min_block_number(&self) -> Option<u64> {
         self.completed_cache.iter().map(|(seq, _)| seq.block_number()).min()
-    }
-
-    /// Returns the newest cached sequence that matches `parent_hash` and still needs execution.
-    ///
-    /// Cached sequences that already had build completion applied are skipped to avoid redundant
-    /// rebuild loops.
-    fn newest_unexecuted_cached_for_parent(
-        &self,
-        parent_hash: B256,
-    ) -> Option<&(FlashBlockCompleteSequence, Vec<WithEncoded<Recovered<T>>>)> {
-        self.completed_cache.iter().rev().find(|(seq, _)| {
-            let sequence_id = SequenceId::from_complete(seq);
-            seq.payload_base().parent_hash == parent_hash &&
-                !self.applied_cached_sequences.contains(&sequence_id)
-        })
-    }
-
-    /// Returns a mutable cached sequence entry by exact sequence identity.
-    fn cached_entry_mut_by_id(
-        &mut self,
-        sequence_id: SequenceId,
-    ) -> Option<&mut (FlashBlockCompleteSequence, Vec<WithEncoded<Recovered<T>>>)> {
-        self.completed_cache
-            .iter_mut()
-            .find(|(seq, _)| SequenceId::from_complete(seq) == sequence_id)
     }
 
     /// Returns the current pending sequence for inspection.
@@ -393,87 +353,41 @@ impl<T: SignedTransaction> SequenceManager<T> {
         local_tip_hash: B256,
         local_tip_timestamp: u64,
         pending_parent_state: Option<PendingBlockState<N>>,
-    ) -> Option<BuildCandidate<Vec<WithEncoded<Recovered<T>>>, N>> {
-        // Try to find a buildable sequence: (ticket, base, last_fb, transactions,
-        // cached_state, source_name, pending_parent)
-        let (ticket, base, last_flashblock, transactions, cached_state, source_name, pending_parent) =
+    ) -> Option<BuildArgs<Vec<WithEncoded<Recovered<T>>>, N>> {
+        // Try to find a buildable sequence: (base, last_fb, transactions, cached_state,
+        // source_name, pending_parent)
+        let (base, last_flashblock, transactions, cached_state, source_name, pending_parent) =
             // Priority 1: Try current pending sequence (canonical mode)
-            if let Some(base) = self.pending.sequence.payload_base().filter(|b| b.parent_hash == local_tip_hash) {
-                let revision = self.pending.revision();
-                if self.pending.is_revision_applied(revision) {
-                    trace!(
-                        target: "flashblocks",
-                        block_number = base.block_number,
-                        revision,
-                        parent_hash = ?base.parent_hash,
-                        "Skipping rebuild for already-applied pending revision"
-                    );
-                    return None;
-                }
-                let sequence_id = SequenceId::from_pending(self.pending.sequence())?;
-                let ticket = BuildTicket::pending(sequence_id, revision);
-                let cached_state = self.pending.sequence.take_cached_reads().map(|r| (base.parent_hash, r));
-                let last_fb = self.pending.sequence.last_flashblock()?;
-                let transactions = self.pending.transactions();
-                (ticket, base, last_fb, transactions, cached_state, "pending", None)
+            if let Some(base) = self.pending.payload_base().filter(|b| b.parent_hash == local_tip_hash) {
+                let cached_state = self.pending.take_cached_reads().map(|r| (base.parent_hash, r));
+                let last_fb = self.pending.last_flashblock()?;
+                let transactions = self.pending_transactions.clone();
+                (base, last_fb, transactions, cached_state, "pending", None)
             }
             // Priority 2: Try cached sequence with exact parent match (canonical mode)
-            else if let Some((cached, txs)) = self.newest_unexecuted_cached_for_parent(local_tip_hash) {
-                let sequence_id = SequenceId::from_complete(cached);
-                let ticket = BuildTicket::cached(sequence_id);
+            else if let Some((cached, txs)) = self.completed_cache.iter().find(|(c, _)| c.payload_base().parent_hash == local_tip_hash) {
                 let base = cached.payload_base().clone();
                 let last_fb = cached.last();
                 let transactions = txs.clone();
                 let cached_state = None;
-                (ticket, base, last_fb, transactions, cached_state, "cached", None)
+                (base, last_fb, transactions, cached_state, "cached", None)
             }
             // Priority 3: Try speculative building with pending parent state
             else if let Some(ref pending_state) = pending_parent_state {
                 // Check if pending sequence's parent matches the pending state's block
-                if let Some(base) = self.pending.sequence.payload_base().filter(|b| b.parent_hash == pending_state.block_hash) {
-                    let revision = self.pending.revision();
-                    if self.pending.is_revision_applied(revision) {
-                        trace!(
-                            target: "flashblocks",
-                            block_number = base.block_number,
-                            revision,
-                            speculative_parent = ?pending_state.block_hash,
-                            "Skipping speculative rebuild for already-applied pending revision"
-                        );
-                        return None;
-                    }
-                    let sequence_id = SequenceId::from_pending(self.pending.sequence())?;
-                    let ticket = BuildTicket::pending(sequence_id, revision);
-                    let cached_state = self.pending.sequence.take_cached_reads().map(|r| (base.parent_hash, r));
-                    let last_fb = self.pending.sequence.last_flashblock()?;
-                    let transactions = self.pending.transactions();
-                    (
-                        ticket,
-                        base,
-                        last_fb,
-                        transactions,
-                        cached_state,
-                        "speculative-pending",
-                        pending_parent_state,
-                    )
+                if let Some(base) = self.pending.payload_base().filter(|b| b.parent_hash == pending_state.block_hash) {
+                    let cached_state = self.pending.take_cached_reads().map(|r| (base.parent_hash, r));
+                    let last_fb = self.pending.last_flashblock()?;
+                    let transactions = self.pending_transactions.clone();
+                    (base, last_fb, transactions, cached_state, "speculative-pending", pending_parent_state)
                 }
                 // Check cached sequences
-                else if let Some((cached, txs)) = self.newest_unexecuted_cached_for_parent(pending_state.block_hash) {
-                    let sequence_id = SequenceId::from_complete(cached);
-                    let ticket = BuildTicket::cached(sequence_id);
+                else if let Some((cached, txs)) = self.completed_cache.iter().find(|(c, _)| c.payload_base().parent_hash == pending_state.block_hash) {
                     let base = cached.payload_base().clone();
                     let last_fb = cached.last();
                     let transactions = txs.clone();
                     let cached_state = None;
-                    (
-                        ticket,
-                        base,
-                        last_fb,
-                        transactions,
-                        cached_state,
-                        "speculative-cached",
-                        pending_parent_state,
-                    )
+                    (base, last_fb, transactions, cached_state, "speculative-cached", pending_parent_state)
                 } else {
                     return None;
                 }
@@ -529,17 +443,14 @@ impl<T: SignedTransaction> SequenceManager<T> {
             "Building from flashblock sequence"
         );
 
-        Some(BuildCandidate {
-            ticket,
-            args: BuildArgs {
-                base,
-                transactions,
-                cached_state,
-                last_flashblock_index: last_flashblock.index,
-                last_flashblock_hash: last_flashblock.diff.block_hash,
-                compute_state_root,
-                pending_parent,
-            },
+        Some(BuildArgs {
+            base,
+            transactions,
+            cached_state,
+            last_flashblock_index: last_flashblock.index,
+            last_flashblock_hash: last_flashblock.diff.block_hash,
+            compute_state_root,
+            pending_parent,
         })
     }
 
@@ -842,41 +753,162 @@ impl<T: SignedTransaction> SequenceManager<T> {
     fn pending_transaction_count(&self) -> usize {
         self.pending.transaction_count()
     }
+
+    /// Returns the earliest block number in the pending or cached sequences.
+    pub(crate) fn earliest_block_number(&self) -> Option<u64> {
+        match (self.pending.block_number(), self.cached_min_block_number) {
+            (Some(pending_block), Some(cache_min)) => Some(cache_min.min(pending_block)),
+            (Some(pending_block), None) => Some(pending_block),
+            (None, Some(cache_min)) => Some(cache_min),
+            (None, None) => None,
+        }
+    }
+
+    /// Returns the latest block number in the pending or cached sequences.
+    pub(crate) fn latest_block_number(&self) -> Option<u64> {
+        // Pending is always the latest if it exists
+        if let Some(pending_block) = self.pending.block_number() {
+            return Some(pending_block);
+        }
+
+        // Fall back to cache
+        self.completed_cache.iter().map(|(seq, _)| seq.block_number()).max()
+    }
+
+    /// Returns transaction hashes for a specific block number from pending or cached sequences.
+    pub(crate) fn get_transaction_hashes_for_block(&self, block_number: u64) -> Vec<B256> {
+        // Check pending sequence
+        if self.pending.block_number() == Some(block_number) {
+            return self.pending_transactions.iter().map(|tx| *tx.tx_hash()).collect();
+        }
+
+        // Check cached sequences
+        for (seq, txs) in self.completed_cache.iter() {
+            if seq.block_number() == block_number {
+                return txs.iter().map(|tx| *tx.tx_hash()).collect();
+            }
+        }
+
+        Vec::new()
+    }
+
+    /// Returns true if the given block number is tracked in pending or cached sequences.
+    fn tracks_block_number(&self, block_number: u64) -> bool {
+        // Check pending sequence
+        if self.pending.block_number() == Some(block_number) {
+            return true;
+        }
+
+        // Check cached sequences
+        self.completed_cache.iter().any(|(seq, _)| seq.block_number() == block_number)
+    }
+
+    /// Processes a canonical block and reconciles pending state.
+    ///
+    /// This method determines how to handle the pending flashblock state when a new
+    /// canonical block arrives. It uses the [`CanonicalBlockReconciler`] to decide
+    /// the appropriate strategy based on:
+    /// - Whether canonical has caught up to pending
+    /// - Whether a reorg was detected (transaction mismatch)
+    /// - Whether pending is too far ahead of canonical
+    ///
+    /// Returns the reconciliation strategy that was applied.
+    pub(crate) fn process_canonical_block(
+        &mut self,
+        canonical_block_number: u64,
+        canonical_tx_hashes: &[B256],
+        max_depth: u64,
+    ) -> ReconciliationStrategy {
+        let earliest = self.earliest_block_number();
+        let latest = self.latest_block_number();
+
+        // Only run reorg detection if we actually track the canonical block number.
+        // If we don't track it (block number outside our pending/cached window),
+        // comparing empty tracked hashes to non-empty canonical hashes would falsely
+        // trigger reorg detection.
+        let reorg_detected = if self.tracks_block_number(canonical_block_number) {
+            let tracked_tx_hashes = self.get_transaction_hashes_for_block(canonical_block_number);
+            let reorg_result = ReorgDetector::detect(&tracked_tx_hashes, canonical_tx_hashes);
+            reorg_result.is_reorg()
+        } else {
+            false
+        };
+
+        // Determine reconciliation strategy
+        let strategy = CanonicalBlockReconciler::reconcile(
+            earliest,
+            latest,
+            canonical_block_number,
+            max_depth,
+            reorg_detected,
+        );
+
+        match &strategy {
+            ReconciliationStrategy::CatchUp => {
+                trace!(
+                    target: "flashblocks",
+                    ?latest,
+                    canonical_block_number,
+                    "Canonical caught up - clearing pending state"
+                );
+                self.clear_all();
+            }
+            ReconciliationStrategy::HandleReorg => {
+                warn!(
+                    target: "flashblocks",
+                    canonical_block_number,
+                    canonical_tx_count = canonical_tx_hashes.len(),
+                    "Reorg detected - clearing pending state"
+                );
+                self.clear_all();
+            }
+            ReconciliationStrategy::DepthLimitExceeded { depth, max_depth } => {
+                trace!(
+                    target: "flashblocks",
+                    depth,
+                    max_depth,
+                    "Depth limit exceeded - clearing pending state"
+                );
+                self.clear_all();
+            }
+            ReconciliationStrategy::Continue => {
+                trace!(
+                    target: "flashblocks",
+                    ?earliest,
+                    ?latest,
+                    canonical_block_number,
+                    "Canonical behind pending - continuing"
+                );
+            }
+            ReconciliationStrategy::NoPendingState => {
+                trace!(
+                    target: "flashblocks",
+                    canonical_block_number,
+                    "No pending state to reconcile"
+                );
+            }
+        }
+
+        strategy
+    }
+
+    /// Clears all pending and cached state.
+    fn clear_all(&mut self) {
+        self.pending = FlashBlockPendingSequence::new();
+        self.pending_transactions.clear();
+        self.completed_cache.clear();
+        self.cached_min_block_number = None;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        test_utils::TestFlashBlockFactory,
-        validation::{CanonicalBlockFingerprint, ReconciliationStrategy},
-    };
+    use crate::{test_utils::TestFlashBlockFactory, validation::ReconciliationStrategy};
     use alloy_primitives::B256;
     use alloy_rpc_types_engine::PayloadId;
     use op_alloy_consensus::OpTxEnvelope;
     use reth_optimism_primitives::OpPrimitives;
-
-    fn canonical_for(
-        manager: &SequenceManager<OpTxEnvelope>,
-        block_number: u64,
-        tx_hashes: Vec<B256>,
-    ) -> CanonicalBlockFingerprint {
-        if let Some(tracked) = manager.tracked_fingerprint_for_block(block_number) {
-            CanonicalBlockFingerprint {
-                block_number,
-                block_hash: tracked.block_hash,
-                parent_hash: tracked.parent_hash,
-                tx_hashes,
-            }
-        } else {
-            CanonicalBlockFingerprint {
-                block_number,
-                block_hash: B256::repeat_byte(0xFE),
-                parent_hash: B256::repeat_byte(0xFD),
-                tx_hashes,
-            }
-        }
-    }
 
     #[test]
     fn test_sequence_manager_new() {
@@ -1590,8 +1622,7 @@ mod tests {
         let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
 
         // No pending state, should return NoPendingState
-        let canonical = canonical_for(&manager, 100, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(100, &[], 10);
         assert_eq!(strategy, ReconciliationStrategy::NoPendingState);
     }
 
@@ -1607,8 +1638,7 @@ mod tests {
         assert_eq!(manager.pending().block_number(), Some(100));
 
         // Canonical catches up to block 100
-        let canonical = canonical_for(&manager, 100, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(100, &[], 10);
         assert_eq!(strategy, ReconciliationStrategy::CatchUp);
 
         // Pending state should be cleared
@@ -1631,8 +1661,7 @@ mod tests {
         manager.insert_flashblock(fb2).unwrap();
 
         // Canonical at 99 (behind pending)
-        let canonical = canonical_for(&manager, 99, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(99, &[], 10);
         assert_eq!(strategy, ReconciliationStrategy::Continue);
 
         // Pending state should still exist
@@ -1658,8 +1687,7 @@ mod tests {
         // Canonical at 105 with max_depth of 2 (depth = 105 - 100 = 5, which exceeds 2)
         // But wait - if canonical >= latest, it's CatchUp. So canonical must be < latest (102).
         // Let's use canonical=101, which is < 102 but depth = 101 - 100 = 1 > 0
-        let canonical = canonical_for(&manager, 101, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 0);
+        let strategy = manager.process_canonical_block(101, &[], 0);
         assert!(matches!(strategy, ReconciliationStrategy::DepthLimitExceeded { .. }));
 
         // Pending state should be cleared
@@ -1756,7 +1784,6 @@ mod tests {
             canonical_anchor_hash: parent_hash,
             execution_outcome: Arc::new(BlockExecutionOutput::default()),
             cached_reads: CachedReads::default(),
-            sealed_header: None,
         };
 
         // With pending parent state, should return args for speculative building
@@ -1802,7 +1829,6 @@ mod tests {
             canonical_anchor_hash: parent_hash,
             execution_outcome: Arc::new(BlockExecutionOutput::default()),
             cached_reads: CachedReads::default(),
-            sealed_header: None,
         };
 
         // Should find cached sequence for block 100 (whose parent is block_99_hash)
@@ -1837,7 +1863,6 @@ mod tests {
             canonical_anchor_hash: pending_parent_hash,
             execution_outcome: Arc::new(BlockExecutionOutput::default()),
             cached_reads: CachedReads::default(),
-            sealed_header: None,
         };
 
         // Local tip matches the sequence parent (canonical mode should take priority)
@@ -1870,8 +1895,7 @@ mod tests {
         assert!(manager.pending().block_number().is_some());
 
         // Canonical catches up to 102 - should clear everything
-        let canonical = canonical_for(&manager, 102, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(102, &[], 10);
         assert_eq!(strategy, ReconciliationStrategy::CatchUp);
 
         // Verify all state is cleared
@@ -1905,8 +1929,7 @@ mod tests {
         // Actually, let's verify the state clearing on HandleReorg by checking
         // that any non-empty canonical_tx_hashes when we have state triggers reorg
         let canonical_tx_hashes = vec![B256::repeat_byte(0xAA)];
-        let canonical = canonical_for(&manager, 100, canonical_tx_hashes);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(100, &canonical_tx_hashes, 10);
 
         // Should detect reorg (canonical has txs, we have none for that block)
         assert_eq!(strategy, ReconciliationStrategy::HandleReorg);
@@ -1937,8 +1960,7 @@ mod tests {
 
         // Canonical at 101 with max_depth of 0 (depth = 101 - 100 = 1 > 0)
         // Since canonical < latest (102), this should trigger depth limit exceeded
-        let canonical = canonical_for(&manager, 101, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 0);
+        let strategy = manager.process_canonical_block(101, &[], 0);
         assert!(matches!(strategy, ReconciliationStrategy::DepthLimitExceeded { .. }));
 
         // Verify all state is cleared
@@ -1964,8 +1986,7 @@ mod tests {
         let cached_count = manager.completed_cache.len();
 
         // Canonical at 99 (behind pending) with reasonable depth limit
-        let canonical = canonical_for(&manager, 99, vec![]);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(99, &[], 10);
         assert_eq!(strategy, ReconciliationStrategy::Continue);
 
         // Verify state is preserved
@@ -1988,28 +2009,63 @@ mod tests {
         // Verify state exists
         assert!(manager.pending().block_number().is_some());
         assert!(!manager.completed_cache.is_empty());
-        assert!(manager.pending_transaction_count() > 0 || manager.pending().count() > 0);
+        assert!(!manager.pending_transactions.is_empty() || manager.pending().count() > 0);
 
         // Clear via catchup
-        let canonical = canonical_for(&manager, 101, vec![]);
-        manager.process_canonical_block(canonical, 10);
+        manager.process_canonical_block(101, &[], 10);
 
         // Verify complete clearing
         assert!(manager.pending().block_number().is_none());
         assert_eq!(manager.pending().count(), 0);
         assert!(manager.completed_cache.is_empty());
-        assert_eq!(manager.pending_transaction_count(), 0);
+        assert!(manager.pending_transactions.is_empty());
     }
 
-    // ==================== Tracked Fingerprint Tests ====================
+    // ==================== Transaction Hash Tracking Tests ====================
 
     #[test]
-    fn test_tracked_fingerprint_returns_none_for_unknown_block() {
+    fn test_get_transaction_hashes_returns_empty_for_unknown_block() {
         let manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
 
-        // No flashblocks inserted, should return none
-        let fingerprint = manager.tracked_fingerprint_for_block(100);
-        assert!(fingerprint.is_none());
+        // No flashblocks inserted, should return empty
+        let hashes = manager.get_transaction_hashes_for_block(100);
+        assert!(hashes.is_empty());
+    }
+
+    #[test]
+    fn test_get_transaction_hashes_for_pending_block() {
+        let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
+        let factory = TestFlashBlockFactory::new();
+
+        // Create flashblock without transactions (empty tx list is valid)
+        let fb0 = factory.flashblock_at(0).build();
+        manager.insert_flashblock(fb0).unwrap();
+
+        // Should find (empty) transaction hashes for block 100
+        let hashes = manager.get_transaction_hashes_for_block(100);
+        assert!(hashes.is_empty()); // No transactions in this flashblock
+    }
+
+    #[test]
+    fn test_get_transaction_hashes_for_cached_block() {
+        let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
+        let factory = TestFlashBlockFactory::new();
+
+        // Create first flashblock for block 100
+        let fb0 = factory.flashblock_at(0).build();
+        manager.insert_flashblock(fb0.clone()).unwrap();
+
+        // Create second flashblock for block 101 (caches block 100)
+        let fb1 = factory.flashblock_for_next_block(&fb0).build();
+        manager.insert_flashblock(fb1).unwrap();
+
+        // Should find transaction hashes for cached block 100
+        let hashes = manager.get_transaction_hashes_for_block(100);
+        assert!(hashes.is_empty()); // No transactions in these flashblocks
+
+        // Should find transaction hashes for pending block 101
+        let hashes = manager.get_transaction_hashes_for_block(101);
+        assert!(hashes.is_empty()); // No transactions in these flashblocks
     }
 
     #[test]
@@ -2032,8 +2088,7 @@ mod tests {
         // Process canonical block 99 (not tracked) with transactions
         // This should NOT trigger reorg detection because we don't track block 99
         let canonical_tx_hashes = vec![B256::repeat_byte(0xAA)];
-        let canonical = canonical_for(&manager, 99, canonical_tx_hashes);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(99, &canonical_tx_hashes, 10);
 
         // Should continue (not reorg) because block 99 is outside our tracked window
         assert_eq!(strategy, ReconciliationStrategy::Continue);
@@ -2059,8 +2114,7 @@ mod tests {
         // Process canonical block 100 (which IS tracked) with different transactions
         // Our tracked block 100 has empty tx list, canonical has non-empty
         let canonical_tx_hashes = vec![B256::repeat_byte(0xAA)];
-        let canonical = canonical_for(&manager, 100, canonical_tx_hashes);
-        let strategy = manager.process_canonical_block(canonical, 10);
+        let strategy = manager.process_canonical_block(100, &canonical_tx_hashes, 10);
 
         // Should detect reorg because we track block 100 and txs don't match
         assert_eq!(strategy, ReconciliationStrategy::HandleReorg);
@@ -2068,98 +2122,5 @@ mod tests {
         // State should be cleared
         assert!(manager.pending().block_number().is_none());
         assert!(manager.completed_cache.is_empty());
-    }
-
-    #[test]
-    fn test_reorg_detected_for_tracked_block_with_parent_hash_mismatch() {
-        let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
-        let factory = TestFlashBlockFactory::new();
-
-        // Build pending sequence for block 100 and cache it by starting block 101.
-        let fb0 = factory.flashblock_at(0).build();
-        manager.insert_flashblock(fb0.clone()).unwrap();
-        let fb1 = factory.flashblock_for_next_block(&fb0).build();
-        manager.insert_flashblock(fb1).unwrap();
-
-        let tracked = manager
-            .tracked_fingerprint_for_block(100)
-            .expect("tracked fingerprint for block 100 should exist");
-        let canonical = CanonicalBlockFingerprint {
-            block_number: 100,
-            block_hash: tracked.block_hash,
-            parent_hash: B256::repeat_byte(0xAA), // Different parent hash, identical txs.
-            tx_hashes: tracked.tx_hashes,
-        };
-
-        let strategy = manager.process_canonical_block(canonical, 10);
-        assert_eq!(strategy, ReconciliationStrategy::HandleReorg);
-        assert!(manager.pending().block_number().is_none());
-        assert!(manager.completed_cache.is_empty());
-    }
-
-    #[test]
-    fn test_reorg_detected_for_tracked_block_with_block_hash_mismatch() {
-        let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
-        let factory = TestFlashBlockFactory::new();
-
-        // Build pending sequence for block 100 and cache it by starting block 101.
-        let fb0 = factory.flashblock_at(0).build();
-        manager.insert_flashblock(fb0.clone()).unwrap();
-        let fb1 = factory.flashblock_for_next_block(&fb0).build();
-        manager.insert_flashblock(fb1).unwrap();
-
-        let tracked = manager
-            .tracked_fingerprint_for_block(100)
-            .expect("tracked fingerprint for block 100 should exist");
-        let canonical = CanonicalBlockFingerprint {
-            block_number: 100,
-            block_hash: B256::repeat_byte(0xBB), // Different block hash, identical parent+txs.
-            parent_hash: tracked.parent_hash,
-            tx_hashes: tracked.tx_hashes,
-        };
-
-        let strategy = manager.process_canonical_block(canonical, 10);
-        assert_eq!(strategy, ReconciliationStrategy::HandleReorg);
-        assert!(manager.pending().block_number().is_none());
-        assert!(manager.completed_cache.is_empty());
-    }
-
-    #[test]
-    fn test_tracked_fingerprint_for_pending_block() {
-        let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
-        let factory = TestFlashBlockFactory::new();
-
-        // Create flashblock without transactions (empty tx list is valid)
-        let fb0 = factory.flashblock_at(0).build();
-        manager.insert_flashblock(fb0).unwrap();
-
-        // Should find tracked fingerprint for block 100
-        let fingerprint = manager.tracked_fingerprint_for_block(100);
-        assert!(fingerprint.is_some());
-        assert!(fingerprint.unwrap().tx_hashes.is_empty()); // No transactions in this flashblock
-    }
-
-    #[test]
-    fn test_tracked_fingerprint_for_cached_block() {
-        let mut manager: SequenceManager<OpTxEnvelope> = SequenceManager::new(true);
-        let factory = TestFlashBlockFactory::new();
-
-        // Create first flashblock for block 100
-        let fb0 = factory.flashblock_at(0).build();
-        manager.insert_flashblock(fb0.clone()).unwrap();
-
-        // Create second flashblock for block 101 (caches block 100)
-        let fb1 = factory.flashblock_for_next_block(&fb0).build();
-        manager.insert_flashblock(fb1).unwrap();
-
-        // Should find tracked fingerprint for cached block 100
-        let fingerprint = manager.tracked_fingerprint_for_block(100);
-        assert!(fingerprint.is_some());
-        assert!(fingerprint.as_ref().unwrap().tx_hashes.is_empty());
-
-        // Should find tracked fingerprint for pending block 101
-        let fingerprint = manager.tracked_fingerprint_for_block(101);
-        assert!(fingerprint.is_some());
-        assert!(fingerprint.as_ref().unwrap().tx_hashes.is_empty());
     }
 }
