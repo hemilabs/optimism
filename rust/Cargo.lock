@@ -11280,33 +11280,6 @@ version = "1.11.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
- "eyre",
- "futures",
- "futures-util",
- "reth-db",
- "reth-ethereum-primitives",
- "reth-execution-types",
- "reth-exex",
- "reth-exex-test-utils",
- "reth-node-api",
- "reth-node-builder",
- "reth-optimism-chainspec",
- "reth-optimism-node",
- "reth-optimism-trie",
- "reth-primitives-traits",
- "reth-provider",
- "reth-trie",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "reth-optimism-flashblocks"
-version = "1.11.3"
-dependencies = [
- "alloy-consensus",
- "alloy-eips",
  "alloy-network",
  "alloy-primitives",
  "alloy-rpc-types",
