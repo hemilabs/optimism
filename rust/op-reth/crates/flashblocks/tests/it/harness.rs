@@ -10,8 +10,7 @@ use op_alloy_rpc_types_engine::{
 };
 use reth_optimism_flashblocks::{
     CanonicalBlockNotification, FlashBlock, FlashBlockCompleteSequence, InProgressFlashBlockRx,
-    PendingBlockState,
-    validation::{CanonicalBlockFingerprint, ReconciliationStrategy},
+    PendingBlockState, validation::ReconciliationStrategy,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -222,19 +221,19 @@ impl TestSequenceManager {
     /// Processes a canonical block notification and returns the reconciliation strategy.
     pub(crate) fn process_canonical_block(
         &mut self,
-        canonical: CanonicalBlockFingerprint,
+        canonical_block_number: u64,
+        canonical_tx_hashes: &[B256],
         max_depth: u64,
     ) -> ReconciliationStrategy {
-        let canonical_block_number = canonical.block_number;
         let earliest = self.earliest_block_number();
         let latest = self.latest_block_number();
 
-        let (Some(_earliest), Some(latest)) = (earliest, latest) else {
+        let (Some(earliest), Some(latest)) = (earliest, latest) else {
             return ReconciliationStrategy::NoPendingState;
         };
 
-        // Check depth limit: pending blocks ahead of canonical tip.
-        let depth = latest.saturating_sub(canonical_block_number);
+        // Check depth limit
+        let depth = canonical_block_number.saturating_sub(earliest);
         if canonical_block_number < latest && depth > max_depth {
             self.clear();
             return ReconciliationStrategy::DepthLimitExceeded { depth, max_depth };
@@ -248,7 +247,7 @@ impl TestSequenceManager {
 
         // Check for reorg (simplified: any tx hash mismatch)
         // In real implementation, would compare tx hashes
-        if !canonical.tx_hashes.is_empty() {
+        if !canonical_tx_hashes.is_empty() {
             // Simplified reorg detection
             self.clear();
             return ReconciliationStrategy::HandleReorg;
