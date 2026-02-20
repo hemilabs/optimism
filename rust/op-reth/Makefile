@@ -31,7 +31,7 @@ PROFILE ?= release
 CARGO_INSTALL_EXTRA_FLAGS ?=
 
 # The docker image name
-DOCKER_IMAGE_NAME ?= ghcr.io/paradigmxyz/op-reth
+DOCKER_IMAGE_NAME ?= us-docker.pkg.dev/oplabs-tools-artifacts/images/op-reth
 
 ##@ Help
 
