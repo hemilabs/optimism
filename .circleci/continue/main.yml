@@ -455,7 +455,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: &rust-cache-version "16"
       profile:
         description: "Profile to restore the cache for"
         type: string
@@ -489,7 +489,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to save the cache for"
         type: string
@@ -530,7 +530,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to restore the cache for"
         type: string
@@ -566,7 +566,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to build the binary with"
         type: string
@@ -662,7 +662,7 @@ jobs:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to build the binary with"
         type: string
