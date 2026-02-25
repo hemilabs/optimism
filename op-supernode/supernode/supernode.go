@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -92,7 +91,7 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		superroot.New(log.New("activity", "superroot"), s.chains),
 	}
 
-	log.Info("initializing interop activity? %v", cfg.RawCtx.IsSet(interop.InteropActivationTimestampFlag.Name))
+	log.Info("initializing interop activity? %v", cfg.InteropActivationTimestamp != nil)
 	// Initialize interop activity if the activation timestamp is set (non-nil)
 	// If it's nil, don't start interop. If it's non-nil (including 0), do start it.
 	if cfg.InteropActivationTimestamp != nil {
@@ -161,16 +160,17 @@ func (s *Supernode) Start(ctx context.Context) error {
 			go func(run activity.RunnableActivity) {
 				defer s.wg.Done()
 				err := run.Start(ctx)
+				activityName := a.Name()
 				switch err {
 				case nil:
-					s.log.Error("activity quit unexpectedly")
+					s.log.Error("activity quit unexpectedly", "name", activityName)
 				case context.Canceled:
 					// This is the happy path, normal / clean shutdown
-					s.log.Info("activity closing due to cancelled context")
+					s.log.Info("activity closing due to cancelled context", "name", activityName)
 				case context.DeadlineExceeded:
-					s.log.Warn("activity quit due to deadline exceeded")
+					s.log.Warn("activity quit due to deadline exceeded", "name", activityName)
 				default:
-					s.log.Error("error starting runnable activity", "error", err)
+					s.log.Error("error starting runnable activity", "name", activityName, "error", err)
 				}
 			}(run)
 		}
@@ -220,11 +220,12 @@ func (s *Supernode) Stop(ctx context.Context) error {
 
 	// Stop runnable activities
 	for _, a := range s.activities {
+		activityName := a.Name()
 		if run, ok := a.(activity.RunnableActivity); ok {
 			if err := run.Stop(ctx); err != nil {
-				s.log.Error("error stopping runnable activity", "error", err)
+				s.log.Error("error stopping runnable activity", "name", activityName, "error", err)
 			} else {
-				s.log.Info("runnable activity stopped", "activity", reflect.TypeOf(a).String())
+				s.log.Info("runnable activity stopped", "name", activityName)
 			}
 		}
 	}
@@ -239,10 +240,12 @@ func (s *Supernode) Stop(ctx context.Context) error {
 
 	s.log.Info("all chain containers stopped, waiting for goroutines to finish")
 	s.wg.Wait()
+	s.log.Info("goroutines finished, closing l1 client")
 
 	if s.l1Client != nil {
 		s.l1Client.Close()
 	}
+	s.log.Info("l1 client closed, supernode stopped")
 
 	return nil
 }

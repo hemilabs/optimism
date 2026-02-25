@@ -45,6 +45,10 @@ type SuperNode struct {
 	chains           []eth.ChainID
 	l1UserRPC        string
 	l1BeaconAddr     string
+
+	// Configs stored for Start()/restart.
+	snCfg  *snconfig.CLIConfig
+	vnCfgs map[eth.ChainID]*config.Config
 }
 
 var _ L2CLNode = (*SuperNode)(nil)
@@ -79,49 +83,23 @@ func (n *SuperNode) Start() {
 		return
 	}
 
-	n.p.Require().NotEmpty(n.chains, "supernode has no chains configured")
-	chainIDs := make([]uint64, 0, len(n.chains))
-	for _, id := range n.chains {
-		chainIDs = append(chainIDs, eth.EvilChainIDToUInt64(id))
-	}
+	n.p.Require().NotNil(n.snCfg, "supernode CLI config required")
 
-	// Build CLI config for supernode (single-chain)
-	cfg := &snconfig.CLIConfig{
-		Chains:       chainIDs,
-		DataDir:      n.p.TempDir(),
-		L1NodeAddr:   n.l1UserRPC,
-		L1BeaconAddr: n.l1BeaconAddr,
-		RPCConfig: oprpc.CLIConfig{
-			ListenAddr:  "127.0.0.1",
-			ListenPort:  0,
-			EnableAdmin: true,
-		},
-		// Other configs (Log/Metrics/Pprof) left default
-	}
-
-	// Construct VN config map
-	vnCfgs := map[eth.ChainID]*config.Config{}
-
-	// Create Supernode instance
 	ctx, cancel := context.WithCancel(n.p.Ctx())
-	sn, err := supernode.New(ctx, n.logger, "devstack", func(err error) { n.p.Require().NoError(err, "supernode critical error") }, cfg, vnCfgs)
+	exitFn := func(err error) { n.p.Require().NoError(err, "supernode critical error") }
+	sn, err := supernode.New(ctx, n.logger, "devstack", exitFn, n.snCfg, n.vnCfgs)
 	n.p.Require().NoError(err, "supernode failed to create")
 	n.sn = sn
 	n.cancel = cancel
 
-	err = n.sn.Start(ctx)
-	n.p.Require().NoError(err)
+	n.p.Require().NoError(n.sn.Start(ctx))
 
 	// Wait for the RPC addr and save userRPC/interop endpoints
-	if addr, err := n.sn.WaitRPCAddr(ctx); err == nil {
-		base := "http://" + addr
-		// single-chain instance routes at root
-		n.userRPC = base
-		n.interopEndpoint = base
-	} else {
-		n.p.Require().NoError(err, "supernode failed to bind RPC address")
-	}
-
+	addr, err := n.sn.WaitRPCAddr(ctx)
+	n.p.Require().NoError(err, "supernode failed to bind RPC address")
+	base := "http://" + addr
+	n.userRPC = base
+	n.interopEndpoint = base
 }
 
 func (n *SuperNode) Stop() {
@@ -380,7 +358,7 @@ func withSharedSupernodeCLsImpl(orch *Orchestrator, supernodeID stack.SupernodeI
 		els = append(els, &cls[i].ELID)
 	}
 
-	// Start shared supernode with all chains
+	// Build supernode CLI config
 	snCfg := &snconfig.CLIConfig{
 		Chains:                     chainIDs,
 		DataDir:                    p.TempDir(),
@@ -392,21 +370,28 @@ func withSharedSupernodeCLsImpl(orch *Orchestrator, supernodeID stack.SupernodeI
 	if snOpts.InteropActivationTimestamp != nil {
 		logger.Info("supernode interop enabled", "activation_timestamp", *snOpts.InteropActivationTimestamp)
 	}
-	ctx, cancel := context.WithCancel(p.Ctx())
-	exitFn := func(err error) { p.Require().NoError(err, "supernode critical error") }
-	sn, err := supernode.New(ctx, logger, "devstack", exitFn, snCfg, vnCfgs)
-	require.NoError(err)
-	go func() { _ = sn.Start(ctx) }()
-	// Resolve bound address
-	addr, err := sn.WaitRPCAddr(ctx)
-	require.NoError(err, "failed waiting for supernode RPC addr")
-	base := "http://" + addr
-	p.Cleanup(func() {
-		stopCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = sn.Stop(stopCtx)
-		c()
-		cancel()
-	})
+
+	snode := &SuperNode{
+		id:               supernodeID,
+		userRPC:          "",
+		interopEndpoint:  "",
+		interopJwtSecret: jwtSecret,
+		p:                p,
+		logger:           logger,
+		els:              els,
+		chains:           idsFromCLs(cls),
+		l1UserRPC:        l1EL.UserRPC(),
+		l1BeaconAddr:     l1CL.beaconHTTPAddr,
+		snCfg:            snCfg,
+		vnCfgs:           vnCfgs,
+	}
+
+	// Start and register cleanup, following the same pattern as OpNode.
+	snode.Start()
+	p.Cleanup(snode.Stop)
+
+	base := snode.UserRPC()
+
 	// Wait for per-chain RPC routes to serve optimism_rollupConfig and register proxies
 	waitReady := func(u string) {
 		deadline := time.Now().Add(15 * time.Second)
@@ -445,21 +430,7 @@ func withSharedSupernodeCLsImpl(orch *Orchestrator, supernodeID stack.SupernodeI
 		orch.registry.Register(cid, proxy)
 	}
 
-	snNode := &SuperNode{
-		id:               supernodeID,
-		sn:               sn,
-		cancel:           cancel,
-		userRPC:          base,
-		interopEndpoint:  base,
-		interopJwtSecret: jwtSecret,
-		p:                p,
-		logger:           logger,
-		els:              els,
-		chains:           idsFromCLs(cls),
-		l1UserRPC:        l1EL.UserRPC(),
-		l1BeaconAddr:     l1CL.beaconHTTPAddr,
-	}
-	orch.supernodes.Set(supernodeID, snNode)
+	orch.supernodes.Set(supernodeID, snode)
 }
 
 func idsFromCLs(cls []L2CLs) []eth.ChainID {
