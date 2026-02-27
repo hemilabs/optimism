@@ -46,6 +46,7 @@ rules:
     paths:
       exclude:
         - packages/contracts-bedrock/test/universal/WETH98.t.sol
+        - packages/contracts-bedrock/test/legacy/L1ChugSplashProxy.t.sol
 
   - id: sol-safety-natspec-semver-match
     languages: [generic]
@@ -324,6 +325,7 @@ rules:
         - packages/contracts-bedrock/src/L1/opcm/OPContractsManagerContainer.sol
         - packages/contracts-bedrock/src/L1/opcm/OPContractsManagerUtils.sol
         - packages/contracts-bedrock/src/L1/opcm/OPContractsManagerUtilsCaller.sol
+        - packages/contracts-bedrock/src/L1/opcm/OPContractsManagerMigrator.sol
         - packages/contracts-bedrock/src/L1/OptimismPortal2.sol
         - packages/contracts-bedrock/src/L1/OptimismPortalInterop.sol
         - packages/contracts-bedrock/src/L2/FeeVault.sol
@@ -335,9 +337,7 @@ rules:
         - packages/contracts-bedrock/src/dispute/AnchorStateRegistry.sol
         - packages/contracts-bedrock/src/dispute/DelayedWETH.sol
         - packages/contracts-bedrock/src/dispute/FaultDisputeGame.sol
-        - packages/contracts-bedrock/src/dispute/v2/FaultDisputeGameV2.sol
         - packages/contracts-bedrock/src/dispute/PermissionedDisputeGame.sol
-        - packages/contracts-bedrock/src/dispute/v2/PermissionedDisputeGameV2.sol
         - packages/contracts-bedrock/src/dispute/SuperFaultDisputeGame.sol
         - packages/contracts-bedrock/src/dispute/SuperPermissionedDisputeGame.sol
         - packages/contracts-bedrock/src/governance/MintManager.sol
@@ -399,3 +399,71 @@ rules:
     paths:
       include:
         - packages/contracts-bedrock/src/L1/opcm/OPContractsManagerV2.sol
+
+  - id: sol-style-ban-forge-std-test-import
+    languages: [solidity]
+    severity: ERROR
+    message: Import Test from test/setup/Test.sol, not forge-std/Test.sol. Import other forge-std components (stdStorage, StdStorage, stdError, StdUtils, Vm, console2, etc.) from their specific files (forge-std/StdStorage.sol, forge-std/StdError.sol, forge-std/StdUtils.sol, forge-std/Vm.sol, forge-std/console2.sol, etc.)
+    pattern-regex: import\s+(\{[^}]*\}\s+from\s+)?"forge-std/Test\.sol"\s*;
+    paths:
+      include:
+        - packages/contracts-bedrock/test
+      exclude:
+        - packages/contracts-bedrock/test/setup/Test.sol
+
+  - id: sol-safety-opcmv2-immutable-prefix
+    languages: [solidity]
+    severity: ERROR
+    message: All immutable variables in OPContractsManagerV2 must start with 'opcm'
+    pattern-regex: |
+      ^\s*(?!/\*|//|\*)\w+\s+public\s+immutable\s+(?!(?:opcm\w*|contractsContainer\s*;))\w+;
+    # To add more allowed names, add them to the regex alternation in the negative lookahead.
+    # Example (to add standardValidator as an allowed variable name that does not start with 'opcm'):
+    # pattern-regex: ^\s*(?!/\*|//|\*)\w+\s+public\s+immutable\s+(?!(?:opcm\w*|contractsContainer\s*;|standardValidator\s*;))\w+;
+    paths:
+      include:
+        - packages/contracts-bedrock/src/L1/opcm/OPContractsManagerV2.sol
+
+  - id: sol-safety-initialize-assert-proxy-admin
+    languages: [solidity]
+    severity: ERROR
+    message: Initialize functions must call _assertOnlyProxyAdminOrProxyAdminOwner() to restrict initialization to authorized callers
+    patterns:
+      - pattern: |
+          function initialize(...) {
+            ...
+          }
+      - pattern-not: |
+          function initialize(...) {
+            ...
+            _assertOnlyProxyAdminOrProxyAdminOwner();
+            ...
+          }
+    paths:
+      include:
+        - packages/contracts-bedrock/src
+      exclude:
+        # TODO(#19001): We should eventually have this on the L2 contracts.
+        - packages/contracts-bedrock/src/L2
+        - packages/contracts-bedrock/src/universal/OptimismMintableERC20Factory.sol
+        # Dispute games use initialize() in a different context - they are clone-deployed
+        # via DisputeGameFactory and use their own AlreadyInitialized check pattern.
+        - packages/contracts-bedrock/src/dispute/FaultDisputeGame.sol
+        - packages/contracts-bedrock/src/dispute/PermissionedDisputeGame.sol
+        - packages/contracts-bedrock/src/dispute/SuperFaultDisputeGame.sol
+        - packages/contracts-bedrock/src/dispute/SuperPermissionedDisputeGame.sol
+        - packages/contracts-bedrock/src/dispute/zk/OptimisticZkGame.sol
+        # ProtocolVersions is being deprecated.
+        - packages/contracts-bedrock/src/L1/ProtocolVersions.sol
+        # DataAvailabilityChallenge is a beta/non-standard contract.
+        - packages/contracts-bedrock/src/L1/DataAvailabilityChallenge.sol
+
+  - id: sol-safety-use-deployutils-getcode
+    languages: [solidity]
+    severity: ERROR
+    message: Use DeployUtils.getCode() instead of vm.getCode(). When additional_compiler_profiles is configured in foundry.toml, vm.getCode() can non-deterministically resolve to the wrong compiler profile's artifact, causing bytecode mismatches across platforms.
+    pattern-either:
+      - pattern: vm.getCode(...)
+    paths:
+      exclude:
+        - packages/contracts-bedrock/scripts/libraries/DeployUtils.sol
