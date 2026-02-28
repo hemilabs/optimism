@@ -6,7 +6,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
-	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-service/txplan"
 )
 
@@ -28,8 +27,6 @@ func TestSupernodeSameTimestampExecMessage(gt *testing.T) {
 // TestSupernodeSameTimestampInvalidTransitive: Bad log index causes transitive invalidation
 func TestSupernodeSameTimestampInvalidTransitive(gt *testing.T) {
 	t := devtest.SerialT(gt)
-	// TODO(ethereum-optimism/optimism#19411): remove skip once op-reth safe head mismatch is fixed
-	sysgo.SkipOnOpReth(t, "panics due to safe head mismatch in EngineController")
 	sys := presets.NewTwoL2SupernodeInterop(t, 0).ForSameTimestampTesting(t)
 	rng := rand.New(rand.NewSource(77777))
 
@@ -46,20 +43,15 @@ func TestSupernodeSameTimestampInvalidTransitive(gt *testing.T) {
 // TestSupernodeSameTimestampCycle: Mutual exec messages create cycle - both replaced
 func TestSupernodeSameTimestampCycle(gt *testing.T) {
 	t := devtest.SerialT(gt)
-	// TODO(ethereum-optimism/optimism#19411): remove skip once op-reth safe head mismatch is fixed
-	sysgo.SkipOnOpReth(t, "panics due to safe head mismatch in EngineController")
 	sys := presets.NewTwoL2SupernodeInterop(t, 0).ForSameTimestampTesting(t)
 	rng := rand.New(rand.NewSource(55555))
 
-	// Create the actual cycle shape: each chain executes the other chain's init
-	// before emitting its own init in the same block. That means the init lands at
-	// log index 1, not 0.
-	pairA := sys.PrepareInitA(rng, 1)
-	pairB := sys.PrepareInitB(rng, 1)
+	pairA := sys.PrepareInitA(rng, 0)
+	pairB := sys.PrepareInitB(rng, 0)
 
 	sys.IncludeAndValidate(
-		[]*txplan.PlannedTx{pairB.SubmitExecTo(sys.Alice), pairA.SubmitInit()},
-		[]*txplan.PlannedTx{pairA.SubmitExecTo(sys.Bob), pairB.SubmitInit()},
+		[]*txplan.PlannedTx{pairA.SubmitInit(), pairB.SubmitExecTo(sys.Alice)},
+		[]*txplan.PlannedTx{pairB.SubmitInit(), pairA.SubmitExecTo(sys.Bob)},
 		true, true, // both replaced (cycle detected)
 	)
 }

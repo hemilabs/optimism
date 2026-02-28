@@ -2,7 +2,6 @@ package loadtest
 
 import (
 	"context"
-	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -10,50 +9,15 @@ import (
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
+	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/txinclude"
 	"github.com/ethereum-optimism/optimism/op-service/txintent"
 	"github.com/ethereum-optimism/optimism/op-service/txplan"
 	suptypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 )
-
-type makeInvalidInitMsgFn func(suptypes.Message) suptypes.Message
-
-func makeInvalidBlockNumber(msg suptypes.Message) suptypes.Message {
-	msg.Identifier.BlockNumber++
-	return msg
-}
-
-func makeInvalidChainID(msg suptypes.Message) suptypes.Message {
-	chainIDBig := msg.Identifier.ChainID.ToBig()
-	msg.Identifier.ChainID = eth.ChainIDFromBig(chainIDBig.Add(chainIDBig, big.NewInt(1)))
-	return msg
-}
-
-func makeInvalidLogIndex(msg suptypes.Message) suptypes.Message {
-	msg.Identifier.LogIndex++
-	return msg
-}
-
-func makeInvalidOrigin(msg suptypes.Message) suptypes.Message {
-	originBig := msg.Identifier.Origin.Big()
-	msg.Identifier.Origin = common.BigToAddress(originBig.Add(originBig, big.NewInt(1)))
-	return msg
-}
-
-func makeInvalidTimestamp(msg suptypes.Message) suptypes.Message {
-	msg.Identifier.Timestamp++
-	return msg
-}
-
-func makeInvalidPayloadHash(msg suptypes.Message) suptypes.Message {
-	hash := msg.PayloadHash.Big()
-	hash.Add(hash, big.NewInt(1))
-	msg.PayloadHash = common.BigToHash(hash)
-	return msg
-}
 
 // InvalidExecMsgSpammer spams invalid executing messages, aiming to stress mempool interop
 // filters.
@@ -61,7 +25,7 @@ type InvalidExecMsgSpammer struct {
 	l2             *L2
 	eoa            *SyncEOA
 	validInitMsg   suptypes.Message
-	makeInvalidFns *RoundRobin[makeInvalidInitMsgFn]
+	makeInvalidFns *RoundRobin[dsl.InvalidMsgFn]
 }
 
 var _ Spammer = (*InvalidExecMsgSpammer)(nil)
@@ -93,13 +57,13 @@ func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg suptypes.Message
 		l2:           l2,
 		eoa:          NewSyncEOA(includer, eoa.Plan()),
 		validInitMsg: validInitMsg,
-		makeInvalidFns: NewRoundRobin([]makeInvalidInitMsgFn{
-			makeInvalidBlockNumber,
-			makeInvalidChainID,
-			makeInvalidLogIndex,
-			makeInvalidOrigin,
-			makeInvalidTimestamp,
-			makeInvalidPayloadHash,
+		makeInvalidFns: NewRoundRobin([]dsl.InvalidMsgFn{
+			dsl.MakeInvalidBlockNumber,
+			dsl.MakeInvalidChainID,
+			dsl.MakeInvalidLogIndex,
+			dsl.MakeInvalidOrigin,
+			dsl.MakeInvalidTimestamp,
+			dsl.MakeInvalidPayloadHash,
 		}),
 	}
 }
@@ -129,7 +93,7 @@ func TestRelayWithInvalidMessagesSteady(gt *testing.T) {
 		OpaqueData: []byte{34, 56},
 	}))
 	t.Require().NoError(err)
-	ref := l2A.EL.BlockRefByNumber(initTx.Receipt.BlockNumber.Uint64())
+	ref := l2A.EL.BlockRefByNumber(bigs.Uint64Strict(initTx.Receipt.BlockNumber))
 	out := new(txintent.InteropOutput)
 	t.Require().NoError(out.FromReceipt(t.Ctx(), initTx.Receipt, ref.BlockRef(), l2A.EL.ChainID()))
 	t.Require().Len(out.Entries, 1)
