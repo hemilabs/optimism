@@ -17,9 +17,6 @@ pub struct TestBlobProvider {
     /// When `true`, `get_and_validate_blobs` returns `BlobProviderError::BlobNotFound`,
     /// simulating a missed/orphaned beacon slot (HTTP 404 from the beacon node).
     pub should_return_not_found: bool,
-    /// When `true`, `get_and_validate_blobs` appends one extra blob beyond those
-    /// requested, simulating a buggy provider that returns too many blobs (over-fill).
-    pub should_return_extra_blob: bool,
 }
 
 impl TestBlobProvider {
