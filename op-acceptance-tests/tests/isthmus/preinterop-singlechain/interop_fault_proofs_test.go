@@ -9,10 +9,7 @@ import (
 )
 
 func TestPreinteropSingleChainFaultProofs(gt *testing.T) {
-	t := devtest.ParallelT(gt)
-	sys := presets.NewSingleChainInteropIsthmusSuper(
-		t,
-		presets.WithChallengerCannonKonaEnabled(),
-	)
+	t := devtest.SerialT(gt)
+	sys := presets.NewSingleChainInterop(t)
 	sfp.RunSingleChainSuperFaultProofSmokeTest(t, sys)
 }
