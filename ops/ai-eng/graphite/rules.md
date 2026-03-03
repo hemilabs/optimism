@@ -4,7 +4,11 @@ This file explains the rules that you should use when reviewing a PR.
 
 ## Applicability
 
-You are ONLY to review changes to Solidity files (*.sol). Do NOT leave comments on any other file types.
+You are ONLY to review changes to:
+- Solidity files (`*.sol`)
+- Storage layout snapshot files (`packages/contracts-bedrock/snapshots/storageLayout/*.json`)
+
+Do NOT leave comments on any other file types.
 
 ## OPCM Version Bump Warnings
 
@@ -24,6 +28,13 @@ If the PR modifies `OPContractsManagerV2.sol` and changes the `version` constant
 ## Rules for Reviewing Solidity Files
 
 This section applies to Solidity files ONLY.
+
+### @dev Comments
+
+- Pay close attention to `@dev` natspec comments in the codebase
+- These comments often contain important invariants, requirements, or reminders for developers
+- When reviewing changes to a function, check if there are `@dev` comments that specify conditions or actions that must be taken when modifying that code
+- Flag violations of instructions in `@dev` comments (e.g., "when updating this function, also update X")
 
 ### Style Guide
 
@@ -52,3 +63,77 @@ This section applies to Solidity files ONLY.
   ```
 - Do NOT suggest removing the return value checking on low-level calls following `vm.expectRevert`
 - DO flag if `vm.expectRevert` is used with low-level calls but the return value is not captured and asserted
+
+### Foundry Version Bump Warnings
+
+If the PR changes the Foundry dependency versions, i.e the `forge`, `cast`, and `anvil` versions in `mise.toml`, it MUST also include a reference to the approved and merged design document that approves these foundry versions for usage in the PR description. Otherwise, you MUST leave a prominent comment on the PR with the following message:
+
+> ⚠️ **Foundry Version Bump Without Design Document**
+>
+> This PR includes a change to the Foundry dependency versions, i.e the `forge`, `cast`, and `anvil` versions in `mise.toml`.
+>
+> Please include a reference to the approved and merged design document that approves these foundry versions for usage in the PR description. Otherwise, the PR will not be approved.
+>
+> For more information on the Foundry version upgrade process, please see the [Foundry version upgrade policy](https://github.com/ethereum-optimism/optimism/blob/develop/packages/contracts-bedrock/book/src/policies/foundry-upgrades.md).
+
+### Non-Idempotent Initializers
+
+When reviewing changes to `initialize()` or `reinitializer` functions, check whether the function is **idempotent** — calling it multiple times with the same arguments should produce the same end state as calling it once. Proxied contracts can be re-initialized during upgrades, so non-idempotent initializers risk corrupting state.
+
+**When to flag:**
+- An `initialize()` function increments counters, appends to arrays, or performs any operation where repeating it changes the outcome
+- An `initialize()` function makes external calls with lasting side-effects (minting, transferring, authorizing in ways that aren't simple overwrites)
+- An `initialize()` function overwrites a variable that other contracts or off-chain systems may already depend on
+- A change to an existing `initialize()` function introduces non-idempotent or unsafe-to-rerun behavior that wasn't there before
+
+Non-idempotent or unsafe-to-rerun behavior in initializers is **disallowed** unless explicitly acknowledged with a `@notice` comment explaining why it's safe. If you detect non-idempotent behavior without such a comment, you MUST leave a blocking comment:
+
+> **Non-Idempotent Initializer — Acknowledgment Required**
+>
+> This `initialize()` function contains operations that are not idempotent (not safe to call multiple times with the same arguments). Since proxied contracts can be re-initialized during upgrades, this is disallowed unless explicitly acknowledged.
+>
+> Please either:
+> 1. Make the operation idempotent, or
+> 2. Add a `@notice` comment on the function explaining why the non-idempotent behavior is safe given how callers use it
+>
+> See `docs/ai/contract-dev.md` for detailed guidance.
+
+### Storage Layout Mutation Warnings
+
+If a PR modifies files in `packages/contracts-bedrock/snapshots/storageLayout/`, you MUST analyze the diff to determine if storage slots are being **mutated** (as opposed to purely added or deleted along with the contract).
+
+**What constitutes a mutation:**
+- A storage slot's `slot` number changes for an existing field (field shifted to different slot)
+- A storage slot's `type` changes for an existing field
+- A storage slot's `offset` changes for an existing field
+- A storage slot entry is removed entirely (field deleted from a contract that still exists)
+
+**What is NOT a concern:**
+- Purely adding new storage slots at the end of a contract's layout (new fields appended)
+- Adding a new storage layout file for a new contract
+- A storage layout file being deleted because the contract itself is being deleted
+
+**CRITICAL - Watch for hidden mutations via renames/moves:**
+- If a storage layout file is DELETED and a new one with a similar name is ADDED, this may indicate a contract rename or move
+- Renames/moves can HIDE storage mutations because git shows them as a deletion + addition rather than a modification
+- You MUST compare the deleted file's layout against the new file's layout to detect any mutations
+- Example: `FooV1.json` deleted and `FooV2.json` added - compare their storage layouts carefully
+
+If you detect **any** mutation of existing storage slots (including mutations hidden by a rename/move), you MUST leave a prominent comment on the PR with the following message:
+
+> ⚠️ **Storage Layout Mutation Detected**
+>
+> This PR modifies existing storage slots in the following file(s):
+> - `[list the affected storage layout files]`
+>
+> **Changes detected:**
+> - `[describe the specific mutations: slot shifts, type changes, deletions, etc.]`
+>
+> Mutating storage slots can be **dangerous** for upgradeable contracts, as it may corrupt existing on-chain state.
+>
+> **Required action:** Please add an explicit comment in the PR description or in the code explaining why this storage layout change is safe. For example:
+> - "This contract is not upgradeable and is always deployed fresh"
+> - "This is a new contract that has never been deployed"
+> - "Storage slots X-Y are intentionally being reorganized because [reason], and this is safe because [justification]"
+>
+> The PR cannot be approved until this acknowledgment is provided.
