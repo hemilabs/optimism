@@ -21,7 +21,7 @@ import (
 )
 
 type L2Batcher struct {
-	id      stack.L2BatcherID
+	id      stack.ComponentID
 	service *bss.BatcherService
 	rpc     string
 	l1RPC   string
@@ -40,11 +40,11 @@ func (b *L2Batcher) hydrate(system stack.ExtensibleSystem) {
 		ID:           b.id,
 		Client:       rpcCl,
 	})
-	l2Net := system.L2Network(stack.L2NetworkID(b.id.ChainID()))
+	l2Net := system.L2Network(stack.ByID[stack.L2Network](stack.NewL2NetworkID(b.id.ChainID())))
 	l2Net.(stack.ExtensibleL2Network).AddL2Batcher(bFrontend)
 }
 
-type BatcherOption func(id stack.L2BatcherID, cfg *bss.CLIConfig)
+type BatcherOption func(id stack.ComponentID, cfg *bss.CLIConfig)
 
 func WithBatcherOption(opt BatcherOption) stack.Option[*Orchestrator] {
 	return stack.Deploy[*Orchestrator](func(orch *Orchestrator) {
@@ -52,30 +52,31 @@ func WithBatcherOption(opt BatcherOption) stack.Option[*Orchestrator] {
 	})
 }
 
-func WithBatcher(batcherID stack.L2BatcherID, l1ELID stack.L1ELNodeID, l2CLID stack.L2CLNodeID, l2ELID stack.L2ELNodeID) stack.Option[*Orchestrator] {
+func WithBatcher(batcherID stack.ComponentID, l1ELID stack.ComponentID, l2CLID stack.ComponentID, l2ELID stack.ComponentID) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		p := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), batcherID))
 
 		require := p.Require()
-		require.False(orch.batchers.Has(batcherID), "batcher must not already exist")
+		batcherCID := batcherID
+		require.False(orch.registry.Has(batcherCID), "batcher must not already exist")
 
-		l2Net, ok := orch.l2Nets.Get(l2CLID.ChainID())
+		l2Net, ok := orch.GetL2Network(stack.NewL2NetworkID(l2CLID.ChainID()))
 		require.True(ok)
 
-		l1Net, ok := orch.l1Nets.Get(l1ELID.ChainID())
+		l1Net, ok := orch.GetL1Network(stack.NewL1NetworkID(l1ELID.ChainID()))
 		require.True(ok)
 
 		require.Equal(l2Net.l1ChainID, l1Net.id.ChainID(), "expecting L1EL on L1 of L2CL")
 
 		require.Equal(l2CLID.ChainID(), l2ELID.ChainID(), "L2 CL and EL must be on same L2 chain")
 
-		l1EL, ok := orch.l1ELs.Get(l1ELID)
+		l1EL, ok := orch.GetL1EL(l1ELID)
 		require.True(ok)
 
-		l2CL, ok := orch.l2CLs.Get(l2CLID)
+		l2CL, ok := orch.GetL2CL(l2CLID)
 		require.True(ok)
 
-		l2EL, ok := orch.l2ELs.Get(l2ELID)
+		l2EL, ok := orch.GetL2EL(l2ELID)
 		require.True(ok)
 
 		batcherSecret, err := orch.keys.Secret(devkeys.BatcherRole.Key(l2ELID.ChainID().ToBig()))
@@ -141,6 +142,6 @@ func WithBatcher(batcherID stack.L2BatcherID, l1ELID stack.L1ELNodeID, l2CLID st
 			l2CLRPC: l2CL.UserRPC(),
 			l2ELRPC: l2EL.UserRPC(),
 		}
-		orch.batchers.Set(batcherID, b)
+		orch.registry.Register(batcherID, b)
 	})
 }

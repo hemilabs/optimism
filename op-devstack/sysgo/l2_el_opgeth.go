@@ -27,7 +27,7 @@ type OpGeth struct {
 
 	p             devtest.P
 	logger        log.Logger
-	id            stack.L2ELNodeID
+	id            stack.ComponentID
 	l2Net         *L2Network
 	jwtPath       string
 	jwtSecret     [32]byte
@@ -72,7 +72,7 @@ func (n *OpGeth) hydrate(system stack.ExtensibleSystem) {
 		system.T().Cleanup(engineCl.Close)
 	}
 
-	l2Net := system.L2Network(stack.L2NetworkID(n.id.ChainID()))
+	l2Net := system.L2Network(stack.ByID[stack.L2Network](stack.NewL2NetworkID(n.id.ChainID())))
 	sysL2EL := shim.NewL2ELNode(shim.L2ELNodeConfig{
 		RollupCfg: l2Net.RollupConfig(),
 		ELNodeConfig: shim.ELNodeConfig{
@@ -179,12 +179,12 @@ func (n *OpGeth) Stop() {
 	n.l2Geth = nil
 }
 
-func WithOpGeth(id stack.L2ELNodeID, opts ...L2ELOption) stack.Option[*Orchestrator] {
+func WithOpGeth(id stack.ComponentID, opts ...L2ELOption) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		p := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), id))
 		require := p.Require()
 
-		l2Net, ok := orch.l2Nets.Get(id.ChainID())
+		l2Net, ok := orch.GetL2Network(stack.NewL2NetworkID(id.ChainID()))
 		require.True(ok, "L2 network required")
 
 		cfg := DefaultL2ELConfig()
@@ -196,9 +196,8 @@ func WithOpGeth(id stack.L2ELNodeID, opts ...L2ELOption) stack.Option[*Orchestra
 		useInterop := l2Net.genesis.Config.InteropTime != nil
 
 		supervisorRPC := ""
-		if useInterop {
-			require.NotNil(cfg.SupervisorID, "supervisor is required for interop")
-			sup, ok := orch.supervisors.Get(*cfg.SupervisorID)
+		if useInterop && cfg.SupervisorID != nil {
+			sup, ok := orch.GetSupervisor(*cfg.SupervisorID)
 			require.True(ok, "supervisor is required for interop")
 			supervisorRPC = sup.UserRPC()
 		}
@@ -219,6 +218,8 @@ func WithOpGeth(id stack.L2ELNodeID, opts ...L2ELOption) stack.Option[*Orchestra
 		p.Cleanup(func() {
 			l2EL.Stop()
 		})
-		require.True(orch.l2ELs.SetIfMissing(id, l2EL), "must be unique L2 EL node")
+		cid := id
+		require.False(orch.registry.Has(cid), "must be unique L2 EL node")
+		orch.registry.Register(cid, l2EL)
 	})
 }

@@ -55,7 +55,7 @@ func WithRespectedGameType(gameType gameTypes.GameType) stack.Option[*Orchestrat
 	}
 }
 
-func WithCannonGameTypeAdded(l1ELID stack.L1ELNodeID, l2ChainID eth.ChainID) stack.Option[*Orchestrator] {
+func WithCannonGameTypeAdded(l1ELID stack.ComponentID, l2ChainID eth.ChainID) stack.Option[*Orchestrator] {
 	return stack.FnOption[*Orchestrator]{
 		FinallyFn: func(o *Orchestrator) {
 			// TODO(#17867): Rebuild the op-program prestate using the newly minted L2 chain configs before using it.
@@ -79,6 +79,17 @@ func WithCannonKonaGameTypeAdded() stack.Option[*Orchestrator] {
 	}
 }
 
+func requireGameTypeTargetIDs(o *Orchestrator) (stack.ComponentID, []stack.ComponentID) {
+	require := o.P().Require()
+	l2NetIDs := o.registry.IDsByKind(stack.KindL2Network)
+	require.NotEmpty(l2NetIDs, "need at least one L2 network to configure game types")
+
+	l1ELIDs := o.registry.IDsByKind(stack.KindL1ELNode)
+	require.NotEmpty(l1ELIDs, "need at least one L1 EL node to configure game types")
+
+	return l1ELIDs[0], l2NetIDs
+}
+
 func WithChallengerCannonKonaEnabled() stack.Option[*Orchestrator] {
 	return stack.FnOption[*Orchestrator]{
 		BeforeDeployFn: func(o *Orchestrator) {
@@ -87,17 +98,17 @@ func WithChallengerCannonKonaEnabled() stack.Option[*Orchestrator] {
 	}
 }
 
-func setRespectedGameType(o *Orchestrator, gameType gameTypes.GameType, l1ELID stack.L1ELNodeID, l2ChainID eth.ChainID) {
+func setRespectedGameType(o *Orchestrator, gameType gameTypes.GameType, l1ELID stack.ComponentID, l2ChainID eth.ChainID) {
 	t := o.P()
 	require := t.Require()
 	require.NotNil(o.wb, "must have a world builder")
 	l1ChainID := l1ELID.ChainID()
 
-	l2Network, ok := o.l2Nets.Get(l2ChainID)
+	l2Network, ok := o.GetL2Network(stack.NewL2NetworkID(l2ChainID))
 	require.True(ok, "l2Net must exist")
 	portalAddr := l2Network.rollupCfg.DepositContractAddress
 
-	l1EL, ok := o.l1ELs.Get(l1ELID)
+	l1EL, ok := o.GetL1EL(l1ELID)
 	require.True(ok, "l1El must exist")
 
 	rpcClient, err := rpc.DialContext(t.Ctx(), l1EL.UserRPC())
@@ -139,7 +150,7 @@ func setRespectedGameType(o *Orchestrator, gameType gameTypes.GameType, l1ELID s
 	require.Equal(rcpt.Status, gethTypes.ReceiptStatusSuccessful, "set respected game type tx did not execute correctly")
 }
 
-func addGameType(o *Orchestrator, absolutePrestate common.Hash, gameType gameTypes.GameType, l1ELID stack.L1ELNodeID, l2ChainID eth.ChainID) {
+func addGameType(o *Orchestrator, absolutePrestate common.Hash, gameType gameTypes.GameType, l1ELID stack.ComponentID, l2ChainID eth.ChainID) {
 	t := o.P()
 	require := t.Require()
 	require.NotNil(o.wb, "must have a world builder")
@@ -147,7 +158,7 @@ func addGameType(o *Orchestrator, absolutePrestate common.Hash, gameType gameTyp
 
 	opcmAddr := o.wb.output.ImplementationsDeployment.OpcmImpl
 
-	l1EL, ok := o.l1ELs.Get(l1ELID)
+	l1EL, ok := o.GetL1EL(l1ELID)
 	require.True(ok, "l1El must exist")
 
 	rpcClient, err := rpc.DialContext(t.Ctx(), l1EL.UserRPC())

@@ -33,7 +33,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func WithSuperRoots(l1ChainID eth.ChainID, l1ELID stack.L1ELNodeID, l2CLID stack.L2CLNodeID, supervisorID stack.SupervisorID, primaryL2 eth.ChainID) stack.Option[*Orchestrator] {
+// V2 structs for OPCM >= 7.0.0 (using IOPContractsManagerMigrator interface)
+type DisputeGameConfigV2 struct {
+	Enabled  bool
+	InitBond *big.Int
+	GameType uint32
+	GameArgs []byte
+}
+
+type MigrateInputV2 struct {
+	ChainSystemConfigs        []common.Address
+	DisputeGameConfigs        []DisputeGameConfigV2
+	StartingAnchorRoot        bindings.Proposal
+	StartingRespectedGameType uint32
+}
+
+func WithSuperRoots(l1ChainID eth.ChainID, l1ELID stack.ComponentID, clIDs []stack.ComponentID, supervisorID stack.ComponentID, primaryL2 eth.ChainID) stack.Option[*Orchestrator] {
+	return withSuperRoots(l1ChainID, l1ELID, clIDs, primaryL2, func(t devtest.CommonT, o *Orchestrator, timestamp uint64) eth.Bytes32 {
+		return getSuperRoot(t, o, timestamp, supervisorID)
+	})
+}
+
+func WithSuperRootsFromSupernode(l1ChainID eth.ChainID, l1ELID stack.ComponentID, clIDs []stack.ComponentID, supernodeID stack.SupernodeID, primaryL2 eth.ChainID) stack.Option[*Orchestrator] {
+	return withSuperRoots(l1ChainID, l1ELID, clIDs, primaryL2, func(t devtest.CommonT, o *Orchestrator, timestamp uint64) eth.Bytes32 {
+		return getSuperRootFromSupernode(t, o, timestamp, supernodeID)
+	})
+}
+
+func withSuperRoots(l1ChainID eth.ChainID, l1ELID stack.ComponentID, clIDs []stack.ComponentID, primaryL2 eth.ChainID, getSuperRootAtTimestamp func(t devtest.CommonT, o *Orchestrator, timestamp uint64) eth.Bytes32) stack.Option[*Orchestrator] {
 	return stack.FnOption[*Orchestrator]{
 		FinallyFn: func(o *Orchestrator) {
 			t := o.P()
@@ -41,23 +68,41 @@ func WithSuperRoots(l1ChainID eth.ChainID, l1ELID stack.L1ELNodeID, l2CLID stack
 			require.NotNil(o.wb, "must have a world builder")
 			require.NotEmpty(o.wb.output.ImplementationsDeployment.OpcmImpl, "must have an OPCM implementation")
 
-			l1EL, ok := o.l1ELs.Get(l1ELID)
+			l1EL, ok := o.GetL1EL(l1ELID)
 			require.True(ok, "must have L1 EL node")
 			rpcClient, err := rpc.DialContext(t.Ctx(), l1EL.UserRPC())
 			require.NoError(err)
 			client := ethclient.NewClient(rpcClient)
 			w3Client := w3.NewClient(rpcClient)
 
-			l2CL, ok := o.l2CLs.Get(l2CLID)
-			require.True(ok, "must have L2 CL node")
-			rollupClientProvider, err := dial.NewStaticL2RollupProvider(t.Ctx(), t.Logger(), l2CL.UserRPC())
-			require.NoError(err)
-			rollupClient, err := rollupClientProvider.RollupClient(t.Ctx())
-			require.NoError(err)
-			require.NoError(wait.ForSafeBlock(t.Ctx(), rollupClient, 1))
-			header, err := client.HeaderByNumber(t.Ctx(), big.NewInt(int64(rpc.SafeBlockNumber)))
-			require.NoError(err)
-			superRoot := getSuperRoot(t, o, header.Time, supervisorID)
+			var superrootTime uint64
+			// Supernode does not support super roots at genesis.
+			// So let's wait for safe heads to advance before querying atTimestamp.
+			for _, clID := range clIDs {
+				l2CL, ok := o.GetL2CL(clID)
+				require.True(ok, "must have L2 CL node")
+				// TODO(#18947): Ideally, we should be able to wait on the supernode's SyncStatus directly
+				// rather than check the sync statuses of all CLs
+				rollupClient, err := dial.DialRollupClientWithTimeout(t.Ctx(), t.Logger(), l2CL.UserRPC())
+				t.Require().NoError(err)
+				defer rollupClient.Close()
+				ctx, cancel := context.WithTimeout(t.Ctx(), time.Minute*2)
+				err = wait.For(ctx, time.Second*1, func() (bool, error) {
+					status, err := rollupClient.SyncStatus(ctx)
+					if err != nil {
+						return false, err
+					}
+					if status == nil {
+						return false, nil
+					}
+					superrootTime = status.SafeL2.Time
+					return status.SafeL2.Number > 0, nil
+				})
+				cancel()
+				t.Require().NoError(err, "waiting for supernode chain safe head to advance failed")
+			}
+
+			superRoot := getSuperRootAtTimestamp(t, o, superrootTime)
 
 			l1pao, err := o.keys.Address(devkeys.ChainOperatorKeys(l1ChainID.ToBig())(devkeys.L1ProxyAdminOwnerRole))
 			require.NoError(err, "must have L1 proxy admin owner private key")
@@ -204,8 +249,8 @@ func deployDelegateCallProxy(t devtest.CommonT, transactOpts *bind.TransactOpts,
 	return deployAddress, proxyContract
 }
 
-func getSuperRoot(t devtest.CommonT, o *Orchestrator, timestamp uint64, supervisorID stack.SupervisorID) eth.Bytes32 {
-	supervisor, ok := o.supervisors.Get(supervisorID)
+func getSuperRoot(t devtest.CommonT, o *Orchestrator, timestamp uint64, supervisorID stack.ComponentID) eth.Bytes32 {
+	supervisor, ok := o.GetSupervisor(supervisorID)
 	t.Require().True(ok, "must have supervisor")
 
 	client, err := dial.DialSupervisorClientWithTimeout(t.Ctx(), t.Logger(), supervisor.UserRPC())

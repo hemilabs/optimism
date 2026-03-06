@@ -24,7 +24,7 @@ import (
 type OpReth struct {
 	mu sync.Mutex
 
-	id        stack.L2ELNodeID
+	id        stack.ComponentID
 	jwtPath   string
 	jwtSecret [32]byte
 	authRPC   string
@@ -61,7 +61,7 @@ func (n *OpReth) hydrate(system stack.ExtensibleSystem) {
 	require.NoError(err)
 	system.T().Cleanup(engineCl.Close)
 
-	l2Net := system.L2Network(stack.L2NetworkID(n.id.ChainID()))
+	l2Net := system.L2Network(stack.ByID[stack.L2Network](stack.NewL2NetworkID(n.id.ChainID())))
 	sysL2EL := shim.NewL2ELNode(shim.L2ELNodeConfig{
 		RollupCfg: l2Net.RollupConfig(),
 		ELNodeConfig: shim.ELNodeConfig{
@@ -183,12 +183,12 @@ func (n *OpReth) JWTPath() string {
 	return n.jwtPath
 }
 
-func WithOpReth(id stack.L2ELNodeID, opts ...L2ELOption) stack.Option[*Orchestrator] {
+func WithOpReth(id stack.ComponentID, opts ...L2ELOption) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		p := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), id))
 		require := p.Require()
 
-		l2Net, ok := orch.l2Nets.Get(id.ChainID())
+		l2Net, ok := orch.GetL2Network(stack.NewL2NetworkID(id.ChainID()))
 		require.True(ok, "L2 network required")
 
 		cfg := DefaultL2ELConfig()
@@ -200,9 +200,8 @@ func WithOpReth(id stack.L2ELNodeID, opts ...L2ELOption) stack.Option[*Orchestra
 		useInterop := l2Net.genesis.Config.InteropTime != nil
 
 		supervisorRPC := ""
-		if useInterop {
-			require.NotNil(cfg.SupervisorID, "supervisor is required for interop")
-			sup, ok := orch.supervisors.Get(*cfg.SupervisorID)
+		if useInterop && cfg.SupervisorID != nil {
+			sup, ok := orch.GetSupervisor(*cfg.SupervisorID)
 			require.True(ok, "supervisor is required for interop")
 			supervisorRPC = sup.UserRPC()
 		}
@@ -294,6 +293,8 @@ func WithOpReth(id stack.L2ELNodeID, opts ...L2ELOption) stack.Option[*Orchestra
 		l2EL.Start()
 		p.Cleanup(l2EL.Stop)
 		p.Logger().Info("op-reth is ready", "userRPC", l2EL.userRPC, "authRPC", l2EL.authRPC)
-		require.True(orch.l2ELs.SetIfMissing(id, l2EL), "must be unique L2 EL node")
+		cid := id
+		require.False(orch.registry.Has(cid), "must be unique L2 EL node")
+		orch.registry.Register(cid, l2EL)
 	})
 }

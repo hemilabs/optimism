@@ -39,7 +39,7 @@ import (
 )
 
 type TestSequencer struct {
-	id         stack.TestSequencerID
+	id         stack.ComponentID
 	userRPC    string
 	jwtSecret  [32]byte
 	sequencers map[eth.ChainID]seqtypes.SequencerID
@@ -74,7 +74,31 @@ func (s *TestSequencer) hydrate(sys stack.ExtensibleSystem) {
 	}))
 }
 
-func WithTestSequencer(testSequencerID stack.TestSequencerID, l1CLID stack.L1CLNodeID, l2CLID stack.L2CLNodeID, l1ELID stack.L1ELNodeID, l2ELID stack.L2ELNodeID) stack.Option[*Orchestrator] {
+// l2ChainIDs pairs together the CL and EL node IDs for an L2 chain.
+type l2ChainIDs struct {
+	CLID stack.ComponentID
+	ELID stack.ComponentID
+}
+
+func WithTestSequencer(testSequencerID stack.ComponentID, l1CLID stack.ComponentID, l2CLID stack.ComponentID, l1ELID stack.ComponentID, l2ELID stack.ComponentID) stack.Option[*Orchestrator] {
+	return withTestSequencerImpl(testSequencerID, l1CLID, l1ELID, l2ChainIDs{CLID: l2CLID, ELID: l2ELID})
+}
+
+// WithTestSequencer2L2 creates a test sequencer that can build blocks on two L2 chains.
+// This is useful for testing same-timestamp interop scenarios where we need deterministic
+// block timestamps on both chains.
+func WithTestSequencer2L2(testSequencerID stack.ComponentID, l1CLID stack.ComponentID,
+	l2ACLID stack.ComponentID, l2BCLID stack.ComponentID,
+	l1ELID stack.ComponentID, l2AELID stack.ComponentID, l2BELID stack.ComponentID) stack.Option[*Orchestrator] {
+	return withTestSequencerImpl(testSequencerID, l1CLID, l1ELID,
+		l2ChainIDs{CLID: l2ACLID, ELID: l2AELID},
+		l2ChainIDs{CLID: l2BCLID, ELID: l2BELID},
+	)
+}
+
+// withTestSequencerImpl is the shared implementation for creating test sequencers.
+// It supports any number of L2 chains.
+func withTestSequencerImpl(testSequencerID stack.ComponentID, l1CLID stack.ComponentID, l1ELID stack.ComponentID, l2Chains ...l2ChainIDs) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		p := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), testSequencerID))
 		require := p.Require()
@@ -82,26 +106,18 @@ func WithTestSequencer(testSequencerID stack.TestSequencerID, l1CLID stack.L1CLN
 		logger := p.Logger()
 
 		orch.writeDefaultJWT()
-		l1EL, ok := orch.l1ELs.Get(l1ELID)
+		l1EL, ok := orch.GetL1EL(l1ELID)
 		require.True(ok, "l1 EL node required")
 		l1ELClient, err := ethclient.DialContext(p.Ctx(), l1EL.UserRPC())
 		require.NoError(err)
 		engineCl, err := dialEngine(p.Ctx(), l1EL.AuthRPC(), orch.jwtSecret)
 		require.NoError(err)
 
-		l1CL, ok := orch.l1CLs.Get(l1CLID)
+		l1CL, ok := orch.GetL1CL(l1CLID)
 		require.True(ok, "l1 CL node required")
 
-		l2EL, ok := orch.l2ELs.Get(l2ELID)
-		require.True(ok, "l2 EL node required")
-
-		l2CL, ok := orch.l2CLs.Get(l2CLID)
-		require.True(ok, "l2 CL node required")
-
-		bid_L2 := seqtypes.BuilderID("test-standard-builder")
-		cid_L2 := seqtypes.CommitterID("test-standard-committer")
-		sid_L2 := seqtypes.SignerID("test-local-signer")
-		pid_L2 := seqtypes.PublisherID("test-standard-publisher")
+		l1Net, ok := orch.GetL1Network(stack.NewL1NetworkID(l1ELID.ChainID()))
+		require.True(ok, "l1 net required")
 
 		bid_L1 := seqtypes.BuilderID("test-l1-builder")
 		cid_L1 := seqtypes.CommitterID("test-noop-committer")
@@ -210,7 +226,98 @@ func WithTestSequencer(testSequencerID stack.TestSequencerID, l1CLID stack.L1CLN
 			},
 		}
 
-		logger.Info("Configuring test sequencer", "l1EL", l1EL.UserRPC(), "l2EL", l2EL.UserRPC(), "l2CL", l2CL.UserRPC())
+		// Track sequencer IDs for the TestSequencer struct
+		sequencerIDs := map[eth.ChainID]seqtypes.SequencerID{
+			l1CLID.ChainID(): l1SequencerID,
+		}
+
+		// Add L2 chain configurations
+		logFields := []any{"l1EL", l1EL.UserRPC()}
+		for i, l2Chain := range l2Chains {
+			l2EL, ok := orch.GetL2EL(l2Chain.ELID)
+			require.True(ok, "l2 EL node required for chain %d", i)
+
+			l2CL, ok := orch.GetL2CL(l2Chain.CLID)
+			require.True(ok, "l2 CL node required for chain %d", i)
+
+			// Generate unique IDs for this L2 chain (use suffix for multi-chain, no suffix for single chain)
+			suffix := ""
+			if len(l2Chains) > 1 {
+				suffix = fmt.Sprintf("-%c", 'A'+i) // -A, -B, -C, etc.
+			}
+			bid := seqtypes.BuilderID(fmt.Sprintf("test-standard-builder%s", suffix))
+			cid := seqtypes.CommitterID(fmt.Sprintf("test-standard-committer%s", suffix))
+			sid := seqtypes.SignerID(fmt.Sprintf("test-local-signer%s", suffix))
+			pid := seqtypes.PublisherID(fmt.Sprintf("test-standard-publisher%s", suffix))
+			seqID := seqtypes.SequencerID(fmt.Sprintf("test-seq-%s", l2Chain.CLID.ChainID()))
+
+			// Get P2P key for signing
+			p2pKey, err := orch.keys.Secret(devkeys.SequencerP2PRole.Key(l2Chain.CLID.ChainID().ToBig()))
+			require.NoError(err, "need p2p key for sequencer %d", i)
+			rawKey := hexutil.Bytes(crypto.FromECDSA(p2pKey))
+
+			// Add builder
+			ensemble.Builders[bid] = &config.BuilderEntry{
+				Standard: &standardbuilder.Config{
+					L1ChainConfig: l1Net.genesis.Config,
+					L1EL: endpoint.MustRPC{
+						Value: endpoint.HttpURL(l1EL.UserRPC()),
+					},
+					L2EL: endpoint.MustRPC{
+						Value: endpoint.HttpURL(l2EL.UserRPC()),
+					},
+					L2CL: endpoint.MustRPC{
+						Value: endpoint.HttpURL(l2CL.UserRPC()),
+					},
+				},
+			}
+
+			// Add signer
+			ensemble.Signers[sid] = &config.SignerEntry{
+				LocalKey: &localkey.Config{
+					RawKey:  &rawKey,
+					ChainID: l2Chain.CLID.ChainID(),
+				},
+			}
+
+			// Add committer
+			ensemble.Committers[cid] = &config.CommitterEntry{
+				Standard: &standardcommitter.Config{
+					RPC: endpoint.MustRPC{
+						Value: endpoint.HttpURL(l2CL.UserRPC()),
+					},
+				},
+			}
+
+			// Add publisher
+			ensemble.Publishers[pid] = &config.PublisherEntry{
+				Standard: &standardpublisher.Config{
+					RPC: endpoint.MustRPC{
+						Value: endpoint.HttpURL(l2CL.UserRPC()),
+					},
+				},
+			}
+
+			// Add sequencer
+			ensemble.Sequencers[seqID] = &config.SequencerEntry{
+				Full: &fullseq.Config{
+					ChainID:             l2Chain.CLID.ChainID(),
+					Builder:             bid,
+					Signer:              sid,
+					Committer:           cid,
+					Publisher:           pid,
+					SequencerConfDepth:  2,
+					SequencerEnabled:    true,
+					SequencerStopped:    false,
+					SequencerMaxSafeLag: 0,
+				},
+			}
+
+			sequencerIDs[l2Chain.CLID.ChainID()] = seqID
+			logFields = append(logFields, fmt.Sprintf("l2EL%d", i), l2EL.UserRPC(), fmt.Sprintf("l2CL%d", i), l2CL.UserRPC())
+		}
+
+		logger.Info("Configuring test sequencer", logFields...)
 
 		jobs := work.NewJobRegistry()
 		ensemble, err := v.Start(context.Background(), &work.StartOpts{
@@ -268,6 +375,6 @@ func WithTestSequencer(testSequencerID stack.TestSequencerID, l1CLID stack.L1CLN
 			},
 		}
 		logger.Info("Sequencer User RPC", "http_endpoint", testSequencerNode.userRPC)
-		orch.testSequencers.Set(testSequencerID, testSequencerNode)
+		orch.registry.Register(testSequencerID, testSequencerNode)
 	})
 }

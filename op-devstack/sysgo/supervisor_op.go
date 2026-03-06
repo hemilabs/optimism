@@ -24,7 +24,7 @@ import (
 type OpSupervisor struct {
 	mu sync.Mutex
 
-	id      stack.SupervisorID
+	id      stack.ComponentID
 	userRPC string
 
 	cfg    *supervisorConfig.Config
@@ -99,15 +99,15 @@ func (s *OpSupervisor) Stop() {
 	s.service = nil
 }
 
-func WithOPSupervisor(supervisorID stack.SupervisorID, clusterID stack.ClusterID, l1ELID stack.L1ELNodeID) stack.Option[*Orchestrator] {
+func WithOPSupervisor(supervisorID stack.ComponentID, clusterID stack.ComponentID, l1ELID stack.ComponentID) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		p := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), supervisorID))
 		require := p.Require()
 
-		l1EL, ok := orch.l1ELs.Get(l1ELID)
+		l1EL, ok := orch.GetL1EL(l1ELID)
 		require.True(ok, "need L1 EL node to connect supervisor to")
 
-		cluster, ok := orch.clusters.Get(clusterID)
+		cluster, ok := orch.GetCluster(clusterID)
 		require.True(ok, "need cluster to determine dependency set")
 
 		require.NotNil(cluster.cfgset, "need a full config set")
@@ -151,7 +151,7 @@ func WithOPSupervisor(supervisorID stack.SupervisorID, clusterID stack.ClusterID
 			logger:  plog,
 			service: nil, // set on start
 		}
-		orch.supervisors.Set(supervisorID, supervisorNode)
+		orch.registry.Register(supervisorID, supervisorNode)
 		supervisorNode.Start()
 		orch.p.Cleanup(supervisorNode.Stop)
 	})

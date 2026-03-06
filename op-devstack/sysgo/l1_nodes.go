@@ -21,7 +21,7 @@ type L1ELNode interface {
 }
 
 type L1Geth struct {
-	id       stack.L1ELNodeID
+	id       stack.ComponentID
 	userRPC  string
 	authRPC  string
 	l1Geth   *geth.GethInstance
@@ -51,12 +51,12 @@ func (n *L1Geth) hydrate(system stack.ExtensibleSystem) {
 			ChainID:      n.id.ChainID(),
 		},
 	})
-	l1Net := system.L1Network(stack.L1NetworkID(n.id.ChainID()))
+	l1Net := system.L1Network(stack.ByID[stack.L1Network](stack.NewL1NetworkID(n.id.ChainID())))
 	l1Net.(stack.ExtensibleL1Network).AddL1ELNode(frontend)
 }
 
 type L1CLNode struct {
-	id             stack.L1CLNodeID
+	id             stack.ComponentID
 	beaconHTTPAddr string
 	beacon         *fakebeacon.FakeBeacon
 	fakepos        *FakePoS
@@ -69,13 +69,13 @@ func (n *L1CLNode) hydrate(system stack.ExtensibleSystem) {
 		ID:           n.id,
 		Client:       beaconCl,
 	})
-	l1Net := system.L1Network(stack.L1NetworkID(n.id.ChainID()))
+	l1Net := system.L1Network(stack.ByID[stack.L1Network](stack.NewL1NetworkID(n.id.ChainID())))
 	l1Net.(stack.ExtensibleL1Network).AddL1CLNode(frontend)
 }
 
 const DevstackL1ELKindEnvVar = "DEVSTACK_L1EL_KIND"
 
-func WithL1Nodes(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID) stack.Option[*Orchestrator] {
+func WithL1Nodes(l1ELID stack.ComponentID, l1CLID stack.ComponentID) stack.Option[*Orchestrator] {
 	switch os.Getenv(DevstackL1ELKindEnvVar) {
 	case "geth":
 		return WithL1NodesSubprocess(l1ELID, l1CLID)
@@ -84,13 +84,13 @@ func WithL1Nodes(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID) stack.Option[
 	}
 }
 
-func WithL1NodesInProcess(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID) stack.Option[*Orchestrator] {
+func WithL1NodesInProcess(l1ELID stack.ComponentID, l1CLID stack.ComponentID) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		clP := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), l1CLID))
 		elP := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), l1ELID))
 		require := orch.P().Require()
 
-		l1Net, ok := orch.l1Nets.Get(l1ELID.ChainID())
+		l1Net, ok := orch.GetL1Network(stack.NewL1NetworkID(l1ELID.ChainID()))
 		require.True(ok, "L1 network must exist")
 
 		blockTimeL1 := l1Net.blockTime
@@ -137,7 +137,8 @@ func WithL1NodesInProcess(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID) stac
 			l1Geth:   l1Geth,
 			blobPath: blobPath,
 		}
-		require.True(orch.l1ELs.SetIfMissing(l1ELID, l1ELNode), "must not already exist")
+		require.False(orch.registry.Has(l1ELID), "must not already exist")
+		orch.registry.Register(l1ELID, l1ELNode)
 
 		l1CLNode := &L1CLNode{
 			id:             l1CLID,
@@ -145,12 +146,13 @@ func WithL1NodesInProcess(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID) stac
 			beacon:         bcn,
 			fakepos:        &FakePoS{fakepos: fp, p: clP},
 		}
-		require.True(orch.l1CLs.SetIfMissing(l1CLID, l1CLNode), "must not already exist")
+		require.False(orch.registry.Has(l1CLID), "must not already exist")
+		orch.registry.Register(l1CLID, l1CLNode)
 	})
 }
 
 // WithExtL1Nodes initializes L1 EL and CL nodes that connect to external RPC endpoints
-func WithExtL1Nodes(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID, elRPCEndpoint string, clRPCEndpoint string) stack.Option[*Orchestrator] {
+func WithExtL1Nodes(l1ELID stack.ComponentID, l1CLID stack.ComponentID, elRPCEndpoint string, clRPCEndpoint string) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		require := orch.P().Require()
 
@@ -159,13 +161,15 @@ func WithExtL1Nodes(l1ELID stack.L1ELNodeID, l1CLID stack.L1CLNodeID, elRPCEndpo
 			id:      l1ELID,
 			userRPC: elRPCEndpoint,
 		}
-		require.True(orch.l1ELs.SetIfMissing(l1ELID, l1ELNode), "must not already exist")
+		require.False(orch.registry.Has(l1ELID), "must not already exist")
+		orch.registry.Register(l1ELID, l1ELNode)
 
 		// Create L1 CL node with external RPC
 		l1CLNode := &L1CLNode{
 			id:             l1CLID,
 			beaconHTTPAddr: clRPCEndpoint,
 		}
-		require.True(orch.l1CLs.SetIfMissing(l1CLID, l1CLNode), "must not already exist")
+		require.False(orch.registry.Has(l1CLID), "must not already exist")
+		orch.registry.Register(l1CLID, l1CLNode)
 	})
 }

@@ -17,7 +17,7 @@ import (
 type KonaSupervisor struct {
 	mu sync.Mutex
 
-	id      stack.SupervisorID
+	id      stack.ComponentID
 	userRPC string
 
 	userProxy *tcpproxy.Proxy
@@ -114,15 +114,15 @@ func (s *KonaSupervisor) Stop() {
 	s.sub = nil
 }
 
-func WithKonaSupervisor(supervisorID stack.SupervisorID, clusterID stack.ClusterID, l1ELID stack.L1ELNodeID) stack.Option[*Orchestrator] {
+func WithKonaSupervisor(supervisorID stack.ComponentID, clusterID stack.ComponentID, l1ELID stack.ComponentID) stack.Option[*Orchestrator] {
 	return stack.AfterDeploy(func(orch *Orchestrator) {
 		p := orch.P().WithCtx(stack.ContextWithID(orch.P().Ctx(), supervisorID))
 		require := p.Require()
 
-		l1EL, ok := orch.l1ELs.Get(l1ELID)
+		l1EL, ok := orch.GetL1EL(l1ELID)
 		require.True(ok, "need L1 EL node to connect supervisor to")
 
-		cluster, ok := orch.clusters.Get(clusterID)
+		cluster, ok := orch.GetCluster(clusterID)
 		require.True(ok, "need cluster to determine dependency set")
 
 		require.NotNil(cluster.cfgset, "need a full config set")
@@ -138,7 +138,9 @@ func WithKonaSupervisor(supervisorID stack.SupervisorID, clusterID stack.Cluster
 		p.Require().NoError(err, os.WriteFile(depsetCfgPath, depsetData, 0o644))
 
 		rollupCfgPath := cfgDir + "/rollup-config-*.json"
-		for _, l2Net := range orch.l2Nets.Values() {
+		for _, l2NetID := range orch.registry.IDsByKind(stack.KindL2Network) {
+			l2Net, ok := orch.GetL2Network(l2NetID)
+			require.True(ok, "need l2 network")
 			chainID := l2Net.id.ChainID()
 			rollupData, err := json.Marshal(l2Net.rollupCfg)
 			require.NoError(err, "failed to marshal rollup config")
@@ -174,7 +176,7 @@ func WithKonaSupervisor(supervisorID stack.SupervisorID, clusterID stack.Cluster
 			env:      envVars,
 			p:        p,
 		}
-		orch.supervisors.Set(supervisorID, konaSupervisor)
+		orch.registry.Register(supervisorID, konaSupervisor)
 		p.Logger().Info("Starting kona-supervisor")
 		konaSupervisor.Start()
 		p.Cleanup(konaSupervisor.Stop)
