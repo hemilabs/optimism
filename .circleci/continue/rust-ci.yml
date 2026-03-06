@@ -1239,7 +1239,7 @@ workflows:
           directory: rust
           command: |
             just check-no-std
-          toolchain: "1.88.0"
+          toolchain: "1.92.0"
           context: *rust-ci-context
 
       - rust-ci-cargo-hack-build:
@@ -1284,12 +1284,14 @@ workflows:
           name: kona-lint-<<matrix.target>>
           matrix:
             parameters:
-              target: ["cannon", "asterisc"]
+              target: ["cannon"]
           context: *rust-ci-context
 
       - kona-build-fpvm:
-          name: kona-build-fpvm-cannon-client
-          target: "cannon-client"
+          name: kona-build-fpvm-<<matrix.target>>
+          matrix:
+            parameters:
+              target: ["cannon-client"]
           context: *rust-ci-context
 
       - kona-coverage:
