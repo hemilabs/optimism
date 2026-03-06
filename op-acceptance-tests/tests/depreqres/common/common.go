@@ -4,74 +4,34 @@ import (
 	"testing"
 	"time"
 
-	bss "github.com/ethereum-optimism/optimism/op-batcher/batcher"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
-	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/testreq"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
-func syncModeOpt(syncMode sync.Mode) presets.Option {
-	return presets.WithGlobalL2CLOption(sysgo.L2CLOptionFn(
-		func(_ devtest.T, _ sysgo.ComponentTarget, cfg *sysgo.L2CLConfig) {
-			if syncMode == sync.CLSync {
-				cfg.SequencerSyncMode = sync.CLSync
-			}
-			cfg.VerifierSyncMode = syncMode
-		}))
+// stableSyncStatus returns the sync status of node after any in-flight gossip messages
+// have been drained. DisconnectPeer closes the libp2p connection but a buffered gossip
+// payload can still arrive and be processed via AddUnsafePayload (SyncModeReqResp=true
+// routes CL gossip through the CLSync path even in ELSync mode). Polling until the
+// head is stable ensures the snapshot reflects a quiesced state.
+func stableSyncStatus(require *testreq.Assertions, node *dsl.L2CLNode) *eth.SyncStatus {
+	ss := node.SyncStatus()
+	require.Eventually(func() bool {
+		next := node.SyncStatus()
+		stable := next.UnsafeL2.Number == ss.UnsafeL2.Number
+		ss = next
+		return stable
+	}, 5*time.Second, 200*time.Millisecond, "L2CLB head should stabilize after disconnect")
+	return ss
 }
 
-func reqRespSyncDisabledOpt() presets.Option {
-	return presets.WithGlobalL2CLOption(sysgo.L2CLOptionFn(
-		func(_ devtest.T, _ sysgo.ComponentTarget, cfg *sysgo.L2CLConfig) {
-			cfg.EnableReqRespSync = false
-			cfg.UseReqRespSync = false
-		}))
-}
-
-func syncModeReqRespSyncOpt() presets.Option {
-	return presets.WithGlobalL2CLOption(sysgo.L2CLOptionFn(
-		func(_ devtest.T, _ sysgo.ComponentTarget, cfg *sysgo.L2CLConfig) {
-			cfg.UseReqRespSync = true
-		}))
-}
-
-func noDiscoveryOpt() presets.Option {
-	return presets.WithGlobalL2CLOption(sysgo.L2CLOptionFn(
-		func(_ devtest.T, _ sysgo.ComponentTarget, cfg *sysgo.L2CLConfig) {
-			cfg.NoDiscovery = true
-		}))
-}
-
-func batcherStoppedOpt() presets.Option {
-	return presets.WithBatcherOption(func(_ sysgo.ComponentTarget, cfg *bss.CLIConfig) {
-		cfg.Stopped = true
-	})
-}
-
-func ReqRespSyncDisabledOpts(syncMode sync.Mode) []presets.Option {
-	return []presets.Option{
-		syncModeOpt(syncMode),
-		reqRespSyncDisabledOpt(),
-		noDiscoveryOpt(),
-		batcherStoppedOpt(),
-	}
-}
-
-func SyncModeReqRespSyncOpts(syncMode sync.Mode) []presets.Option {
-	return []presets.Option{
-		syncModeOpt(syncMode),
-		syncModeReqRespSyncOpt(),
-		noDiscoveryOpt(),
-		batcherStoppedOpt(),
-	}
-}
-
-func UnsafeChainNotStalling_DisconnectT(t devtest.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
-	sys := presets.NewSingleChainMultiNodeWithoutCheck(t, opts...)
+func UnsafeChainNotStalling_Disconnect(gt *testing.T, syncMode sync.Mode, sleep time.Duration) {
+	t := devtest.SerialT(gt)
+	sys := presets.NewSingleChainMultiNodeWithoutCheck(t)
 	require := t.Require()
 	l := t.Logger().With("syncmode", syncMode)
 
@@ -87,8 +47,7 @@ func UnsafeChainNotStalling_DisconnectT(t devtest.T, syncMode sync.Mode, sleep t
 	sys.L2CL.DisconnectPeer(sys.L2CLB)
 
 	ssA_before := sys.L2CL.SyncStatus()
-	sys.L2CLB.WaitForStall(types.LocalUnsafe)
-	ssB_before := sys.L2CLB.SyncStatus()
+	ssB_before := stableSyncStatus(require, sys.L2CLB)
 
 	l.Info("L2CL status before delay", "unsafeL2", ssA_before.UnsafeL2.ID(), "safeL2", ssA_before.SafeL2.ID())
 	l.Info("L2CLB status before delay", "unsafeL2", ssB_before.UnsafeL2.ID(), "safeL2", ssB_before.SafeL2.ID())
@@ -113,13 +72,9 @@ func UnsafeChainNotStalling_DisconnectT(t devtest.T, syncMode sync.Mode, sleep t
 	sys.L2ELB.Reached(eth.Unsafe, ssA_after.UnsafeL2.Number, 30)
 }
 
-func UnsafeChainNotStalling_Disconnect(gt *testing.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
-	t := devtest.ParallelT(gt)
-	UnsafeChainNotStalling_DisconnectT(t, syncMode, sleep, opts...)
-}
-
-func UnsafeChainNotStalling_RestartOpNodeT(t devtest.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
-	sys := presets.NewSingleChainMultiNodeWithoutCheck(t, opts...)
+func UnsafeChainNotStalling_RestartOpNode(gt *testing.T, syncMode sync.Mode, sleep time.Duration) {
+	t := devtest.SerialT(gt)
+	sys := presets.NewSingleChainMultiNodeWithoutCheck(t)
 	require := t.Require()
 	l := t.Logger().With("syncmode", syncMode)
 
@@ -135,8 +90,7 @@ func UnsafeChainNotStalling_RestartOpNodeT(t devtest.T, syncMode sync.Mode, slee
 	sys.L2CL.DisconnectPeer(sys.L2CLB)
 
 	ssA_before := sys.L2CL.SyncStatus()
-	sys.L2CLB.WaitForStall(types.LocalUnsafe)
-	ssB_before := sys.L2CLB.SyncStatus()
+	ssB_before := stableSyncStatus(require, sys.L2CLB)
 
 	l.Info("L2CL status before delay", "unsafeL2", ssA_before.UnsafeL2.ID(), "safeL2", ssA_before.SafeL2.ID())
 	l.Info("L2CLB status before delay", "unsafeL2", ssB_before.UnsafeL2.ID(), "safeL2", ssB_before.SafeL2.ID())
@@ -163,9 +117,4 @@ func UnsafeChainNotStalling_RestartOpNodeT(t devtest.T, syncMode sync.Mode, slee
 	l.Info("Confirm that the unsafe chain for L2CLB is not stalled")
 	sys.L2CLB.Reached(types.LocalUnsafe, ssA_after.UnsafeL2.Number, 30)
 	sys.L2ELB.Reached(eth.Unsafe, ssA_after.UnsafeL2.Number, 30)
-}
-
-func UnsafeChainNotStalling_RestartOpNode(gt *testing.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
-	t := devtest.ParallelT(gt)
-	UnsafeChainNotStalling_RestartOpNodeT(t, syncMode, sleep, opts...)
 }
