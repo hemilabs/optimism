@@ -13,6 +13,19 @@ import (
 	"github.com/ethereum/go-ethereum"
 )
 
+func TestMain(m *testing.M) {
+	// No ELP2P, CLP2P to control the supply of unsafe payload to the CL
+	presets.DoMain(m, presets.WithSingleChainMultiNodeWithoutP2P(),
+		presets.WithCompatibleTypes(compat.SysGo),
+		presets.WithExecutionLayerSyncOnVerifiers(),
+		presets.WithReqRespSyncDisabled(),
+		presets.WithNoDiscovery(),
+		stack.MakeCommon(sysgo.WithBatcherOption(func(id stack.ComponentID, cfg *bss.CLIConfig) {
+			cfg.Stopped = true
+		})),
+	)
+}
+
 // TestCLELDivergence tests that the CL and EL diverge when the CL advances the unsafe head, due to accepting SYNCING response from the EL, but the EL cannot validate the block (yet), does not canonicalize it, and doesn't serve it.
 func TestCLELDivergence(gt *testing.T) {
 	t := devtest.ParallelT(gt)
