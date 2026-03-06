@@ -45,8 +45,8 @@ func (el *L2ELNode) Escape() stack.L2ELNode {
 	return el.inner
 }
 
-func (el *L2ELNode) EthClient() apis.EthClient {
-	return el.inner.EthClient()
+func (el *L2ELNode) ID() stack.ComponentID {
+	return el.inner.ID()
 }
 
 func (el *L2ELNode) BlockRefByLabel(label eth.BlockLabel) eth.L2BlockRef {
