@@ -2362,7 +2362,6 @@ jobs:
             - "op-program/bin/meta*"
             - "rust/kona/prestate-artifacts-*/"
 
-
   # Aggregator job - allows downstream jobs to depend on a single job instead of listing all build jobs.
   rust-binaries-for-sysgo:
     docker:
@@ -2372,7 +2371,6 @@ jobs:
       - run:
           name: All Rust binaries ready
           command: echo "All Rust binaries built and persisted to workspace"
-
 
   # ============================================================================
 
@@ -2849,6 +2847,7 @@ workflows:
                 - OPCM_V2
                 - OPCM_V2,CUSTOM_GAS_TOKEN
                 - OPCM_V2,OPTIMISM_PORTAL_INTEROP
+                - OPCM_V2,ZK_DISPUTE_GAME
           context:
             - circleci-repo-readonly-authenticated-github-token
             - slack
