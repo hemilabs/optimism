@@ -45,16 +45,18 @@ var (
 )
 
 const (
-	cannonGameType            uint32 = 0
-	permissionedGameType      uint32 = 1
-	superCannonGameType       uint32 = 4
-	superPermissionedGameType uint32 = 5
-	alphabetGameType          uint32 = 255
+	cannonGameType       uint32 = 0
+	permissionedGameType uint32 = 1
+	superCannonGameType  uint32 = 4
+	alphabetGameType     uint32 = 255
 )
 
 type GameCfg struct {
-	allowFuture bool
-	allowUnsafe bool
+	allowFuture      bool
+	allowUnsafe      bool
+	superOutputRoots []eth.Bytes32
+	super            eth.Super
+	outputRoot       common.Hash
 }
 type GameOpt interface {
 	Apply(cfg *GameCfg)
@@ -74,6 +76,27 @@ func WithUnsafeProposal() GameOpt {
 func WithFutureProposal() GameOpt {
 	return gameOptFn(func(c *GameCfg) {
 		c.allowFuture = true
+	})
+}
+
+// WithInvalidSuperRoot configures the game to use invalid super output roots.
+func WithInvalidSuperRoot() GameOpt {
+	return gameOptFn(func(c *GameCfg) {
+		c.superOutputRoots = []eth.Bytes32{{0x01}, {0x02}}
+	})
+}
+
+// WithSuper allows specifying a custom super structure.
+func WithSuper(super eth.Super) GameOpt {
+	return gameOptFn(func(c *GameCfg) {
+		c.super = super
+	})
+}
+
+// WithOutputRoot allows specifying a custom output root.
+func WithOutputRoot(outputRoot common.Hash) GameOpt {
+	return gameOptFn(func(c *GameCfg) {
+		c.outputRoot = outputRoot
 	})
 }
 
@@ -168,29 +191,31 @@ func NewGameCfg(opts ...GameOpt) *GameCfg {
 	return cfg
 }
 
-func (h *FactoryHelper) StartOutputCannonGameWithCorrectRoot(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputCannonGameHelper {
-	cfg := NewGameCfg(opts...)
-	h.WaitForBlock(l2Node, l2BlockNumber, cfg)
-	output, err := h.System.RollupClient(l2Node).OutputAtBlock(ctx, l2BlockNumber)
-	h.Require.NoErrorf(err, "Failed to get output at block %v", l2BlockNumber)
-	return h.StartOutputCannonGame(ctx, l2Node, l2BlockNumber, common.Hash(output.OutputRoot), opts...)
+func (h *FactoryHelper) StartOutputCannonGame(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputCannonGameHelper {
+	return h.startOutputCannonGameOfType(ctx, l2Node, l2BlockNumber, cannonGameType, opts...)
 }
 
-func (h *FactoryHelper) StartOutputCannonGame(ctx context.Context, l2Node string, l2BlockNumber uint64, rootClaim common.Hash, opts ...GameOpt) *OutputCannonGameHelper {
-	return h.startOutputCannonGameOfType(ctx, l2Node, l2BlockNumber, rootClaim, cannonGameType, opts...)
+func (h *FactoryHelper) StartPermissionedGame(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputCannonGameHelper {
+	return h.startOutputCannonGameOfType(ctx, l2Node, l2BlockNumber, permissionedGameType, opts...)
 }
 
-func (h *FactoryHelper) StartPermissionedGame(ctx context.Context, l2Node string, l2BlockNumber uint64, rootClaim common.Hash, opts ...GameOpt) *OutputCannonGameHelper {
-	return h.startOutputCannonGameOfType(ctx, l2Node, l2BlockNumber, rootClaim, permissionedGameType, opts...)
-}
-
-func (h *FactoryHelper) startOutputCannonGameOfType(ctx context.Context, l2Node string, l2BlockNumber uint64, rootClaim common.Hash, gameType uint32, opts ...GameOpt) *OutputCannonGameHelper {
+func (h *FactoryHelper) startOutputCannonGameOfType(ctx context.Context, l2Node string, l2BlockNumber uint64, gameType uint32, opts ...GameOpt) *OutputCannonGameHelper {
 	cfg := NewGameCfg(opts...)
 	logger := testlog.Logger(h.T, log.LevelInfo).New("role", "OutputCannonGameHelper")
 	rollupClient := h.System.RollupClient(l2Node)
 	l2Client := h.System.NodeClient(l2Node)
 
-	extraData := h.CreateBisectionGameExtraData(l2Node, l2BlockNumber, cfg)
+	extraData := h.createBisectionGameExtraData(l2Node, l2BlockNumber, cfg)
+
+	// If a custom output root was provided via options, use it; otherwise derive from extraData
+	var rootClaim common.Hash
+	if cfg.outputRoot != (common.Hash{}) {
+		rootClaim = cfg.outputRoot
+	} else {
+		output, err := rollupClient.OutputAtBlock(ctx, l2BlockNumber)
+		h.Require.NoErrorf(err, "Failed to get output at block %v", l2BlockNumber)
+		rootClaim = common.Hash(output.OutputRoot)
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
@@ -225,37 +250,34 @@ func (h *FactoryHelper) StartSuperCannonGameWithCorrectRoot(ctx context.Context,
 	require.NoError(h.T, err)
 	l2Timestamp := b.Time()
 	h.WaitForSuperTimestamp(l2Timestamp, cfg)
-	output, err := h.System.SupervisorClient().SuperRootAtTimestamp(ctx, hexutil.Uint64(l2Timestamp))
-	h.Require.NoErrorf(err, "Failed to get output at timestamp %v", l2Timestamp)
-	return h.startSuperCannonGameOfType(ctx, l2Timestamp, common.Hash(output.SuperRoot), superCannonGameType, opts...)
+	return h.startSuperCannonGameOfType(ctx, l2Timestamp, superCannonGameType, opts...)
 }
 
 func (h *FactoryHelper) StartSuperCannonGameWithCorrectRootAtTimestamp(ctx context.Context, l2Timestamp uint64, opts ...GameOpt) *SuperCannonGameHelper {
 	cfg := NewGameCfg(opts...)
 	h.WaitForSuperTimestamp(l2Timestamp, cfg)
-	output, err := h.System.SupervisorClient().SuperRootAtTimestamp(ctx, hexutil.Uint64(l2Timestamp))
-	h.Require.NoErrorf(err, "Failed to get output at timestamp %v", l2Timestamp)
-	return h.startSuperCannonGameOfType(ctx, l2Timestamp, common.Hash(output.SuperRoot), superCannonGameType, opts...)
+	return h.startSuperCannonGameOfType(ctx, l2Timestamp, superCannonGameType, opts...)
 }
 
-func (h *FactoryHelper) StartSuperCannonGame(ctx context.Context, rootClaim common.Hash, opts ...GameOpt) *SuperCannonGameHelper {
+func (h *FactoryHelper) StartSuperCannonGame(ctx context.Context, opts ...GameOpt) *SuperCannonGameHelper {
 	// Can't create a game at L1 genesis!
 	require.NoError(h.T, wait.ForBlock(ctx, h.Client, 1))
 	b, err := h.Client.BlockByNumber(ctx, nil)
 	require.NoError(h.T, err)
-	return h.startSuperCannonGameOfType(ctx, b.Time(), rootClaim, superCannonGameType, opts...)
+	return h.startSuperCannonGameOfType(ctx, b.Time(), superCannonGameType, opts...)
 }
 
-func (h *FactoryHelper) StartSuperCannonGameAtTimestamp(ctx context.Context, timestamp uint64, rootClaim common.Hash, opts ...GameOpt) *SuperCannonGameHelper {
-	return h.startSuperCannonGameOfType(ctx, timestamp, rootClaim, superCannonGameType, opts...)
+func (h *FactoryHelper) StartSuperCannonGameAtTimestamp(ctx context.Context, timestamp uint64, opts ...GameOpt) *SuperCannonGameHelper {
+	return h.startSuperCannonGameOfType(ctx, timestamp, superCannonGameType, opts...)
 }
 
-func (h *FactoryHelper) startSuperCannonGameOfType(ctx context.Context, timestamp uint64, rootClaim common.Hash, gameType uint32, opts ...GameOpt) *SuperCannonGameHelper {
+func (h *FactoryHelper) startSuperCannonGameOfType(ctx context.Context, timestamp uint64, gameType uint32, opts ...GameOpt) *SuperCannonGameHelper {
 	cfg := NewGameCfg(opts...)
 	logger := testlog.Logger(h.T, log.LevelInfo).New("role", "CannonGameHelper")
 	rootProvider := h.System.SupervisorClient()
 
-	extraData := h.CreateSuperGameExtraData(ctx, rootProvider, timestamp, cfg)
+	extraData := h.createSuperGameExtraData(ctx, rootProvider, timestamp, cfg)
+	rootClaim := crypto.Keccak256Hash(extraData)
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
@@ -281,7 +303,7 @@ func (h *FactoryHelper) startSuperCannonGameOfType(ctx context.Context, timestam
 	prestateProvider := super.NewSuperRootPrestateProvider(rootProvider, prestateTimestamp)
 	rollupCfgs, err := super.NewRollupConfigsFromParsed(h.System.RollupCfgs()...)
 	require.NoError(h.T, err, "failed to create rollup configs")
-	provider := super.NewSuperTraceProvider(logger, rollupCfgs, prestateProvider, rootProvider, l1Head, splitDepth, prestateTimestamp, poststateTimestamp)
+	provider := super.NewSupervisorSuperTraceProvider(logger, rollupCfgs, prestateProvider, rootProvider, l1Head, splitDepth, prestateTimestamp, poststateTimestamp)
 
 	return NewSuperCannonGameHelper(h.T, h.Client, h.Opts, h.PrivKey, game, h.FactoryAddr, createdEvent.DisputeProxy, provider, h.System)
 }
@@ -295,21 +317,23 @@ func (h *FactoryHelper) GetL1Head(ctx context.Context, game contracts.FaultDispu
 	return l1Head
 }
 
-func (h *FactoryHelper) StartOutputAlphabetGameWithCorrectRoot(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputAlphabetGameHelper {
-	cfg := NewGameCfg(opts...)
-	h.WaitForBlock(l2Node, l2BlockNumber, cfg)
-	output, err := h.System.RollupClient(l2Node).OutputAtBlock(ctx, l2BlockNumber)
-	h.Require.NoErrorf(err, "Failed to get output at block %v", l2BlockNumber)
-	return h.StartOutputAlphabetGame(ctx, l2Node, l2BlockNumber, common.Hash(output.OutputRoot))
-}
-
-func (h *FactoryHelper) StartOutputAlphabetGame(ctx context.Context, l2Node string, l2BlockNumber uint64, rootClaim common.Hash, opts ...GameOpt) *OutputAlphabetGameHelper {
+func (h *FactoryHelper) StartOutputAlphabetGame(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputAlphabetGameHelper {
 	cfg := NewGameCfg(opts...)
 	logger := testlog.Logger(h.T, log.LevelInfo).New("role", "OutputAlphabetGameHelper")
 	rollupClient := h.System.RollupClient(l2Node)
 	l2Client := h.System.NodeClient(l2Node)
 
-	extraData := h.CreateBisectionGameExtraData(l2Node, l2BlockNumber, cfg)
+	extraData := h.createBisectionGameExtraData(l2Node, l2BlockNumber, cfg)
+
+	// If a custom output root was provided via options, use it; otherwise derive from extraData
+	var rootClaim common.Hash
+	if cfg.outputRoot != (common.Hash{}) {
+		rootClaim = cfg.outputRoot
+	} else {
+		output, err := rollupClient.OutputAtBlock(ctx, l2BlockNumber)
+		h.Require.NoErrorf(err, "Failed to get output at block %v", l2BlockNumber)
+		rootClaim = common.Hash(output.OutputRoot)
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
@@ -340,7 +364,7 @@ func (h *FactoryHelper) StartOutputAlphabetGame(ctx context.Context, l2Node stri
 	}
 }
 
-func (h *FactoryHelper) CreateBisectionGameExtraData(l2Node string, l2BlockNumber uint64, cfg *GameCfg) []byte {
+func (h *FactoryHelper) createBisectionGameExtraData(l2Node string, l2BlockNumber uint64, cfg *GameCfg) []byte {
 	h.WaitForBlock(l2Node, l2BlockNumber, cfg)
 	h.T.Logf("Creating game with l2 block number: %v", l2BlockNumber)
 	extraData := make([]byte, 32)
@@ -348,7 +372,7 @@ func (h *FactoryHelper) CreateBisectionGameExtraData(l2Node string, l2BlockNumbe
 	return extraData
 }
 
-func (h *FactoryHelper) CreateSuperGameExtraData(ctx context.Context, supervisor *sources.SupervisorClient, timestamp uint64, cfg *GameCfg) []byte {
+func (h *FactoryHelper) createSuperGameExtraData(ctx context.Context, supervisor *sources.SupervisorClient, timestamp uint64, cfg *GameCfg) []byte {
 	if !cfg.allowFuture {
 		timedCtx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
@@ -361,10 +385,26 @@ func (h *FactoryHelper) CreateSuperGameExtraData(ctx context.Context, supervisor
 		})
 		require.NoError(h.T, err, "Safe head did not reach proposal timestamp")
 	}
-	h.T.Logf("Creating game with l2 timestamp: %v", timestamp)
-	extraData := make([]byte, 32)
-	binary.BigEndian.PutUint64(extraData[24:], timestamp)
-	return extraData
+
+	super := cfg.super
+	if super == nil {
+		h.T.Logf("Creating game with l2 timestamp: %v", timestamp)
+		superResponse, err := h.System.SupervisorClient().SuperRootAtTimestamp(ctx, hexutil.Uint64(timestamp))
+		h.Require.NoErrorf(err, "Failed to get super root at timestamp %v", timestamp)
+		super, err = superResponse.ToSuper()
+		h.Require.NoErrorf(err, "Failed to parse super at timestamp %v", timestamp)
+	}
+
+	superV1, ok := super.(*eth.SuperV1)
+	h.Require.Truef(ok, "Unsupported super type %T", super)
+	superV1.Timestamp = timestamp // override in case it's different from the game timestamp
+	if len(cfg.superOutputRoots) != 0 {
+		h.Require.Len(cfg.superOutputRoots, len(superV1.Chains), "Super output roots length mismatch")
+		for i := range superV1.Chains {
+			superV1.Chains[i].Output = cfg.superOutputRoots[i]
+		}
+	}
+	return superV1.Marshal()
 }
 
 func (h *FactoryHelper) WaitForBlock(l2Node string, l2BlockNumber uint64, cfg *GameCfg) {
@@ -441,4 +481,17 @@ func (h *FactoryHelper) StartChallenger(ctx context.Context, name string, option
 		_ = c.Close()
 	})
 	return c
+}
+
+// CreateInvalidSuper creates a SuperV1 with invalid outputs
+func CreateInvalidSuper(timestamp uint64) *eth.SuperV1 {
+	return &eth.SuperV1{
+		Timestamp: timestamp,
+		Chains: []eth.ChainIDAndOutput{
+			{
+				ChainID: eth.ChainIDFromUInt64(1),
+				Output:  eth.Bytes32{0x01},
+			},
+		},
+	}
 }
