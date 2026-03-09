@@ -216,37 +216,6 @@ jobs:
           path: rust/kona/tests/tmp/testlogs
           when: always
 
-  # op-reth E2E Sysgo Tests
-  op-reth-e2e-sysgo-tests:
-    docker:
-      - image: <<pipeline.parameters.c-default_docker_image>>
-    resource_class: xlarge
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-      - attach_workspace:
-          at: .
-      - go-restore-cache:
-          namespace: op-reth-e2e
-      - rust-build:
-          directory: rust
-          profile: release
-          binary: "op-reth"
-      - run:
-          name: Run op-reth E2E tests with sysgo orchestrator
-          working_directory: rust/op-reth/tests
-          no_output_timeout: 60m
-          command: |
-            export OP_RETH_EXEC_PATH="$(pwd)/../../target/release/op-reth"
-            just test-e2e-sysgo
-      - go-save-cache:
-          namespace: op-reth-e2e
-      - store_test_results:
-          path: rust/op-reth/tests/tmp/test-results
-      - store_artifacts:
-          path: rust/op-reth/tests/tmp/testlogs
-          when: always
-
   # Kona Proof Action Tests (from proof.yaml)
   kona-proof-action-tests:
     parameters:
@@ -377,37 +346,5 @@ workflows:
             - rust-e2e-simple-kona-geth
             - rust-e2e-simple-kona-sequencer
             - rust-e2e-restart
-            - kona-proof-action-single
-
-  # Required Rust E2E gate (skip) — runs when no rust changes and no dispatch
-  # Just runs action tests
-  rust-e2e-gate-skip:
-    when:
-      and:
-        - equal: ["webhook", << pipeline.trigger_source >>]
-        - not: << pipeline.parameters.c-rust_changes_detected >>
-    jobs:
-      - contracts-bedrock-build:
-          build_args: --skip test
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary:
-          name: kona-build-release
-          directory: rust
-          profile: release
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      # Proof tests - single kind only, interop excluded per original config
-      - kona-proof-action-tests:
-          name: kona-proof-action-single
-          kind: single
-          requires:
-            - kona-build-release
-            - contracts-bedrock-build
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-
-      - required-rust-e2e:
-          requires:
             - kona-proof-action-single
 
