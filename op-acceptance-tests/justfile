@@ -42,7 +42,7 @@ acceptance-test gate="":
             make cannon-prestates
         fi
 
-        echo "Building Rust binaries (kona-node, kona-supervisor, op-rbuilder, rollup-boost)..."
+        echo "Building Rust binaries (kona-node, op-rbuilder, rollup-boost)..."
         cd {{REPO_ROOT}}
         just build-rust-debug
     fi
