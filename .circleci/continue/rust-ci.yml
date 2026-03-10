@@ -21,6 +21,9 @@ parameters:
   c-go-cache-version:
     type: string
     default: "v0.0"
+  c-rust_changes_detected:
+    type: boolean
+    default: false
 
 # ============================================================================
 # COMMANDS
@@ -1026,18 +1029,27 @@ jobs:
             echo "Successfully published prestates artifacts to GCS"
       - rust-save-build-cache: *kona-publish-prestate-cache
 
+  required-rust-ci:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small
+    steps:
+      - run: echo "Required Rust CI checks passed"
+
 # ============================================================================
 # WORKFLOWS
 # ============================================================================
 workflows:
   # ==========================================================================
   # Unified Rust CI workflow
-  # Runs on any rust/.* change or manual dispatch with rust_ci_dispatch=true
+  # Runs on rust path changes or manual dispatch with rust_ci_dispatch=true
   # ==========================================================================
   rust-ci:
     when:
       or:
-        - equal: ["webhook", << pipeline.trigger_source >>]
+        - and:
+            - equal: ["webhook", << pipeline.trigger_source >>]
+            - << pipeline.parameters.c-rust_changes_detected >>
         - and:
             - equal: [true, <<pipeline.parameters.c-rust_ci_dispatch>>]
             - equal: ["api", << pipeline.trigger_source >>]
@@ -1171,17 +1183,13 @@ workflows:
       # Kona crate-specific jobs (lint, FPVM builds, benches, coverage)
       # -----------------------------------------------------------------------
       - kona-cargo-lint:
-          name: kona-lint-<<matrix.target>>
-          matrix:
-            parameters:
-              target: ["cannon"]
+          name: kona-lint-cannon
+          target: "cannon"
           context: *rust-ci-context
 
       - kona-build-fpvm:
-          name: kona-build-fpvm-<<matrix.target>>
-          matrix:
-            parameters:
-              target: ["cannon-client"]
+          name: kona-build-fpvm-cannon-client
+          target: "cannon-client"
           context: *rust-ci-context
 
       - kona-coverage:
@@ -1192,6 +1200,57 @@ workflows:
       - kona-host-client-offline:
           name: kona-host-client-offline-cannon
           context: *rust-ci-context
+
+      # -----------------------------------------------------------------------
+      # Required gate — fans in on required Rust CI jobs
+      # -----------------------------------------------------------------------
+      - required-rust-ci:
+          requires:
+            - rust-tests
+            - rust-clippy
+            - rust-docs
+
+  # ==========================================================================
+  # Required Rust CI gate (skip) — runs when no rust changes and no dispatch
+  # Just runs the rust cargo tests for the different packages in the repo and try to build the fpvm-prestates
+  # ==========================================================================
+  rust-ci-gate-short:
+    when:
+      and:
+        - equal: ["webhook", << pipeline.trigger_source >>]
+        - not: << pipeline.parameters.c-rust_changes_detected >>
+    jobs:
+      - rust-ci-cargo-tests:
+          name: rust-tests
+          directory: rust
+          context: *rust-ci-context
+
+      - rust-ci-cargo-tests:
+          name: op-reth-integration-tests
+          directory: rust
+          command: "--justfile op-reth/justfile test-integration"
+          cache_profile: debug
+          context: *rust-ci-context
+
+      - rust-ci-cargo-tests:
+          name: op-reth-tests-edge
+          directory: rust
+          command: "--justfile op-reth/justfile test"
+          flags: "edge"
+          cache_profile: debug
+          context: *rust-ci-context
+
+      - kona-build-fpvm:
+          name: kona-build-fpvm-cannon-client
+          target: "cannon-client"
+          context: *rust-ci-context
+
+      - required-rust-ci:
+          requires:
+            - rust-tests
+            - op-reth-integration-tests
+            - op-reth-tests-edge
+            - kona-build-fpvm-cannon-client
 
 
   # ==========================================================================
@@ -1211,6 +1270,7 @@ workflows:
       and:
         - equal: ["develop", <<pipeline.git.branch>>]
         - equal: ["webhook", << pipeline.trigger_source >>] # Only trigger on push to develop, not scheduled runs
+        - << pipeline.parameters.c-rust_changes_detected >>  # Only publish when rust paths changed
     jobs:
       - kona-publish-prestate-artifacts:
           name: kona-publish-<<matrix.version>>
