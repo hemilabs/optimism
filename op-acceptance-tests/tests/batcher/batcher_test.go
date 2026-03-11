@@ -23,7 +23,7 @@ import (
 func TestBatcherFullChannelsAfterDowntime(gt *testing.T) {
 	gt.Skip("Skipping test until we fix nonce too high error: tx: 177 state: 176")
 
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	opts := presets.Combine(
 		// Keep verifier EL-sync behavior and no-discovery from the old package-level TestMain.
 		presets.WithGlobalL2CLOption(sysgo.L2CLOptionFn(func(_ devtest.T, _ sysgo.ComponentTarget, cfg *sysgo.L2CLConfig) {

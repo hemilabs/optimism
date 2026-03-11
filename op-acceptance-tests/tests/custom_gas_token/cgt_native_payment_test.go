@@ -11,7 +11,7 @@ import (
 // value transfer charges gas in the native ERC-20, and balances reflect
 // recipient +amount and sender > amount decrease (amount + gas).
 func TestCGT_ValueTransferPaysGasInToken(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newCGTMinimal(t)
 
 	ensureCGTOrSkip(t, sys)

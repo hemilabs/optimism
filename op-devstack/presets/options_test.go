@@ -24,13 +24,6 @@ func TestOptionKindsFromCompositeOptions(t *testing.T) {
 		)
 	})
 
-	t.Run("WithL1Geth", func(t *testing.T) {
-		require.Equal(t,
-			optionKindL1EL,
-			WithL1Geth("/tmp/geth").optionKinds(),
-		)
-	})
-
 	t.Run("RequireGameTypePresent", func(t *testing.T) {
 		require.Equal(t,
 			optionKindAfterBuild|optionKindProofValidation,
@@ -40,7 +33,6 @@ func TestOptionKindsFromCompositeOptions(t *testing.T) {
 
 	t.Run("nil adapters do not claim support kinds", func(t *testing.T) {
 		require.Zero(t, WithDeployerOptions(nil).optionKinds())
-		require.Zero(t, WithLocalContractSourcesAt("").optionKinds())
 		require.Zero(t, WithBatcherOption(nil).optionKinds())
 		require.Zero(t, WithGlobalL2CLOption(nil).optionKinds())
 		require.Zero(t, WithGlobalSyncTesterELOption(nil).optionKinds())
@@ -48,11 +40,6 @@ func TestOptionKindsFromCompositeOptions(t *testing.T) {
 		require.Zero(t, WithOPRBuilderOption(nil).optionKinds())
 		require.Zero(t, AfterBuild(nil).optionKinds())
 	})
-}
-
-func TestWithLocalContractSourcesAt(t *testing.T) {
-	cfg, _ := collectPresetConfig([]Option{WithLocalContractSourcesAt("/tmp/contracts-bedrock")})
-	require.Equal(t, "/tmp/contracts-bedrock", cfg.LocalContractArtifactsPath)
 }
 
 func TestUnsupportedPresetOptionKinds(t *testing.T) {
@@ -74,22 +61,15 @@ func TestUnsupportedPresetOptionKinds(t *testing.T) {
 			want: 0,
 		},
 		{
-			name:      "minimal allows l1 EL override",
-			supported: minimalPresetSupportedOptionKinds,
-			opts:      WithL1Geth("/tmp/geth"),
-			want:      0,
-		},
-		{
 			name:      "minimal with conductors rejects challenger toggle",
 			supported: minimalWithConductorsPresetSupportedOptionKinds,
 			opts:      WithChallengerCannonKonaEnabled(),
 			want:      optionKindChallengerCannonKona,
 		},
 		{
-			name:      "flashblocks allows builder and deployer adapters",
+			name:      "flashblocks only allows builder adapters",
 			supported: singleChainWithFlashblocksPresetSupportedOptionKinds,
 			opts: Combine(
-				WithLocalContractSourcesAt("/tmp/contracts-bedrock"),
 				WithOPRBuilderOption(builderOpt),
 				WithTimeTravelEnabled(),
 			),

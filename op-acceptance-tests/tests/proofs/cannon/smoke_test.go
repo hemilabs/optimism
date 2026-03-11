@@ -9,7 +9,7 @@ import (
 )
 
 func TestSmoke(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newSystem(t)
 	require := t.Require()
 	dgf := sys.DisputeGameFactory()

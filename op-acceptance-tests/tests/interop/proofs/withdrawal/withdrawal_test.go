@@ -10,7 +10,7 @@ import (
 )
 
 func TestSuperRootWithdrawal(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := presets.NewSimpleInteropSuperProofs(t, presets.WithTimeTravelEnabled())
 	sys.L1Network.WaitForOnline()
 
