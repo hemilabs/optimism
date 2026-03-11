@@ -50,15 +50,6 @@ parameters:
   heavy_fuzz_dispatch:
     type: boolean
     default: false
-  acceptance_tests_dispatch:
-    type: boolean
-    default: false
-  kurtosis_acceptance_tests_dispatch:
-    type: boolean
-    default: false
-  sync_test_op_node_dispatch:
-    type: boolean
-    default: false
   ai_contracts_test_dispatch:
     type: boolean
     default: false
@@ -2741,10 +2732,19 @@ workflows:
             .* flake-shake-workers << pipeline.parameters.flake-shake-workers >> .circleci/continue/main.yml
             .* go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/main.yml
 
-            rust/.* rust_ci_dispatch << pipeline.parameters.rust_ci_dispatch >> .circleci/continue/rust-ci.yml
-            rust/.* default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/rust-ci.yml
-            rust/.* base_image << pipeline.parameters.base_image >> .circleci/continue/rust-ci.yml
-            rust/.* go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/rust-ci.yml
+            .* c-stale_check_dispatch << pipeline.parameters.stale_check_dispatch >> .circleci/continue/main.yml
+            .* c-contracts_coverage_dispatch << pipeline.parameters.contracts_coverage_dispatch >> .circleci/continue/main.yml
+            .* c-heavy_fuzz_dispatch << pipeline.parameters.heavy_fuzz_dispatch >> .circleci/continue/main.yml
+            .* c-ai_contracts_test_dispatch << pipeline.parameters.ai_contracts_test_dispatch >> .circleci/continue/main.yml
+            .* c-github-event-type << pipeline.parameters.github-event-type >> .circleci/continue/main.yml
+            .* c-github-event-action << pipeline.parameters.github-event-action >> .circleci/continue/main.yml
+            .* c-github-event-base64 << pipeline.parameters.github-event-base64 >> .circleci/continue/main.yml
+            .* c-devnet-metrics-collect << pipeline.parameters.devnet-metrics-collect >> .circleci/continue/main.yml
+            .* c-flake-shake-dispatch << pipeline.parameters.flake-shake-dispatch >> .circleci/continue/main.yml
+            .* c-flake-shake-iterations << pipeline.parameters.flake-shake-iterations >> .circleci/continue/main.yml
+            .* c-flake-shake-workers << pipeline.parameters.flake-shake-workers >> .circleci/continue/main.yml
+            .* c-go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/main.yml
+            rust/.* c-rust_files_changed true .circleci/continue/main.yml
 
             rust/.* rust_e2e_dispatch << pipeline.parameters.rust_e2e_dispatch >> .circleci/continue/rust-e2e.yml
             rust/.* default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/rust-e2e.yml
