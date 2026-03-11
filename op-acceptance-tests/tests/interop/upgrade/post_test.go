@@ -41,7 +41,7 @@ func TestPostInbox(gt *testing.T) {
 
 func TestPostInteropUpgradeComprehensive(gt *testing.T) {
 	gt.Skip("Skipping Interop Acceptance Test")
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newSimpleInterop(t)
 	require := t.Require()
 	logger := t.Logger()

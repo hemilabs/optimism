@@ -1688,7 +1688,7 @@ jobs:
       gate:
         description: The gate to run. Reads package list from op-acceptance-tests/gates/<gate>.txt. If empty, runs all tests.
         type: string
-        default: ""
+        default: "base"
       l2_cl_kind:
         description: "L2 consensus layer client (op-node or kona)"
         type: string
@@ -1697,6 +1697,10 @@ jobs:
         description: "L2 execution layer client (op-geth or op-reth)"
         type: string
         default: "op-geth"
+      run_all:
+        description: When true, run all tests in gateless mode.
+        type: boolean
+        default: false
       no_output_timeout:
         description: Timeout for when CircleCI kills the job if there's no output
         type: string
@@ -1741,7 +1745,13 @@ jobs:
           working_directory: op-acceptance-tests
           no_output_timeout: <<parameters.no_output_timeout>>
           command: |
-            LOG_LEVEL=info just acceptance-test "<<parameters.gate>>"
+            if <<parameters.run_all>>; then
+              echo "Running in gateless mode - auto-discovering all tests in ./op-acceptance-tests/..."
+              LOG_LEVEL=info just acceptance-test-all
+            else
+              echo "Running in gate mode (gate=<<parameters.gate>>)"
+              LOG_LEVEL=info just acceptance-test "<<parameters.gate>>"
+            fi
       - run:
           name: Print results (summary)
           working_directory: op-acceptance-tests
@@ -1822,7 +1832,6 @@ jobs:
               --flake-shake \
               --flake-shake-iterations "$FLAKE_SHAKE_ITERATIONS" \
               --log.level debug \
-              --orchestrator sysgo \
               --logdir "./$OUTPUT_DIR"
       - persist_to_workspace:
           root: op-acceptance-tests
@@ -2813,7 +2822,8 @@ workflows:
       # IN-MEMORY (all) - op-node/op-geth
       - op-acceptance-tests:
           name: memory-all-opn-op-geth
-          no_output_timeout: 120m
+          run_all: true
+          no_output_timeout: 120m # Allow longer runs for memory-all gate
           context:
             - circleci-repo-readonly-authenticated-github-token
             - slack

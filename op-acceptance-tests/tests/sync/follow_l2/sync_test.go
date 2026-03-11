@@ -13,7 +13,7 @@ import (
 )
 
 func TestFollowL2_Safe_Finalized_CurrentL1(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newSingleChainTwoVerifiersFollowL2(t)
 	logger := t.Logger()
 
@@ -55,7 +55,7 @@ func TestFollowL2_Safe_Finalized_CurrentL1(gt *testing.T) {
 }
 
 func TestFollowL2_ReorgRecovery(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newSingleChainTwoVerifiersFollowL2(t)
 	require := t.Require()
 	logger := t.Logger()
@@ -132,7 +132,7 @@ func TestFollowL2_ReorgRecovery(gt *testing.T) {
 }
 
 func TestFollowL2_WithoutCLP2P(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newSingleChainTwoVerifiersFollowL2(t)
 	require := t.Require()
 	logger := t.Logger()

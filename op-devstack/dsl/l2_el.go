@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/stack"
 	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-service/apis"
-	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/retry"
 	suptypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
@@ -45,8 +44,8 @@ func (el *L2ELNode) Escape() stack.L2ELNode {
 	return el.inner
 }
 
-func (el *L2ELNode) ID() stack.ComponentID {
-	return el.inner.ID()
+func (el *L2ELNode) EthClient() apis.EthClient {
+	return el.inner.EthClient()
 }
 
 func (el *L2ELNode) BlockRefByLabel(label eth.BlockLabel) eth.L2BlockRef {
@@ -133,33 +132,30 @@ func (el *L2ELNode) ReorgTriggeredFn(target eth.L2BlockRef, attempts int) CheckF
 		el.log.Info("expecting chain to reorg on block ref", "name", el.inner.Name(), "chain", el.inner.ChainID(), "target", target)
 		return retry.Do0(el.ctx, attempts, &retry.FixedStrategy{Dur: 2 * time.Second},
 			func() error {
-				reorged, err := el.reorgTriggered(target)
-				if err == nil {
-					el.log.Info("reorg on divergence block", "chain", el.inner.ChainID(), "pre_blockref", target, "post_blockref", reorged)
+				reorged, err := el.inner.EthClient().BlockRefByNumber(el.ctx, target.Number)
+				if err != nil {
+					if strings.Contains(err.Error(), "not found") { // reorg is happening wait a bit longer
+						el.log.Info("chain still hasn't been reorged", "chain", el.inner.ChainID(), "error", err)
+						return err
+					}
+					return err
 				}
 				return err
 			})
 	}
 }
 
-// ReorgExactFn returns a lambda that checks that a L2 reorg occurred on the exact target L2 block.
-// If an L2 block prior to target was reorged, this function will block forever.
-// Composable with other lambdas to wait in parallel.
-func (el *L2ELNode) ReorgExactFn(target eth.L2BlockRef, attempts int) CheckFunc {
-	return func() error {
-		el.log.Info("expecting chain to reorg on block ref", "name", el.inner.Name(), "chain", el.inner.ChainID(), "target", target)
-		return retry.Do0(el.ctx, attempts, &retry.FixedStrategy{Dur: 2 * time.Second},
-			func() error {
-				reorged, err := el.reorgTriggered(target)
-				if err != nil {
-					return err
+				if target.Hash == reorged.Hash { // want not equal
+					el.log.Info("chain still hasn't been reorged", "chain", el.inner.ChainID(), "ref", reorged)
+					return fmt.Errorf("expected head to reorg %s, but got %s", target, reorged)
 				}
 
 				if target.ParentHash != reorged.ParentHash && target.ParentHash != emptyHash {
 					return fmt.Errorf("expected parent of target to be the same as the parent of the reorged head, but they are different")
 				}
 
-				el.log.Info("reorg on divergence block", "chain", el.inner.ChainID(), "pre_blockref", target, "post_blockref", reorged)
+				el.log.Info("reorg on divergence block", "chain", el.inner.ChainID(), "pre_blockref", target)
+				el.log.Info("reorg on divergence block", "chain", el.inner.ChainID(), "post_blockref", reorged)
 
 				return nil
 			})

@@ -14,7 +14,7 @@ import (
 // (A->B and B->A) to verify the supernode handles bidirectional interop correctly.
 // All messages are valid, and no interruptions to the chains are expected.
 func TestSupernodeInteropBidirectionalMessages(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := newSupernodeInteropWithTimeTravel(t, 0)
 
 	// Create funded EOAs on both chains

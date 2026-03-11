@@ -112,36 +112,11 @@ func runOpUp(ctx context.Context, stderr io.Writer, opUpDir string) error {
 	t := newTestingT(ctx, stderr, tempRoot)
 	defer t.doCleanup()
 
-	p := newP(ctx, stderr)
-	defer p.Close()
-
-	ids := sysgo.NewDefaultMinimalSystemIDs(sysgo.DefaultL1ID, sysgo.DefaultL2AID)
-	opts := stack.Combine(
-		sysgo.WithMnemonicKeys(devkeys.TestMnemonic),
-
-		sysgo.WithDeployer(),
-		sysgo.WithDeployerOptions(
-			sysgo.WithEmbeddedContractSources(),
-			sysgo.WithCommons(ids.L1.ChainID()),
-			sysgo.WithPrefundedL2(ids.L1.ChainID(), ids.L2.ChainID()),
-		),
-		sysgo.WithDeployerPipelineOption(sysgo.WithDeployerCacheDir(deployerCacheDir)),
-
-		sysgo.WithL1Nodes(ids.L1EL, ids.L1CL),
-
-		sysgo.WithL2ELNode(ids.L2EL),
-		sysgo.WithL2CLNode(ids.L2CL, ids.L1CL, ids.L1EL, ids.L2EL, sysgo.L2CLSequencer()),
-		sysgo.WithL2MetricsDashboard(),
-
-		sysgo.WithBatcher(ids.L2Batcher, ids.L1EL, ids.L2CL, ids.L2EL),
-		sysgo.WithProposer(ids.L2Proposer, ids.L1EL, &ids.L2CL, nil),
-
-		sysgo.WithFaucets([]stack.ComponentID{ids.L1EL}, []stack.ComponentID{ids.L2EL}),
-	)
-
-	orch := sysgo.NewOrchestrator(p, opts)
-	stack.ApplyOptionLifecycle[*sysgo.Orchestrator](opts, orch)
-	if err := runSysgo(ctx, stderr, orch); err != nil {
+	sys, err := newMinimalSystem(t)
+	if err != nil {
+		return err
+	}
+	if err := runSystem(ctx, stderr, sys); err != nil {
 		return err
 	}
 	fmt.Fprintf(stderr, "\nPlease consider filling out this survey to influence future development: https://www.surveymonkey.com/r/JTGHFK3\n")
@@ -468,10 +443,6 @@ func (t *testingT) FailNow() {
 // Gate implements devtest.T.
 func (t *testingT) Gate() *testreq.Assertions {
 	return t.gate
-}
-
-// MarkFlaky implements devtest.T.
-func (t *testingT) MarkFlaky(string) {
 }
 
 // Helper implements devtest.T.
