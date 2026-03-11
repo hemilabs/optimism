@@ -55,8 +55,7 @@ func TestSupernodeInteropVerifiedAt(gt *testing.T) {
 //
 // This proves the supernode waits for all chains' local safe heads before verifying.
 func TestSupernodeInteropChainLag(gt *testing.T) {
-	t := devtest.ParallelT(gt)
-	t.MarkFlaky(supernodeInteropFlakyReason)
+	t := devtest.SerialT(gt)
 	sys := newSupernodeInteropWithTimeTravel(t, 0)
 
 	blockTime := sys.L2A.Escape().RollupConfig().BlockTime

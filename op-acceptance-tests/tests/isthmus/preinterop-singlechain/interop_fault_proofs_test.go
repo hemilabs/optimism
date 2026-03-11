@@ -9,7 +9,7 @@ import (
 )
 
 func TestPreinteropSingleChainFaultProofs(gt *testing.T) {
-	t := devtest.ParallelT(gt)
+	t := devtest.SerialT(gt)
 	sys := presets.NewSingleChainInteropIsthmusSuper(
 		t,
 		presets.WithChallengerCannonKonaEnabled(),

@@ -10,8 +10,10 @@ import (
 )
 
 func newMinimalFusaka(t devtest.T) *presets.Minimal {
+	resetEnvVars := ConfigureDevstackEnvVars()
+	t.Cleanup(resetEnvVars)
+
 	return presets.NewMinimal(t,
-		L1GethOption(),
 		presets.WithDeployerOptions(
 			sysgo.WithDefaultBPOBlobSchedule,
 			// Make the BPO fork happen after Osaka so we can easily use geth's eip4844.CalcBlobFee
@@ -19,7 +21,7 @@ func newMinimalFusaka(t devtest.T) *presets.Minimal {
 			sysgo.WithForkAtL1Offset(forks.Osaka, 0),
 			sysgo.WithForkAtL1Offset(forks.BPO1, 1),
 		),
-		sysgo.WithBatcherOption(func(_ stack.ComponentID, cfg *batcher.CLIConfig) {
+		presets.WithBatcherOption(func(_ sysgo.ComponentTarget, cfg *batcher.CLIConfig) {
 			cfg.DataAvailabilityType = flags.BlobsType
 			cfg.TxMgrConfig.CellProofTime = 0 // Force cell proofs to be used
 		}),

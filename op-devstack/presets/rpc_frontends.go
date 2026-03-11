@@ -346,19 +346,17 @@ type oprBuilderFrontend struct {
 	engineClient      *sources.EngineClient
 	flashblocksClient *opclient.WSClient
 	lifecycle         stack.Lifecycle
-	updateRuleSet     func(rulesYaml string) error
 }
 
 var _ stack.OPRBuilderNode = (*oprBuilderFrontend)(nil)
 
-func newPresetOPRBuilderNode(t devtest.T, name string, chainID eth.ChainID, rpcCl opclient.RPC, rollupCfg *rollup.Config, flashblocksCl *opclient.WSClient, updateRuleSet func(string) error) *oprBuilderFrontend {
+func newPresetOPRBuilderNode(t devtest.T, name string, chainID eth.ChainID, rpcCl opclient.RPC, rollupCfg *rollup.Config, flashblocksCl *opclient.WSClient) *oprBuilderFrontend {
 	engineClient, err := sources.NewEngineClient(rpcCl, t.Logger(), nil, sources.EngineClientDefaultConfig(rollupCfg))
 	t.Require().NoError(err)
 	return &oprBuilderFrontend{
 		rpcELNode:         newRPCELNode(t, name, chainID, rpcCl, 0),
 		engineClient:      engineClient,
 		flashblocksClient: flashblocksCl,
-		updateRuleSet:     updateRuleSet,
 	}
 }
 
@@ -372,10 +370,6 @@ func (r *oprBuilderFrontend) L2EngineClient() apis.EngineClient {
 
 func (r *oprBuilderFrontend) FlashblocksClient() *opclient.WSClient {
 	return r.flashblocksClient
-}
-
-func (r *oprBuilderFrontend) UpdateRuleSet(rulesYaml string) error {
-	return r.updateRuleSet(rulesYaml)
 }
 
 func (r *oprBuilderFrontend) Start() {

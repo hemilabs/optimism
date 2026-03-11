@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"time"
@@ -97,22 +96,13 @@ func NewTwoL2SupernodeRuntimeWithConfig(t devtest.T, cfg PresetConfig) *MultiCha
 	return runtime
 }
 
-// startSupernodeEL starts an L2 EL node for the supernode runtime.
-// It respects the DEVSTACK_L2EL_KIND env var: "op-geth" uses op-geth, otherwise op-reth is used.
-func startSupernodeEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte) L2ELNode {
-	if MixedL2ELKind(os.Getenv(DevstackL2ELKindEnvVar)) == MixedL2ELOpGeth {
-		return startL2ELNode(t, l2Net, jwtPath, jwtSecret, "sequencer", NewELNodeIdentity(0))
-	}
-	return startMixedOpRethNode(t, l2Net, "sequencer", jwtPath, jwtSecret, nil)
-}
-
 func newSingleChainSupernodeRuntimeWithConfig(t devtest.T, interopAtGenesis bool, cfg PresetConfig) *MultiChainRuntime {
 	require := t.Require()
 
 	keys, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(err, "failed to derive dev keys from mnemonic")
 
-	migration, l1Net, l2Net, depSet, _ := buildSingleChainWorldWithInteropAndState(t, keys, interopAtGenesis, cfg.LocalContractArtifactsPath, cfg.DeployerOptions...)
+	migration, l1Net, l2Net, depSet, _ := buildSingleChainWorldWithInteropAndState(t, keys, interopAtGenesis, cfg.DeployerOptions...)
 	validateSimpleInteropPresetConfig(t, cfg, l2Net)
 
 	jwtPath, jwtSecret := writeJWTSecret(t)
@@ -122,8 +112,8 @@ func newSingleChainSupernodeRuntimeWithConfig(t devtest.T, interopAtGenesis bool
 		timeTravelClock = clock.NewAdvancingClock(100 * time.Millisecond)
 		l1Clock = timeTravelClock
 	}
-	l1EL, l1CL := startInProcessL1WithClockConfig(t, l1Net, jwtPath, l1Clock, cfg)
-	l2EL := startSupernodeEL(t, l2Net, jwtPath, jwtSecret)
+	l1EL, l1CL := startInProcessL1WithClock(t, l1Net, jwtPath, l1Clock)
+	l2EL := startSequencerEL(t, l2Net, jwtPath, jwtSecret, NewELNodeIdentity(0))
 
 	var depSetStatic *depset.StaticConfigDependencySet
 	if depSet != nil {
@@ -166,7 +156,7 @@ func newTwoL2SupernodeRuntimeWithConfig(t devtest.T, enableInterop bool, delaySe
 	keys, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(err, "failed to derive dev keys from mnemonic")
 
-	wb, l1Net, l2ANet, l2BNet := buildTwoL2RuntimeWorld(t, keys, enableInterop, cfg.LocalContractArtifactsPath, cfg.DeployerOptions...)
+	wb, l1Net, l2ANet, l2BNet := buildTwoL2RuntimeWorld(t, keys, enableInterop, cfg.DeployerOptions...)
 	jwtPath, jwtSecret := writeJWTSecret(t)
 	l1Clock := clock.SystemClock
 	var timeTravelClock *clock.AdvancingClock
@@ -174,10 +164,12 @@ func newTwoL2SupernodeRuntimeWithConfig(t devtest.T, enableInterop bool, delaySe
 		timeTravelClock = clock.NewAdvancingClock(100 * time.Millisecond)
 		l1Clock = timeTravelClock
 	}
-	l1EL, l1CL := startInProcessL1WithClockConfig(t, l1Net, jwtPath, l1Clock, cfg)
+	l1EL, l1CL := startInProcessL1WithClock(t, l1Net, jwtPath, l1Clock)
 
-	l2AEL := startSupernodeEL(t, l2ANet, jwtPath, jwtSecret)
-	l2BEL := startSupernodeEL(t, l2BNet, jwtPath, jwtSecret)
+	l2AIdentity := NewELNodeIdentity(0)
+	l2BIdentity := NewELNodeIdentity(0)
+	l2AEL := startSequencerEL(t, l2ANet, jwtPath, jwtSecret, l2AIdentity)
+	l2BEL := startSequencerEL(t, l2BNet, jwtPath, jwtSecret, l2BIdentity)
 
 	var activationTime uint64
 	var interopActivationTimestamp *uint64
@@ -249,7 +241,7 @@ func newTwoL2SupernodeRuntimeWithConfig(t devtest.T, enableInterop bool, delaySe
 	}, activationTime
 }
 
-func buildTwoL2RuntimeWorld(t devtest.T, keys devkeys.Keys, enableInterop bool, localContractArtifactsPath string, deployerOpts ...DeployerOption) (*worldBuilder, *L1Network, *L2Network, *L2Network) {
+func buildTwoL2RuntimeWorld(t devtest.T, keys devkeys.Keys, enableInterop bool, deployerOpts ...DeployerOption) (*worldBuilder, *L1Network, *L2Network, *L2Network) {
 	wb := &worldBuilder{
 		p:       t,
 		logger:  t.Logger(),
@@ -258,7 +250,7 @@ func buildTwoL2RuntimeWorld(t devtest.T, keys devkeys.Keys, enableInterop bool, 
 		builder: intentbuilder.New(),
 	}
 
-	applyConfigLocalContractSources(t, keys, wb.builder, localContractArtifactsPath)
+	applyConfigLocalContractSources(t, keys, wb.builder)
 	applyConfigCommons(t, keys, DefaultL1ID, wb.builder)
 	applyConfigPrefundedL2(t, keys, DefaultL1ID, DefaultL2AID, wb.builder)
 	applyConfigPrefundedL2(t, keys, DefaultL1ID, DefaultL2BID, wb.builder)
@@ -349,9 +341,9 @@ func startTwoL2SharedSupernode(
 	l1EL *L1Geth,
 	l1CL *L1CLNode,
 	l2ANet *L2Network,
-	l2AEL L2ELNode,
+	l2AEL *OpGeth,
 	l2BNet *L2Network,
-	l2BEL L2ELNode,
+	l2BEL *OpGeth,
 	depSet *depset.StaticConfigDependencySet,
 	interopActivationTimestamp *uint64,
 	jwtSecret [32]byte,
@@ -467,7 +459,7 @@ func startSingleChainSharedSupernode(
 	l1EL *L1Geth,
 	l1CL *L1CLNode,
 	l2Net *L2Network,
-	l2EL L2ELNode,
+	l2EL *OpGeth,
 	depSet *depset.StaticConfigDependencySet,
 	jwtSecret [32]byte,
 	interopAtGenesis bool,
@@ -588,7 +580,7 @@ func waitForSupernodeRoute(t devtest.T, logger log.Logger, rpcEndpoint string) {
 
 type l2TestSequencerTarget struct {
 	chainID eth.ChainID
-	l2EL    L2ELNode
+	l2EL    *OpGeth
 	l2CL    L2CLNode
 }
 
@@ -610,9 +602,11 @@ func attachTestSequencerToRuntime(t devtest.T, runtime *MultiChainRuntime, testS
 	for _, key := range chainKeys {
 		chain := runtime.Chains[key]
 		t.Require().NotNil(chain, "missing runtime chain %s", key)
+		l2EL, ok := chain.EL.(*OpGeth)
+		t.Require().True(ok, "runtime chain %s must use op-geth for test sequencer", key)
 		targets = append(targets, l2TestSequencerTarget{
 			chainID: chain.Network.ChainID(),
-			l2EL:    chain.EL,
+			l2EL:    l2EL,
 			l2CL:    chain.CL,
 		})
 	}

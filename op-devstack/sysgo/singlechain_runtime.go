@@ -60,7 +60,7 @@ func newSingleChainNodeRuntime(name string, isSequencer bool, el L2ELNode, cl L2
 }
 
 func newDefaultSingleChainWorld(t devtest.T, keys devkeys.Keys, cfg PresetConfig) singleChainRuntimeWorld {
-	l1Net, l2Net := buildSingleChainWorld(t, keys, cfg.LocalContractArtifactsPath, cfg.DeployerOptions...)
+	l1Net, l2Net := buildSingleChainWorld(t, keys, cfg.DeployerOptions...)
 	return singleChainRuntimeWorld{
 		L1Network: l1Net,
 		L2Network: l2Net,
@@ -101,7 +101,7 @@ func newSingleChainRuntimeWithConfig(t devtest.T, cfg PresetConfig, spec singleC
 		timeTravelClock = clock.NewAdvancingClock(100 * time.Millisecond)
 		l1Clock = timeTravelClock
 	}
-	l1EL, l1CL := startInProcessL1WithClockConfig(t, world.L1Network, jwtPath, l1Clock, cfg)
+	l1EL, l1CL := startInProcessL1WithClock(t, world.L1Network, jwtPath, l1Clock)
 
 	primary := spec.StartPrimary(t, keys, world, l1EL, l1CL, jwtPath, jwtSecret, cfg)
 	primaryNode := newSingleChainNodeRuntime("sequencer", true, primary.EL, primary.CL)
@@ -123,9 +123,11 @@ func newSingleChainRuntimeWithConfig(t devtest.T, cfg PresetConfig, spec singleC
 
 	applyMinimalGameTypeOptions(t, keys, world.L1Network, world.L2Network, l1EL, cfg.AddedGameTypes, cfg.RespectedGameTypes)
 
+	sequencerEL, ok := primary.EL.(*OpGeth)
+	require.True(ok, "single-chain runtime primary EL must be op-geth for test sequencer")
 	sequencerCL, ok := primary.CL.(*OpNode)
 	require.True(ok, "single-chain runtime primary CL must be op-node for test sequencer")
-	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, world.L1Network, l1EL, l1CL, primary.EL, world.L2Network, sequencerCL)
+	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, world.L1Network, l1EL, l1CL, sequencerEL, sequencerCL)
 	testSequencerRuntime := newTestSequencerRuntime(testSequencer, spec.TestSequencer)
 	faucetService := startFaucets(t, keys, world.L1Network.ChainID(), world.L2Network.ChainID(), l1EL.UserRPC(), primary.EL.UserRPC())
 
@@ -347,7 +349,6 @@ func startMinimalChallenger(
 		options = append(options,
 			sharedchallenger.WithCannonKonaConfig(rollupCfgs, l1Net.genesis, l2Geneses),
 			sharedchallenger.WithCannonKonaGameType(),
-			sharedchallenger.WithExperimentalWitnessEndpoint(),
 		)
 	}
 	cfg, err := sharedchallenger.NewPreInteropChallengerConfig(

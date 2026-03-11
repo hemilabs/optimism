@@ -50,8 +50,7 @@ func TestConductorLeadershipTransfer(gt *testing.T) {
 
 		idToConductor := make(map[string]conductorWithInfo)
 		for _, conductor := range conductors {
-			conductorId := strings.TrimPrefix(conductor.String(), stack.KindConductor.String()+"-")
-			idToConductor[conductorId] = conductorWithInfo{conductor, consensus.ServerInfo{}}
+			idToConductor[conductor.String()] = conductorWithInfo{conductor, consensus.ServerInfo{}}
 		}
 		for _, memberInfo := range membership.Servers {
 			conductor, ok := idToConductor[memberInfo.ID]

@@ -70,7 +70,24 @@ func SyncModeReqRespSyncOpts(syncMode sync.Mode) []presets.Option {
 	}
 }
 
-func UnsafeChainNotStalling_DisconnectT(t devtest.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
+// stableSyncStatus returns the sync status of node after any in-flight gossip messages
+// have been drained. DisconnectPeer closes the libp2p connection but a buffered gossip
+// payload can still arrive and be processed via AddUnsafePayload (SyncModeReqResp=true
+// routes CL gossip through the CLSync path even in ELSync mode). Polling until the
+// head is stable ensures the snapshot reflects a quiesced state.
+func stableSyncStatus(require *testreq.Assertions, node *dsl.L2CLNode) *eth.SyncStatus {
+	ss := node.SyncStatus()
+	require.Eventually(func() bool {
+		next := node.SyncStatus()
+		stable := next.UnsafeL2.Number == ss.UnsafeL2.Number
+		ss = next
+		return stable
+	}, 5*time.Second, 200*time.Millisecond, "L2CLB head should stabilize after disconnect")
+	return ss
+}
+
+func UnsafeChainNotStalling_Disconnect(gt *testing.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
+	t := devtest.SerialT(gt)
 	sys := presets.NewSingleChainMultiNodeWithoutCheck(t, opts...)
 	require := t.Require()
 	l := t.Logger().With("syncmode", syncMode)
@@ -113,12 +130,8 @@ func UnsafeChainNotStalling_DisconnectT(t devtest.T, syncMode sync.Mode, sleep t
 	sys.L2ELB.Reached(eth.Unsafe, ssA_after.UnsafeL2.Number, 30)
 }
 
-func UnsafeChainNotStalling_Disconnect(gt *testing.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
-	t := devtest.ParallelT(gt)
-	UnsafeChainNotStalling_DisconnectT(t, syncMode, sleep, opts...)
-}
-
-func UnsafeChainNotStalling_RestartOpNodeT(t devtest.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
+func UnsafeChainNotStalling_RestartOpNode(gt *testing.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
+	t := devtest.SerialT(gt)
 	sys := presets.NewSingleChainMultiNodeWithoutCheck(t, opts...)
 	require := t.Require()
 	l := t.Logger().With("syncmode", syncMode)

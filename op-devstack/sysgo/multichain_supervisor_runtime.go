@@ -37,7 +37,7 @@ func NewSingleChainInteropRuntimeWithConfig(t devtest.T, cfg PresetConfig) *Mult
 	keys, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(err, "failed to derive dev keys from mnemonic")
 
-	migration, l1Net, l2Net, depSet, fullCfgSet := buildSingleChainWorldWithInteropAndState(t, keys, true, cfg.LocalContractArtifactsPath, cfg.DeployerOptions...)
+	migration, l1Net, l2Net, depSet, fullCfgSet := buildSingleChainWorldWithInteropAndState(t, keys, true, cfg.DeployerOptions...)
 	validateSimpleInteropPresetConfig(t, cfg, l2Net)
 
 	jwtPath, jwtSecret := writeJWTSecret(t)
@@ -47,7 +47,7 @@ func NewSingleChainInteropRuntimeWithConfig(t devtest.T, cfg PresetConfig) *Mult
 		timeTravelClock = clock.NewAdvancingClock(100 * time.Millisecond)
 		l1Clock = timeTravelClock
 	}
-	l1EL, l1CL := startInProcessL1WithClockConfig(t, l1Net, jwtPath, l1Clock, cfg)
+	l1EL, l1CL := startInProcessL1WithClock(t, l1Net, jwtPath, l1Clock)
 	supervisor := startSupervisor(t, "1-primary", l1EL, fullCfgSet, map[eth.ChainID]*rollup.Config{
 		l2Net.ChainID(): l2Net.rollupCfg,
 	})
@@ -69,7 +69,7 @@ func NewSingleChainInteropRuntimeWithConfig(t devtest.T, cfg PresetConfig) *Mult
 	l2Batcher := startMinimalBatcher(t, keys, l2Net, l1EL, l2CL, l2EL, cfg.BatcherOptions...)
 	l2Proposer := startMinimalProposer(t, keys, l2Net, l1EL, l2CL, cfg.ProposerOptions...)
 	applyMinimalGameTypeOptions(t, keys, l1Net, l2Net, l1EL, cfg.AddedGameTypes, cfg.RespectedGameTypes)
-	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, l1Net, l1EL, l1CL, l2EL, l2Net, l2CL)
+	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, l1Net, l1EL, l1CL, l2EL, l2CL)
 	faucetService := startFaucets(t, keys, l1Net.ChainID(), l2Net.ChainID(), l1EL.UserRPC(), l2EL.UserRPC())
 
 	chainA := &MultiChainNodeRuntime{
@@ -107,7 +107,7 @@ func NewSimpleInteropRuntimeWithConfig(t devtest.T, cfg PresetConfig) *MultiChai
 	keys, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(err, "failed to derive dev keys from mnemonic")
 
-	migration, l1Net, l2ANet, l2BNet, fullCfgSet := buildTwoL2WorldWithState(t, keys, true, cfg.LocalContractArtifactsPath, cfg.DeployerOptions...)
+	migration, l1Net, l2ANet, l2BNet, fullCfgSet := buildTwoL2WorldWithState(t, keys, true, cfg.DeployerOptions...)
 	validateSimpleInteropPresetConfig(t, cfg, l2ANet, l2BNet)
 	depSet := fullCfgSet.DependencySet
 
@@ -118,7 +118,7 @@ func NewSimpleInteropRuntimeWithConfig(t devtest.T, cfg PresetConfig) *MultiChai
 		timeTravelClock = clock.NewAdvancingClock(100 * time.Millisecond)
 		l1Clock = timeTravelClock
 	}
-	l1EL, l1CL := startInProcessL1WithClockConfig(t, l1Net, jwtPath, l1Clock, cfg)
+	l1EL, l1CL := startInProcessL1WithClock(t, l1Net, jwtPath, l1Clock)
 	supervisor := startSupervisor(t, "1-primary", l1EL, fullCfgSet, map[eth.ChainID]*rollup.Config{
 		l2ANet.ChainID(): l2ANet.rollupCfg,
 		l2BNet.ChainID(): l2BNet.rollupCfg,
@@ -155,7 +155,7 @@ func NewSimpleInteropRuntimeWithConfig(t devtest.T, cfg PresetConfig) *MultiChai
 	l2AProposer := startMinimalProposer(t, keys, l2ANet, l1EL, l2ACL, cfg.ProposerOptions...)
 	l2BBatcher := startMinimalBatcher(t, keys, l2BNet, l1EL, l2BCL, l2BEL, cfg.BatcherOptions...)
 	l2BProposer := startMinimalProposer(t, keys, l2BNet, l1EL, l2BCL, cfg.ProposerOptions...)
-	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, l1Net, l1EL, l1CL, l2AEL, l2ANet, l2ACL)
+	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, l1Net, l1EL, l1CL, l2AEL, l2ACL)
 	faucetService := startFaucetsForRPCs(t, keys, map[eth.ChainID]string{
 		l1Net.ChainID():  l1EL.UserRPC(),
 		l2ANet.ChainID(): l2AEL.UserRPC(),
@@ -439,7 +439,7 @@ func startL2ELNodeWithSupervisor(
 	key string,
 	identity *ELNodeIdentity,
 	supervisorRPC string,
-) L2ELNode {
+) *OpGeth {
 	cfg := DefaultL2ELConfig()
 	cfg.P2PAddr = "127.0.0.1"
 	cfg.P2PPort = identity.Port

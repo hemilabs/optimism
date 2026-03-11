@@ -42,20 +42,10 @@ import (
 
 type MixedL2ELKind string
 
-const DevstackL2ELKindEnvVar = "DEVSTACK_L2EL_KIND"
-
 const (
 	MixedL2ELOpGeth MixedL2ELKind = "op-geth"
 	MixedL2ELOpReth MixedL2ELKind = "op-reth"
 )
-
-// SkipOnOpReth skips the test when the L2 execution layer is op-reth
-// (i.e. DEVSTACK_L2EL_KIND is not "op-geth").
-func SkipOnOpReth(t devtest.T, reason string) {
-	if MixedL2ELKind(os.Getenv(DevstackL2ELKindEnvVar)) == MixedL2ELOpReth {
-		t.Skipf("skipping on op-reth: %s", reason)
-	}
-}
 
 type MixedL2CLKind string
 
@@ -65,19 +55,19 @@ const (
 )
 
 type MixedSingleChainNodeSpec struct {
-	ELKey       string
-	CLKey       string
-	ELKind      MixedL2ELKind
-	CLKind      MixedL2CLKind
-	IsSequencer bool
+	ELKey          string
+	CLKey          string
+	ELKind         MixedL2ELKind
+	ELProofHistory bool
+	CLKind         MixedL2CLKind
+	IsSequencer    bool
 }
 
 type MixedSingleChainPresetConfig struct {
-	NodeSpecs                  []MixedSingleChainNodeSpec
-	WithTestSequencer          bool
-	TestSequencerName          string
-	LocalContractArtifactsPath string
-	DeployerOptions            []DeployerOption
+	NodeSpecs         []MixedSingleChainNodeSpec
+	WithTestSequencer bool
+	TestSequencerName string
+	DeployerOptions   []DeployerOption
 }
 
 type mixedSingleChainNode struct {
@@ -115,7 +105,7 @@ func NewMixedSingleChainRuntime(t devtest.T, cfg MixedSingleChainPresetConfig) *
 	keys, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(err, "failed to derive dev keys from mnemonic")
 
-	l1Net, l2Net := buildSingleChainWorld(t, keys, cfg.LocalContractArtifactsPath, cfg.DeployerOptions...)
+	l1Net, l2Net := buildSingleChainWorld(t, keys, cfg.DeployerOptions...)
 	jwtPath, jwtSecret := writeJWTSecret(t)
 	l1EL, l1CL := startInProcessL1(t, l1Net, jwtPath)
 
@@ -130,7 +120,7 @@ func NewMixedSingleChainRuntime(t devtest.T, cfg MixedSingleChainPresetConfig) *
 		case MixedL2ELOpGeth:
 			el = startL2ELNode(t, l2Net, jwtPath, jwtSecret, spec.ELKey, identity)
 		case MixedL2ELOpReth:
-			el = startMixedOpRethNode(t, l2Net, spec.ELKey, jwtPath, jwtSecret, metricsRegistrar)
+			el = startMixedOpRethNode(t, l2Net, spec.ELKey, jwtPath, jwtSecret, spec.ELProofHistory, metricsRegistrar)
 		default:
 			require.FailNowf("unsupported EL kind", "unsupported mixed EL kind %q", spec.ELKind)
 		}
@@ -240,6 +230,7 @@ func startMixedOpRethNode(
 	key string,
 	jwtPath string,
 	jwtSecret [32]byte,
+	proofHistory bool,
 	metricsRegistrar L2MetricsRegistrar,
 ) *OpReth {
 	tempDir := t.TempDir()
@@ -257,12 +248,10 @@ func startMixedOpRethNode(
 
 	tempP2PPath := filepath.Join(tempDir, "p2pkey.txt")
 
-	execPath, err := EnsureRustBinary(t, RustBinarySpec{
-		SrcDir:  "rust",
-		Package: "op-reth",
-		Binary:  "op-reth",
-	})
-	t.Require().NoError(err, "op-reth binary not available (build with 'just build-rust-release' or set RUST_JIT_BUILD=1)")
+	execPath := os.Getenv("OP_RETH_EXEC_PATH")
+	t.Require().NotEmpty(execPath, "OP_RETH_EXEC_PATH environment variable must be set")
+	_, err = os.Stat(execPath)
+	t.Require().NotErrorIs(err, os.ErrNotExist, "executable must exist")
 
 	args := []string{
 		"node",
@@ -286,6 +275,7 @@ func startMixedOpRethNode(
 		"--nat=none",
 		"--p2p-secret-key=" + tempP2PPath,
 		"--port=0",
+		"--rpc.eth-proof-window=30",
 		"--txpool.minimum-priority-fee=1",
 		"--txpool.nolocals",
 		"--with-unused-ports",
@@ -308,25 +298,27 @@ func startMixedOpRethNode(
 	err = exec.Command(execPath, initArgs...).Run()
 	t.Require().NoError(err, "must init op-reth node")
 
-	proofHistoryDir := filepath.Join(tempDir, "proof-history")
+	if proofHistory {
+		proofHistoryDir := filepath.Join(tempDir, "proof-history")
 
-	initProofsArgs := []string{
-		"proofs",
-		"init",
-		"--datadir=" + dataDirPath,
-		"--chain=" + chainConfigPath,
-		"--proofs-history.storage-path=" + proofHistoryDir,
+		initProofsArgs := []string{
+			"proofs",
+			"init",
+			"--datadir=" + dataDirPath,
+			"--chain=" + chainConfigPath,
+			"--proofs-history.storage-path=" + proofHistoryDir,
+		}
+		err = exec.Command(execPath, initProofsArgs...).Run()
+		t.Require().NoError(err, "must init op-reth proof history")
+
+		args = append(
+			args,
+			"--proofs-history",
+			"--proofs-history.window=200",
+			"--proofs-history.prune-interval=1m",
+			"--proofs-history.storage-path="+proofHistoryDir,
+		)
 	}
-	err = exec.Command(execPath, initProofsArgs...).Run()
-	t.Require().NoError(err, "must init op-reth proof history")
-
-	args = append(
-		args,
-		"--proofs-history",
-		"--proofs-history.window=10000",
-		"--proofs-history.prune-interval=1m",
-		"--proofs-history.storage-path="+proofHistoryDir,
-	)
 
 	l2EL := &OpReth{
 		name:               key,

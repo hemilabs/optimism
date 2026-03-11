@@ -33,22 +33,9 @@ func NewMixedOpKonaWithTestSequencerForConfig(t devtest.T, l2Config L2NodeConfig
 	}
 }
 
-type DefaultMinimalWithTestSequencerIds struct {
-	DefaultMixedOpKonaSystemIDs DefaultMixedOpKonaSystemIDs
-	TestSequencerId             stack.ComponentID
-}
-
-func NewDefaultMinimalWithTestSequencerIds(l2Config L2NodeConfig) DefaultMinimalWithTestSequencerIds {
-	return DefaultMinimalWithTestSequencerIds{
-		DefaultMixedOpKonaSystemIDs: NewDefaultMixedOpKonaSystemIDs(eth.ChainIDFromUInt64(DefaultL1ID), eth.ChainIDFromUInt64(DefaultL2ID), L2NodeConfig{
-			OpSequencerNodesWithGeth: l2Config.OpSequencerNodesWithGeth,
-			OpSequencerNodesWithReth: l2Config.OpSequencerNodesWithReth,
-			OpNodesWithGeth:          l2Config.OpNodesWithGeth,
-			OpNodesWithReth:          l2Config.OpNodesWithReth,
-			KonaNodesWithGeth:        l2Config.KonaNodesWithGeth,
-			KonaNodesWithReth:        l2Config.KonaNodesWithReth,
-		}),
-		TestSequencerId: stack.NewTestSequencerID("test-sequencer"),
+func withRequiredOpSequencerForTestSequencer(l2Config L2NodeConfig) L2NodeConfig {
+	if l2Config.OpSequencerNodes() == 0 {
+		l2Config.OpSequencerNodesWithGeth = 1
 	}
 	return l2Config
 }

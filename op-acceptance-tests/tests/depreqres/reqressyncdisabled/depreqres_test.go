@@ -16,8 +16,7 @@ import (
 const disabledReqRespSyncFlakyReason = "known flaky in the default acceptance run"
 
 func TestUnsafeChainNotStalling_DisabledReqRespSync(gt *testing.T) {
-	t := devtest.ParallelT(gt)
-	t.MarkFlaky(disabledReqRespSyncFlakyReason)
+	t := devtest.SerialT(gt)
 	sys := presets.NewSingleChainMultiNodeWithoutCheck(t, common.ReqRespSyncDisabledOpts(sync.ELSync)...)
 	// We don't want the safe head to move, as this can also progress the unsafe head
 	sys.L2Batcher.Stop()

@@ -12,7 +12,6 @@ import (
 // InteropActivationDelay is the delay in seconds from genesis to interop activation.
 // This is set to 20 seconds to allow several blocks to be produced before interop kicks in.
 const InteropActivationDelay = uint64(20)
-const activationAfterGenesisFlakyReason = "known flaky in the default acceptance run"
 
 // TestSupernodeInteropActivationAfterGenesis tests behavior when interop is activated
 // AFTER genesis. This verifies that VerifiedAt (via superroot_atTimestamp) returns
