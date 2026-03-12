@@ -291,7 +291,7 @@ func (u *EOA) SendRandomInitMessage(rng *rand.Rand, eventLoggerAddress common.Ad
 func (u *EOA) SendExecMessage(initMsg *InitMessage) *ExecMessage {
 	tx := txintent.NewIntent[*txintent.ExecTrigger, *txintent.InteropOutput](u.Plan())
 	tx.Content.DependOn(&initMsg.Tx.Result)
-	tx.Content.Fn(txintent.ExecuteIndexed(constants.CrossL2Inbox, &initMsg.Tx.Result, 0))
+	tx.Content.Fn(txintent.ExecuteIndexed(predeploys.CrossL2InboxAddr, &initMsg.Tx.Result, 0))
 	receipt, err := tx.PlannedTx.Included.Eval(u.ctx)
 	u.t.Require().NoError(err, "exec msg receipt not found")
 	u.log.Info("exec message included", "chain", u.ChainID(), "block", receipt.BlockNumber)

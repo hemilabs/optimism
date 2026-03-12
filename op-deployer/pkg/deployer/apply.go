@@ -23,6 +23,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/prestate"
+	"github.com/ethereum-optimism/optimism/op-validator/pkg/service"
+	"github.com/ethereum-optimism/optimism/op-validator/pkg/validations"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
