@@ -1,4 +1,7 @@
 REPO_ROOT := `realpath ..`  # path to the root of the optimism monorepo
+ACCEPTOR_VERSION := env_var_or_default("ACCEPTOR_VERSION", "v3.10.2")
+DOCKER_REGISTRY := env_var_or_default("DOCKER_REGISTRY", "us-docker.pkg.dev/oplabs-tools-artifacts/images")
+ACCEPTOR_IMAGE := env_var_or_default("ACCEPTOR_IMAGE", DOCKER_REGISTRY + "/op-acceptor:" + ACCEPTOR_VERSION)
 
 # Default recipe - runs acceptance tests
 default:
