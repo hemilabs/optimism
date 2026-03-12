@@ -6,7 +6,7 @@ JUNIT_FILE := env('JUNIT_FILE', '')
 JSON_LOG_FILE := env('JSON_LOG_FILE', '')
 
 _go_test := if JUNIT_FILE != "" {
-    "OP_TESTLOG_DISABLE_COLOR=true OP_E2E_DISABLE_PARALLEL=false ../ops/scripts/gotestsum-split.sh --format=testname --junitfile=" + JUNIT_FILE + " --jsonfile=" + JSON_LOG_FILE + " -- -failfast"
+    "OP_TESTLOG_DISABLE_COLOR=true OP_E2E_DISABLE_PARALLEL=false gotestsum --format=testname --junitfile=" + JUNIT_FILE + " --jsonfile=" + JSON_LOG_FILE + " -- -failfast"
 } else {
     "go test"
 }
@@ -49,7 +49,7 @@ test-fault-proofs: pre-test
 
 # Build cannon prestates
 cannon-prestates:
-    cd .. && just cannon-prestates
+    make -C .. cannon-prestates
 
 # Pre-test setup
 pre-test: pre-test-cannon
