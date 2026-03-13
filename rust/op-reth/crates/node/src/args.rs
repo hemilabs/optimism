@@ -4,7 +4,6 @@
 
 use clap::builder::ArgPredicate;
 use op_alloy_consensus::interop::SafetyLevel;
-use reth_optimism_txpool::supervisor::DEFAULT_SUPERVISOR_URL;
 use std::{path::PathBuf, time::Duration};
 use url::Url;
 
