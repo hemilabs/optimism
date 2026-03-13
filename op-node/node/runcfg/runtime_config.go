@@ -55,6 +55,8 @@ type RuntimeConfig struct {
 	l1Ref eth.L1BlockRef
 
 	runtimeConfigData
+
+	hemitrapEnabled bool
 }
 
 // runtimeConfigData is a flat bundle of configurable data, easy and light to copy around.
@@ -68,11 +70,12 @@ type runtimeConfigData struct {
 
 var _ p2p.GossipRuntimeConfig = (*RuntimeConfig)(nil)
 
-func NewRuntimeConfig(log log.Logger, l1Client RuntimeCfgL1Source, rollupCfg *rollup.Config) *RuntimeConfig {
+func NewRuntimeConfig(log log.Logger, l1Client RuntimeCfgL1Source, rollupCfg *rollup.Config, hemitrapEnabled bool) *RuntimeConfig {
 	return &RuntimeConfig{
-		log:       log,
-		l1Client:  l1Client,
-		rollupCfg: rollupCfg,
+		log:             log,
+		l1Client:        l1Client,
+		rollupCfg:       rollupCfg,
+		hemitrapEnabled: hemitrapEnabled,
 	}
 }
 

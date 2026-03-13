@@ -87,6 +87,8 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 	}
 	cfg.Cancel = closeApp
 
+	cfg.HemitrapEnabled = ctx.Bool(flags.HemitrapEnabled.Name)
+
 	// Only pretty-print the banner if it is a terminal log. Otherwise log it as key-value pairs.
 	if logCfg.Format == "terminal" {
 		log.Info("rollup config:\n" + cfg.Rollup.Description(chaincfg.L2ChainIDToNetworkDisplayName))

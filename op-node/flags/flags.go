@@ -79,6 +79,12 @@ var (
 		Category: RollupCategory,
 	}
 	/* Optional Flags */
+	HemitrapEnabled = &cli.BoolFlag{
+		Name:     "hemitrap.enabled",
+		Usage:    "skips some validation checks during sequencing for use with hemitrap",
+		Required: false,
+		EnvVars:  prefixEnvVars("HEMITRAP_ENABLED"),
+	}
 	BeaconHeader = &cli.StringFlag{
 		Name:     "l1.beacon-header",
 		Usage:    "Optional HTTP header to add to all requests to the L1 Beacon endpoint. Format: 'X-Key: Value'",
@@ -507,6 +513,7 @@ var optionalFlags = []cli.Flag{
 	InteropDependencySet,
 	IgnoreMissingPectraBlobSchedule,
 	ExperimentalOPStackAPI,
+	HemitrapEnabled,
 }
 
 var DeprecatedFlags = []cli.Flag{

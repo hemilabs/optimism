@@ -49,6 +49,7 @@ func NewDriver(
 	sequencerConductor conductor.SequencerConductor,
 	altDA AltDAIface,
 	indexingMode bool,
+	hemitrapEnabled bool,
 ) *Driver {
 	driverCtx, driverCancel := context.WithCancel(context.Background())
 
@@ -72,10 +73,10 @@ func NewDriver(
 	}
 	sys.Register("finalizer", finalizer)
 
-	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec)
+	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec, hemitrapEnabled)
 	sys.Register("attributes-handler", attrHandler)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, indexingMode, l1ChainConfig)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, indexingMode, l1ChainConfig, hemitrapEnabled)
 
 	pipelineDeriver := derive.NewPipelineDeriver(driverCtx, derivationPipeline)
 	sys.Register("pipeline", pipelineDeriver)
@@ -145,6 +146,7 @@ func NewDriver(
 		metrics:              metrics,
 		altSync:              altSync,
 		upstreamFollowSource: upstreamFollowSource,
+		hemitrapEnabled:      hemitrapEnabled,
 	}
 
 	return driver
@@ -188,6 +190,8 @@ type Driver struct {
 	driverCancel context.CancelFunc
 
 	upstreamFollowSource UpstreamFollowSource
+
+	hemitrapEnabled bool
 }
 
 // Start starts up the state loop.
