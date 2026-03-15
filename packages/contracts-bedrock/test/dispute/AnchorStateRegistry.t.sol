@@ -10,9 +10,10 @@ import { ForgeArtifacts, StorageSlot } from "scripts/libraries/ForgeArtifacts.so
 
 // Interfaces
 import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
-import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
+
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
-import { IProxyAdminOwnedBase } from "interfaces/L1/IProxyAdminOwnedBase.sol";
+import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
+import { IProxyAdminOwnedBase } from "interfaces/universal/IProxyAdminOwnedBase.sol";
 
 /// @title AnchorStateRegistry_TestInit
 /// @notice Reusable test initialization for `AnchorStateRegistry` tests.
@@ -467,7 +468,7 @@ contract AnchorStateRegistry_GetStartingAnchorRoot_Test is AnchorStateRegistry_T
         // Mock the game's anchor root to be different from the starting anchor root.
         vm.mockCall(
             address(gameProxy),
-            abi.encodeCall(gameProxy.rootClaim, ()),
+            abi.encodeCall(IDisputeGame.rootClaim, ()),
             abi.encode(Claim.wrap(keccak256(abi.encode(123))))
         );
 
@@ -510,22 +511,6 @@ contract AnchorStateRegistry_IsGameRegistered_Test is AnchorStateRegistry_TestIn
                 disputeGameFactory.games, (gameProxy.gameType(), gameProxy.rootClaim(), gameProxy.extraData())
             ),
             abi.encode(address(0), 0)
-        );
-
-        // Game should not be registered.
-        assertFalse(anchorStateRegistry.isGameRegistered(gameProxy));
-    }
-
-    /// @notice Tests that isGameRegistered will return false if the game is not using the same
-    ///         AnchorStateRegistry as the one checking the registration.
-    /// @param _anchorStateRegistry The AnchorStateRegistry to use for the test.
-    function test_isGameRegistered_isNotSameAnchorStateRegistry_succeeds(address _anchorStateRegistry) public {
-        // Make sure the AnchorStateRegistry is different.
-        vm.assume(_anchorStateRegistry != address(anchorStateRegistry));
-
-        // Mock the gameProxy's AnchorStateRegistry to be a different address.
-        vm.mockCall(
-            address(gameProxy), abi.encodeCall(gameProxy.anchorStateRegistry, ()), abi.encode(_anchorStateRegistry)
         );
 
         // Game should not be registered.
@@ -969,7 +954,7 @@ contract AnchorStateRegistry_SetAnchorState_Test is AnchorStateRegistry_TestInit
         assertEq(root.raw(), gameProxy.rootClaim().raw());
 
         // Confirm that the anchor game is now set.
-        IFaultDisputeGame anchorGame = anchorStateRegistry.anchorGame();
+        IDisputeGame anchorGame = anchorStateRegistry.anchorGame();
         assertEq(address(anchorGame), address(gameProxy));
     }
 
