@@ -345,6 +345,9 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 	if node.l2Driver == nil {
 		return nil, nil, nil, errors.New("l2 driver must be initialized")
 	}
+
+	cfg.HemitrapEnabled = cfg.HemitrapEnabled
+
 	onL1Head := func(ctx context.Context, sig eth.L1BlockRef) {
 		// TODO(#16917) Remove Event System Refactor Comments
 		//  L1UnsafeEvent fan out is updated to procedural method calls
@@ -395,7 +398,7 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 // note: this function relies on side effects to set node.runCfg
 func initRuntimeConfig(ctx context.Context, cfg *config.Config, node *OpNode) error {
 	// attempt to load runtime config, repeat N times
-	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup)
+	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup, cfg.HemitrapEnabled)
 	// Set node.runCfg early so handleProtocolVersionsUpdate can access it during initialization
 	node.runCfg = runCfg
 
@@ -607,7 +610,7 @@ func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.Eng
 	}
 
 	l2Driver := driver.NewDriver(node.eventSys, node.eventDrain, &cfg.Driver, &cfg.Rollup, cfg.L1ChainConfig, cfg.DependencySet, l2Source, node.l1Source, upstreamFollowSource,
-		node.beacon, node, node, node.log, node.metrics, cfg.ConfigPersistence, safeDB, &cfg.Sync, sequencerConductor, altDA, indexingMode)
+		node.beacon, node, node, node.log, node.metrics, cfg.ConfigPersistence, safeDB, &cfg.Sync, sequencerConductor, altDA, indexingMode, cfg.HemitrapEnabled)
 
 	// Wire up IndexingMode to engine controller for direct procedure call
 	if sys != nil {
