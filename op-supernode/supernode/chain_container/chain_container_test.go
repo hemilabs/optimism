@@ -1166,3 +1166,18 @@ func TestChainContainer_LocalSafeBlockAtTimestamp(t *testing.T) {
 		})
 	}
 }
+
+func TestChainContainer_SyncStatus_UninitializedVirtualNode(t *testing.T) {
+	t.Parallel()
+
+	chainID := eth.ChainIDFromUInt64(420)
+	log := createTestLogger(t)
+	cfg := createTestCLIConfig(t.TempDir())
+	initOverload := &rollupNode.InitializationOverrides{}
+
+	container := NewChainContainer(chainID, createTestVNConfig(), log, cfg, initOverload, nil, nil, nil)
+
+	status, err := container.SyncStatus(context.Background())
+	require.Nil(t, status)
+	require.ErrorIs(t, err, virtual_node.ErrVirtualNodeNotRunning)
+}

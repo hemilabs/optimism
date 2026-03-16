@@ -364,7 +364,7 @@ func (c *simpleChainContainer) SyncStatus(ctx context.Context) (*eth.SyncStatus,
 		if c.log != nil {
 			c.log.Warn("SyncStatus: virtual node not initialized")
 		}
-		return &eth.SyncStatus{}, nil
+		return nil, virtual_node.ErrVirtualNodeNotRunning
 	}
 	st, err := c.vn.SyncStatus(ctx)
 	if err != nil {
