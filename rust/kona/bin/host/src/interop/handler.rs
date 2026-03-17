@@ -35,6 +35,8 @@ use kona_protocol::{BlockInfo, OutputRoot, Predeploys};
 use kona_providers_alloy::BlobWithCommitmentAndProof;
 use kona_registry::{L1_CONFIGS, ROLLUP_CONFIGS};
 use op_alloy_rpc_types_engine::OpPayloadAttributes;
+use op_revm::OpTransaction;
+use revm::context::TxEnv;
 use std::sync::Arc;
 use tokio::task;
 use tracing::{Instrument, debug, info, info_span, warn};
