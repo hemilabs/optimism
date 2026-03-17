@@ -95,7 +95,11 @@ EOF
   fi
   rm -rf "${BIN_DIR}"
   rm -rf rust/kona/prestate-artifacts-*
-  make reproducible-prestate >> "${log_file}" 2>&1
+  if [ -f justfile ] && just --show reproducible-prestate &>/dev/null; then
+    just reproducible-prestate >> "${log_file}" 2>&1
+  else
+    make reproducible-prestate >> "${log_file}" 2>&1
+  fi
 
   if [ -f "${BIN_DIR}/prestate-proof.json" ]; then
     local HASH
