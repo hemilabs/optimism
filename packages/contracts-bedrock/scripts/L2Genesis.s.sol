@@ -11,6 +11,7 @@ import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 import { OutputMode, OutputModeUtils, Fork, ForkUtils } from "scripts/libraries/Config.sol";
 
 // Libraries
+import { Constants } from "src/libraries/Constants.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
 import { Preinstalls } from "src/libraries/Preinstalls.sol";
 import { Types } from "src/libraries/Types.sol";
@@ -29,10 +30,12 @@ import { IL1Block } from "interfaces/L2/IL1Block.sol";
 import { ILiquidityController } from "interfaces/L2/ILiquidityController.sol";
 import { IL1BlockCGT } from "interfaces/L2/IL1BlockCGT.sol";
 import { IFeeSplitter } from "interfaces/L2/IFeeSplitter.sol";
+import { IL2DevFeatureFlags } from "interfaces/L2/IL2DevFeatureFlags.sol";
 import { ISharesCalculator } from "interfaces/L2/ISharesCalculator.sol";
 import { IFeeVault } from "interfaces/L2/IFeeVault.sol";
 import { IL1Withdrawer } from "interfaces/L2/IL1Withdrawer.sol";
 import { ISuperchainRevSharesCalculator } from "interfaces/L2/ISuperchainRevSharesCalculator.sol";
+import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
 /// @title L2Genesis
 /// @notice Generates the genesis state for the L2 network.
@@ -70,18 +73,18 @@ contract L2Genesis is Script {
         uint256 operatorFeeVaultWithdrawalNetwork;
         address governanceTokenOwner;
         uint256 fork;
-        bool deployCrossL2Inbox;
         bool enableGovernance;
         bool fundDevAccounts;
         bool useRevenueShare;
         address chainFeesRecipient;
         address l1FeesDepositor;
         bool useCustomGasToken;
+        bool useInterop;
         string gasPayingTokenName;
         string gasPayingTokenSymbol;
         uint256 nativeAssetLiquidityAmount;
         address liquidityControllerOwner;
-        bool useL2CM;
+        bytes32 devFeatureBitmap;
     }
 
     using ForkUtils for Fork;
@@ -233,7 +236,7 @@ contract L2Genesis is Script {
 
             if (
                 Predeploys.isSupportedPredeploy(
-                    addr, _input.fork, _input.deployCrossL2Inbox, _input.useCustomGasToken, _input.useL2CM
+                    addr, _input.fork, _input.useCustomGasToken, _input.useInterop, _input.devFeatureBitmap
                 )
             ) {
                 address implementation = Predeploys.predeployToCodeNamespace(addr);
@@ -285,18 +288,21 @@ contract L2Genesis is Script {
         setEAS(); // 21
         setGovernanceToken(_input); // 42: OP (not behind a proxy)
         setFeeSplitter(_input); // 2B: FeeSplitter
-        if (_input.fork >= uint256(Fork.INTEROP)) {
-            if (_input.deployCrossL2Inbox) {
-                setCrossL2Inbox(); // 22
-            }
+        if (
+            _input.fork >= uint256(Fork.INTEROP) && _input.useInterop
+                && DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
+        ) {
+            // Both flags must be explicitly set in order to enable Interop
+            setCrossL2Inbox(); // 22
             setL2ToL2CrossDomainMessenger(); // 23
         }
         if (_input.useCustomGasToken) {
             setLiquidityController(_input); // 29
             setNativeAssetLiquidity(_input); // 2A
         }
-        if (_input.useL2CM) {
+        if (DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.L2CM)) {
             setConditionalDeployer(); // 2C
+            setL2DevFeatureFlags(_input); // 2D
         }
         vm.stopPrank();
     }
@@ -606,6 +612,14 @@ contract L2Genesis is Script {
     /// @notice This predeploy is following the safety invariant #1.
     function setConditionalDeployer() internal {
         _setImplementationCode(Predeploys.CONDITIONAL_DEPLOYER);
+    }
+
+    /// @notice Sets up the L2DevFeatureFlags predeploy with the development feature bitmap.
+    function setL2DevFeatureFlags(Input memory _input) internal {
+        _setImplementationCode(Predeploys.L2_DEV_FEATURE_FLAGS);
+        vm.startPrank(Constants.DEPOSITOR_ACCOUNT);
+        IL2DevFeatureFlags(Predeploys.L2_DEV_FEATURE_FLAGS).setDevFeatureBitmap(_input.devFeatureBitmap);
+        vm.stopPrank();
     }
 
     /// @notice Sets all the preinstalls.

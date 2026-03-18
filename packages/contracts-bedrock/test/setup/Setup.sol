@@ -408,10 +408,10 @@ abstract contract Setup is FeatureFlags {
                 operatorFeeVaultWithdrawalNetwork: deploy.cfg().operatorFeeVaultWithdrawalNetwork(),
                 governanceTokenOwner: deploy.cfg().governanceTokenOwner(),
                 fork: uint256(l2Fork),
-                deployCrossL2Inbox: deploy.cfg().useInterop(),
                 enableGovernance: deploy.cfg().enableGovernance(),
                 fundDevAccounts: deploy.cfg().fundDevAccounts(),
                 useRevenueShare: deploy.cfg().useRevenueShare(),
+                useInterop: deploy.cfg().useInterop(),
                 chainFeesRecipient: deploy.cfg().chainFeesRecipient(),
                 l1FeesDepositor: deploy.cfg().l1FeesDepositor(),
                 useCustomGasToken: deploy.cfg().useCustomGasToken(),
@@ -419,7 +419,7 @@ abstract contract Setup is FeatureFlags {
                 gasPayingTokenSymbol: deploy.cfg().gasPayingTokenSymbol(),
                 nativeAssetLiquidityAmount: deploy.cfg().nativeAssetLiquidityAmount(),
                 liquidityControllerOwner: deploy.cfg().liquidityControllerOwner(),
-                useL2CM: deploy.cfg().useL2CM()
+                devFeatureBitmap: devFeatureBitmap
             })
         );
 
@@ -463,6 +463,7 @@ abstract contract Setup is FeatureFlags {
         labelPredeploy(Predeploys.LIQUIDITY_CONTROLLER);
         labelPredeploy(Predeploys.FEE_SPLITTER);
         labelPredeploy(Predeploys.CONDITIONAL_DEPLOYER);
+        labelPredeploy(Predeploys.L2_DEV_FEATURE_FLAGS);
 
         // L2 Preinstalls
         labelPreinstall(Preinstalls.MultiCall3);
