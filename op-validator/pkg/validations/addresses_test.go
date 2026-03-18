@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
+	"github.com/ethereum-optimism/optimism/op-service/retry"
 
 	"github.com/ethereum-optimism/superchain-registry/validation"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -19,6 +20,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	rpcRetryAttempts = 3
+	rpcRetryDelay    = 2 * time.Second
+	rpcCallTimeout   = 60 * time.Second
 )
 
 func TestValidatorAddress(t *testing.T) {
@@ -115,6 +122,11 @@ func testStandardVersionNetwork(t *testing.T, network string) {
 		standard.ContractsV500Tag,
 	}
 
+	rpcClient, err := retry.Do(context.Background(), rpcRetryAttempts, retry.Fixed(rpcRetryDelay), func() (*rpc.Client, error) {
+		return rpc.Dial(rpcURL)
+	})
+	require.NoError(t, err, "failed to dial %s", rpcURL)
+
 	for _, semver := range contractVersions {
 		version, ok := stdVersDefs[validation.Semver(semver)]
 		require.True(t, ok, "version %s not found in registry", semver)
@@ -123,17 +135,22 @@ func testStandardVersionNetwork(t *testing.T, network string) {
 		require.NoError(t, err, "failed to get validator address for %s", semver)
 		require.NotEqual(t, common.Address{}, address, "validator address is zero for %s", semver)
 
-		rpcClient, err := rpc.Dial(rpcURL)
-		require.NoError(t, err)
-
 		t.Run(semver, func(t *testing.T) {
 			testStandardVersion(t, address, rpcClient, version, semver)
 		})
 	}
 }
 
+func w3CallWithRetry(ctx context.Context, w3c *w3.Client, callers ...w3types.RPCCaller) error {
+	return retry.Do0(ctx, rpcRetryAttempts, retry.Fixed(rpcRetryDelay), func() error {
+		callCtx, cancel := context.WithTimeout(ctx, rpcCallTimeout)
+		defer cancel()
+		return w3c.CallCtx(callCtx, callers...)
+	})
+}
+
 func testStandardVersion(t *testing.T, address common.Address, rpcClient *rpc.Client, version validation.VersionConfig, semverTag string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	w3c := w3.NewClient(rpcClient)
@@ -166,17 +183,14 @@ func testStandardVersion(t *testing.T, address common.Address, rpcClient *rpc.Cl
 		for _, field := range implFields {
 			implGetterFn := w3.MustNewFunc(fmt.Sprintf("%s()", field.implGetter), "address")
 			var implAddrBytes []byte
-			require.NoError(
-				t,
-				w3c.CallCtx(
-					ctx,
+			require.NoError(t,
+				w3CallWithRetry(ctx, w3c,
 					eth.Call(&w3types.Message{
 						To:   &address,
 						Func: implGetterFn,
 					}, nil, nil).Returns(&implAddrBytes),
 				),
-				"failed to call %s",
-				field.implGetter,
+				"failed to call %s", field.implGetter,
 			)
 
 			var implAddr common.Address
@@ -184,17 +198,14 @@ func testStandardVersion(t *testing.T, address common.Address, rpcClient *rpc.Cl
 			require.NotEqual(t, common.Address{}, implAddr, "implementation address is zero for %s", field.implGetter)
 
 			var versionBytes []byte
-			require.NoError(
-				t,
-				w3c.CallCtx(
-					ctx,
+			require.NoError(t,
+				w3CallWithRetry(ctx, w3c,
 					eth.Call(&w3types.Message{
 						To:   &implAddr,
 						Func: versionFn,
 					}, nil, nil).Returns(&versionBytes),
 				),
-				"failed to call version() on %s implementation",
-				field.implGetter,
+				"failed to call version() on %s implementation", field.implGetter,
 			)
 
 			var outVersion string
@@ -204,10 +215,8 @@ func testStandardVersion(t *testing.T, address common.Address, rpcClient *rpc.Cl
 
 		preimageOracleVersionFn := w3.MustNewFunc("preimageOracleVersion()", "string")
 		var preimageOracleVersionBytes []byte
-		require.NoError(
-			t,
-			w3c.CallCtx(
-				ctx,
+		require.NoError(t,
+			w3CallWithRetry(ctx, w3c,
 				eth.Call(&w3types.Message{
 					To:   &address,
 					Func: preimageOracleVersionFn,
@@ -242,17 +251,14 @@ func testStandardVersion(t *testing.T, address common.Address, rpcClient *rpc.Cl
 		for _, field := range fields {
 			fn := w3.MustNewFunc(fmt.Sprintf("%s()", field.getter), "string")
 			var outBytes []byte
-			require.NoError(
-				t,
-				w3c.CallCtx(
-					ctx,
+			require.NoError(t,
+				w3CallWithRetry(ctx, w3c,
 					eth.Call(&w3types.Message{
 						To:   &address,
 						Func: fn,
 					}, nil, nil).Returns(&outBytes),
 				),
-				"failed to call %s",
-				field.getter,
+				"failed to call %s", field.getter,
 			)
 
 			var outVersion string
