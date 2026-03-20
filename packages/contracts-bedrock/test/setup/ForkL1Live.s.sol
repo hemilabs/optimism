@@ -7,6 +7,8 @@ import { StdAssertions } from "forge-std/StdAssertions.sol";
 // Testing
 import { stdToml } from "forge-std/StdToml.sol";
 import { DisputeGames } from "test/setup/DisputeGames.sol";
+import { PastUpgrades } from "test/setup/PastUpgrades.sol";
+import { FeatureFlags } from "test/setup/FeatureFlags.sol";
 
 // Scripts
 import { Deployer } from "scripts/deploy/Deployer.sol";
@@ -22,7 +24,7 @@ import { LibGameArgs } from "src/dispute/lib/LibGameArgs.sol";
 
 // Interfaces
 import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
-import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
+
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
@@ -36,7 +38,7 @@ import { IOPContractsManagerUpgrader } from "interfaces/L1/IOPContractsManager.s
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 
-/// @title ForkLive
+/// @title ForkL1Live
 /// @notice This script is called by Setup.sol as a preparation step for the foundry test suite, and is run as an
 ///         alternative to Deploy.s.sol, when `FORK_TEST=true` is set in the env.
 ///         Like Deploy.s.sol this script saves the system addresses to the Artifacts contract so that they can be
@@ -46,14 +48,11 @@ import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManager
 ///         superchain-registry.
 ///         This contract must not have constructor logic because it is set into state using `etch`.
 
-contract ForkLive is Deployer, StdAssertions, DisputeGames {
+contract ForkL1Live is Deployer, StdAssertions, FeatureFlags {
     using stdToml for string;
     using LibString for string;
 
     bool public useOpsRepo;
-
-    /// @notice Thrown when testing with an unsupported chain ID.
-    error UnsupportedChainId();
 
     /// @notice Returns the base chain name to use for forking
     /// @return The base chain name as a string
@@ -83,7 +82,7 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
 
         useOpsRepo = bytes(superchainOpsAllocsPath).length > 0;
         if (useOpsRepo) {
-            console.log("ForkLive: loading state from %s", superchainOpsAllocsPath);
+            console.log("ForkL1Live: loading state from %s", superchainOpsAllocsPath);
             // Set the resultant state from the superchain ops repo upgrades.
             // The allocs are generated when simulating an upgrade task that runs vm.dumpState.
             // These allocs represent the state of the EVM after the upgrade has been simulated.
@@ -101,9 +100,9 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
 
         // Now upgrade the contracts (if the config is set to do so)
         if (useOpsRepo) {
-            console.log("ForkLive: using ops repo to upgrade");
+            console.log("ForkL1Live: using ops repo to upgrade");
         } else if (cfg.useUpgradedFork()) {
-            console.log("ForkLive: upgrading");
+            console.log("ForkL1Live: upgrading");
             _upgrade();
         }
     }
@@ -152,10 +151,10 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
         // Get the lockbox address from the portal, and save it
         /// NOTE: Using try catch because this function could be called before or after the upgrade.
         try IOptimismPortal2(payable(optimismPortal)).ethLockbox() returns (IETHLockbox ethLockbox_) {
-            console.log("ForkLive: ETHLockboxProxy found: %s", address(ethLockbox_));
+            console.log("ForkL1Live: ETHLockboxProxy found: %s", address(ethLockbox_));
             artifacts.save("ETHLockboxProxy", address(ethLockbox_));
         } catch {
-            console.log("ForkLive: ETHLockboxProxy not found");
+            console.log("ForkL1Live: ETHLockboxProxy not found");
         }
 
         address addressManager = vm.parseJsonAddress(addressesJson, string.concat("$.", chainId, ".AddressManager"));
@@ -284,55 +283,50 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
         // Grab the existing PermissionedDisputeGame parameters.
         IDisputeGameFactory disputeGameFactory =
             IDisputeGameFactory(artifacts.mustGetAddress("DisputeGameFactoryProxy"));
-        address challenger = permissionedGameChallenger(disputeGameFactory);
-        address proposer = permissionedGameProposer(disputeGameFactory);
+        address challenger = DisputeGames.permissionedGameChallenger(disputeGameFactory);
+        address proposer = DisputeGames.permissionedGameProposer(disputeGameFactory);
 
         // Prepare the upgrade input.
-        IOPContractsManagerV2.DisputeGameConfig[] memory disputeGameConfigs =
-            new IOPContractsManagerV2.DisputeGameConfig[](3);
-        disputeGameConfigs[0] = IOPContractsManagerV2.DisputeGameConfig({
+        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
+            new IOPContractsManagerUtils.DisputeGameConfig[](3);
+        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
             enabled: true,
             initBond: disputeGameFactory.initBonds(GameTypes.CANNON),
             gameType: GameTypes.CANNON,
             gameArgs: abi.encode(
-                IOPContractsManagerV2.FaultDisputeGameConfig({
+                IOPContractsManagerUtils.FaultDisputeGameConfig({
                     absolutePrestate: Claim.wrap(bytes32(keccak256("cannonPrestate")))
                 })
             )
         });
-        disputeGameConfigs[1] = IOPContractsManagerV2.DisputeGameConfig({
+        disputeGameConfigs[1] = IOPContractsManagerUtils.DisputeGameConfig({
             enabled: true,
             initBond: disputeGameFactory.initBonds(GameTypes.PERMISSIONED_CANNON),
             gameType: GameTypes.PERMISSIONED_CANNON,
             gameArgs: abi.encode(
-                IOPContractsManagerV2.PermissionedDisputeGameConfig({
+                IOPContractsManagerUtils.PermissionedDisputeGameConfig({
                     absolutePrestate: Claim.wrap(bytes32(keccak256("cannonPrestate"))),
                     proposer: proposer,
                     challenger: challenger
                 })
             )
         });
-        disputeGameConfigs[2] = IOPContractsManagerV2.DisputeGameConfig({
+        disputeGameConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
             enabled: true,
             initBond: disputeGameFactory.initBonds(GameTypes.CANNON_KONA),
             gameType: GameTypes.CANNON_KONA,
             gameArgs: abi.encode(
-                IOPContractsManagerV2.FaultDisputeGameConfig({
+                IOPContractsManagerUtils.FaultDisputeGameConfig({
                     absolutePrestate: Claim.wrap(bytes32(keccak256("cannonKonaPrestate")))
                 })
             )
         });
 
         // Add extra instructions to allow the DelayedWETH proxy to be deployed.
-        // TODO(#18502): Remove the extra instruction for custom gas token after U18 ships.
         IOPContractsManagerUtils.ExtraInstruction[] memory extraInstructions =
-            new IOPContractsManagerUtils.ExtraInstruction[](2);
+            new IOPContractsManagerUtils.ExtraInstruction[](1);
         extraInstructions[0] =
             IOPContractsManagerUtils.ExtraInstruction({ key: "PermittedProxyDeployment", data: bytes("DelayedWETH") });
-        extraInstructions[1] = IOPContractsManagerUtils.ExtraInstruction({
-            key: "overrides.cfg.useCustomGasToken",
-            data: abi.encode(false)
-        });
 
         vm.prank(_delegateCaller, true);
         (bool upgradeSuccess,) = address(_opcm).delegatecall(
@@ -358,14 +352,11 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
         address upgrader = proxyAdmin.owner();
         vm.label(upgrader, "ProxyAdmin Owner");
 
-        // Run past upgrades depending on network.
-        if (block.chainid == 1) {
-            // Mainnet
-            // This is empty because the block number in the justfile is after the most recent upgrade so there are no
-            // past upgrades to run.
-        } else {
-            revert UnsupportedChainId();
-        }
+        // Run past upgrades from the TOML config.
+        IDisputeGameFactory disputeGameFactoryForPastUpgrades =
+            IDisputeGameFactory(artifacts.mustGetAddress("DisputeGameFactoryProxy"));
+        ISuperchainConfig superchainConfig = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
+        PastUpgrades.runPastUpgrades(upgrader, systemConfig, superchainConfig, disputeGameFactoryForPastUpgrades);
 
         // Current upgrade.
         if (isDevFeatureEnabled(DevFeatures.OPCM_V2)) {
@@ -376,7 +367,7 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
             _doUpgrade(opcm, upgrader);
         }
 
-        console.log("ForkLive: Saving newly deployed contracts");
+        console.log("ForkL1Live: Saving newly deployed contracts");
 
         // A new ASR and new dispute games were deployed, so we need to update them
         IDisputeGameFactory disputeGameFactory =

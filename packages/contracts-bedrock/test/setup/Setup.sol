@@ -10,7 +10,8 @@ import { DisputeGames } from "test/setup/DisputeGames.sol";
 
 // Scripts
 import { Deploy } from "scripts/deploy/Deploy.s.sol";
-import { ForkLive } from "test/setup/ForkLive.s.sol";
+import { ForkL1Live } from "test/setup/ForkL1Live.s.sol";
+import { ForkL2Live } from "test/setup/ForkL2Live.s.sol";
 import { Fork, LATEST_FORK } from "scripts/libraries/Config.sol";
 import { L2Genesis } from "scripts/L2Genesis.s.sol";
 import { Fork, ForkUtils } from "scripts/libraries/Config.sol";
@@ -90,10 +91,15 @@ abstract contract Setup is FeatureFlags {
     ///         mutating any nonces. MUST not have constructor logic.
     Deploy internal constant deploy = Deploy(address(uint160(uint256(keccak256(abi.encode("optimism.deploy"))))));
 
-    /// @notice The address of the ForkLive contract. Set into state with `etch` to avoid
+    /// @notice The address of the ForkL1Live contract. Set into state with `etch` to avoid
     ///         mutating any nonces. MUST not have constructor logic.
-    ForkLive internal constant forkLive =
-        ForkLive(address(uint160(uint256(keccak256(abi.encode("optimism.forklive"))))));
+    ForkL1Live internal constant forkL1Live =
+        ForkL1Live(address(uint160(uint256(keccak256(abi.encode("optimism.forklive"))))));
+
+    /// @notice The address of the ForkL2Live contract. Set into state with `etch` to avoid
+    ///         mutating any nonces. MUST not have constructor logic.
+    ForkL2Live internal constant forkL2Live =
+        ForkL2Live(address(uint160(uint256(keccak256(abi.encode("optimism.forkl2live"))))));
 
     /// @notice The address of the Artifacts contract. Set into state by Deployer.setUp() with `etch` to avoid
     ///         mutating any nonces. MUST not have constructor logic.
@@ -167,14 +173,19 @@ abstract contract Setup is FeatureFlags {
     IConditionalDeployer conditionalDeployer = IConditionalDeployer(Predeploys.CONDITIONAL_DEPLOYER);
 
     /// @notice Indicates whether a test is running against a forked production network.
-    function isForkTest() public view returns (bool) {
-        return Config.forkTest();
+    function isL1ForkTest() public view returns (bool) {
+        return Config.l1ForkTest();
     }
 
     /// @notice Indicates whether a test is running against a forked network that is OP.
     function isOpFork() public view returns (bool) {
         string memory opChain = Config.forkOpChain();
         return keccak256(bytes(opChain)) == keccak256(bytes("op"));
+    }
+
+    /// @notice Indicates whether a test is running against a forked L2 network.
+    function isL2ForkTest() public view returns (bool) {
+        return Config.l2ForkTest();
     }
 
     /// @dev Deploys either the Deploy.s.sol or Fork.s.sol contract, by fetching the bytecode dynamically using
@@ -187,7 +198,16 @@ abstract contract Setup is FeatureFlags {
     function setUp() public virtual {
         console.log("Setup: L1 setup start!");
 
-        if (isForkTest()) {
+        // Handle L2 fork test (takes precedence over L1 fork)
+        if (isL2ForkTest()) {
+            uint256 l2ForkBlock = Config.l2ForkBlockNumber();
+            if (l2ForkBlock == 0) {
+                vm.createSelectFork(Config.l2ForkRpcUrl());
+            } else {
+                vm.createSelectFork(Config.l2ForkRpcUrl(), l2ForkBlock);
+            }
+            console.log("Setup: L2 fork selected!");
+        } else if (isL1ForkTest()) {
             vm.createSelectFork(Config.forkRpcUrl(), Config.forkBlockNumber());
             console.log("Setup: fork selected!");
             require(
@@ -198,18 +218,20 @@ abstract contract Setup is FeatureFlags {
 
         // Etch the contracts used to setup the test environment
         DeployUtils.etchLabelAndAllowCheatcodes({ _etchTo: address(deploy), _cname: "Deploy" });
-        DeployUtils.etchLabelAndAllowCheatcodes({ _etchTo: address(forkLive), _cname: "ForkLive" });
+        DeployUtils.etchLabelAndAllowCheatcodes({ _etchTo: address(forkL1Live), _cname: "ForkL1Live" });
+        DeployUtils.etchLabelAndAllowCheatcodes({ _etchTo: address(forkL2Live), _cname: "ForkL2Live" });
 
         deploy.setUp();
-        forkLive.setUp();
+        forkL1Live.setUp();
+        forkL2Live.setUp();
 
         resolveFeaturesFromEnv();
         deploy.cfg().setDevFeatureBitmap(devFeatureBitmap);
 
         console.log("Setup: L1 setup done!");
 
-        if (isForkTest()) {
-            // Return early if this is a fork test as we don't need to setup L2
+        // Skip L2 genesis for both L1 and L2 fork tests
+        if (isL1ForkTest() || isL2ForkTest()) {
             console.log("Setup: fork test detected, skipping L2 genesis generation");
             return;
         }
@@ -246,7 +268,7 @@ abstract contract Setup is FeatureFlags {
         // In fork tests, existing DWETH/ETHLockbox proxies keep their old implementations since the
         // upgrade reuses them. In unoptimized profiles, CREATE2 addresses differ so impls won't match.
         // In both cases we mock getProxyImplementation and version() to satisfy the validator checks.
-        if (!Config.isUnoptimized() && !isForkTest()) return;
+        if (!Config.isUnoptimized() && !isL1ForkTest()) return;
         console.log("Setup: mocking unoptimized proxy implementations");
 
         string memory delayedWETHVersion = ISemver(_delayedWETHImpl).version();
@@ -279,7 +301,7 @@ abstract contract Setup is FeatureFlags {
 
     /// @dev Skips tests when running against a forked production network.
     function skipIfForkTest(string memory message) public {
-        if (isForkTest()) {
+        if (isL1ForkTest()) {
             vm.skip(true);
             console.log(string.concat("Skipping fork test: ", message));
         }
@@ -287,7 +309,7 @@ abstract contract Setup is FeatureFlags {
 
     /// @dev Skips tests when not running against forked production network.
     function skipIfNotForkTest(string memory message) public {
-        if (!isForkTest()) {
+        if (!isL1ForkTest()) {
             vm.skip(true);
             console.log(string.concat("Skipping non-fork test: ", message));
         }
@@ -295,7 +317,7 @@ abstract contract Setup is FeatureFlags {
 
     /// @dev Skips tests when running against a forked production network using the superchain ops repo.
     function skipIfOpsRepoTest(string memory message) public {
-        if (forkLive.useOpsRepo()) {
+        if (forkL1Live.useOpsRepo()) {
             vm.skip(true);
             console.log(string.concat("Skipping ops repo test: ", message));
         }
@@ -304,11 +326,27 @@ abstract contract Setup is FeatureFlags {
     /// @dev Returns early when running against a forked production network. Useful for allowing a portion of a test
     ///      to run.
     function returnIfForkTest(string memory message) public view {
-        if (isForkTest()) {
+        if (isL1ForkTest()) {
             console.log(string.concat("Returning early from fork test: ", message));
             assembly {
                 return(0, 0)
             }
+        }
+    }
+
+    /// @dev Skips tests when running against a forked L2 network.
+    function skipIfL2ForkTest(string memory message) public {
+        if (isL2ForkTest()) {
+            vm.skip(true);
+            console.log(string.concat("Skipping L2 fork test: ", message));
+        }
+    }
+
+    /// @dev Skips tests when not running against a forked L2 network.
+    function skipIfNotL2ForkTest(string memory message) public {
+        if (!isL2ForkTest()) {
+            vm.skip(true);
+            console.log(string.concat("Skipping non-L2 fork test: ", message));
         }
     }
 
@@ -321,8 +359,8 @@ abstract contract Setup is FeatureFlags {
             hex"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
         );
 
-        if (isForkTest()) {
-            forkLive.run();
+        if (isL1ForkTest()) {
+            forkL1Live.run();
         } else {
             deploy.run();
         }
@@ -333,7 +371,7 @@ abstract contract Setup is FeatureFlags {
 
         // Only skip ETHLockbox assignment if we're in a fork test with non-upgraded fork
         // TODO(#14691): Remove this check once Upgrade 15 is deployed on Mainnet.
-        if (!isForkTest() || deploy.cfg().useUpgradedFork()) {
+        if (!isL1ForkTest() || deploy.cfg().useUpgradedFork()) {
             // Here we use getAddress instead of mustGetAddress because some chains might not have
             // the ETHLockbox proxy. Chains that don't have the ETHLockbox proxy will just return
             // address(0) and cause a revert if we use mustGetAddress.
@@ -380,7 +418,7 @@ abstract contract Setup is FeatureFlags {
     /// @dev Sets up the L2 contracts. Depends on `L1()` being called first.
     function L2() public {
         // Fork tests focus on L1 contracts so there is no need to do all the work of setting up L2.
-        if (isForkTest()) {
+        if (isL1ForkTest()) {
             console.log("Setup: fork test detected, skipping L2 setup");
             return;
         }
@@ -436,7 +474,44 @@ abstract contract Setup is FeatureFlags {
         governanceToken.transferOwnership(finalSystemOwner);
         vm.stopPrank();
 
-        // L2 predeploys
+        _labelPredeploys();
+        _labelPreinstalls();
+
+        console.log("Setup: completed L2 genesis");
+    }
+
+    /// @dev Sets up the L2 contracts from a forked L2 chain.
+    function L2Fork() public {
+        console.log("Setup: reading L2 fork state");
+        forkL2Live.run();
+
+        // L2 predeploy interfaces are already initialized to correct addresses
+        // (they're constants in the state variables section)
+        // Just log that we're using forked state
+        console.log("Setup: L2 predeploys loaded from fork");
+
+        // Set feature flags based on detected chain features
+        if (forkL2Live.isCustomGasToken()) {
+            console.log("Setup: Custom Gas Token mode active");
+        }
+
+        if (forkL2Live.isInteropEnabled()) {
+            console.log("Setup: Interop features active");
+        }
+
+        _labelPredeploys();
+        _labelPreinstalls();
+    }
+
+    function labelPredeploy(address _addr) internal {
+        vm.label(_addr, Predeploys.getName(_addr));
+    }
+
+    function labelPreinstall(address _addr) internal {
+        vm.label(_addr, Preinstalls.getName(_addr));
+    }
+
+    function _labelPredeploys() internal {
         labelPredeploy(Predeploys.L2_STANDARD_BRIDGE);
         labelPredeploy(Predeploys.L2_CROSS_DOMAIN_MESSENGER);
         labelPredeploy(Predeploys.L2_TO_L1_MESSAGE_PASSER);
@@ -464,8 +539,9 @@ abstract contract Setup is FeatureFlags {
         labelPredeploy(Predeploys.FEE_SPLITTER);
         labelPredeploy(Predeploys.CONDITIONAL_DEPLOYER);
         labelPredeploy(Predeploys.L2_DEV_FEATURE_FLAGS);
+    }
 
-        // L2 Preinstalls
+    function _labelPreinstalls() internal {
         labelPreinstall(Preinstalls.MultiCall3);
         labelPreinstall(Preinstalls.Create2Deployer);
         labelPreinstall(Preinstalls.Safe_v130);
@@ -482,15 +558,5 @@ abstract contract Setup is FeatureFlags {
         labelPreinstall(Preinstalls.BeaconBlockRoots);
         labelPreinstall(Preinstalls.HistoryStorage);
         labelPreinstall(Preinstalls.CreateX);
-
-        console.log("Setup: completed L2 genesis");
-    }
-
-    function labelPredeploy(address _addr) internal {
-        vm.label(_addr, Predeploys.getName(_addr));
-    }
-
-    function labelPreinstall(address _addr) internal {
-        vm.label(_addr, Preinstalls.getName(_addr));
     }
 }

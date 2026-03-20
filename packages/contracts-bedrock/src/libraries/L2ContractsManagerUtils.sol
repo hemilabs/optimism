@@ -5,6 +5,7 @@ pragma solidity ^0.8.0;
 import { L2ContractsManagerTypes } from "src/libraries/L2ContractsManagerTypes.sol";
 import { SemverComp } from "src/libraries/SemverComp.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
+import { Types } from "src/libraries/Types.sol";
 
 // Contracts
 import { L2ProxyAdmin } from "src/L2/L2ProxyAdmin.sol";
@@ -59,6 +60,20 @@ library L2ContractsManagerUtils {
         view
         returns (L2ContractsManagerTypes.FeeVaultConfig memory config_)
     {
+        // TODO(#19600): Remove withdrawalNetwork reading as part of revenue sharing deprecation.
+        // Try to read the withdrawal network from the FeeVault. If it fails, use the default value.
+        Types.WithdrawalNetwork withdrawalNetwork;
+        // eip150-safe
+        try IFeeVault(payable(_feeVault)).WITHDRAWAL_NETWORK() returns (Types.WithdrawalNetwork withdrawalNetwork_) {
+            withdrawalNetwork = withdrawalNetwork_;
+        } catch {
+            // Previous FeeVault implementations hardcoded L1 withdrawals (via L2StandardBridge.bridgeETHTo)
+            // and did not expose a WITHDRAWAL_NETWORK() function. We preserve this L1 behavior as the default.
+            // Modifying this configuration requires explicit migration steps outside the L2ContractsManager upgrade
+            // flow.
+            withdrawalNetwork = Types.WithdrawalNetwork.L1;
+        }
+
         // Note: We are intentionally using legacy deprecated getters for this 1.0.0 version of the L2ContractsManager.
         // Subsequent versions should use the new getters as L2ContractsManager should ensure that the new current
         // version of the FeeVault is used.
@@ -66,7 +81,7 @@ library L2ContractsManagerUtils {
         config_ = L2ContractsManagerTypes.FeeVaultConfig({
             recipient: feeVault.RECIPIENT(),
             minWithdrawalAmount: feeVault.MIN_WITHDRAWAL_AMOUNT(),
-            withdrawalNetwork: feeVault.WITHDRAWAL_NETWORK()
+            withdrawalNetwork: withdrawalNetwork
         });
     }
 

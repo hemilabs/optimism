@@ -133,7 +133,7 @@ contract OPContractsManager_Upgrade_Harness is CommonTest {
     function setUp() public virtual override {
         super.disableUpgradedFork();
         super.setUp();
-        if (!isForkTest()) {
+        if (!isL1ForkTest()) {
             // This test is only supported in forked tests, as we are testing the upgrade.
             vm.skip(true);
         }

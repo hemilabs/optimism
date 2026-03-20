@@ -104,6 +104,7 @@ contract L2ContractsManager is ISemver {
     address internal immutable NATIVE_ASSET_LIQUIDITY_IMPL;
     /// @notice LiquidityController implementation.
     address internal immutable LIQUIDITY_CONTROLLER_IMPL;
+    // TODO(#19600): Remove FEE_SPLITTER_IMPL as part of revenue sharing deprecation.
     /// @notice FeeSplitter implementation.
     address internal immutable FEE_SPLITTER_IMPL;
     /// @notice CONDITIONAL_DEPLOYER implementation.
@@ -147,6 +148,7 @@ contract L2ContractsManager is ISemver {
         SUPERCHAIN_TOKEN_BRIDGE_IMPL = _implementations.superchainTokenBridgeImpl;
         NATIVE_ASSET_LIQUIDITY_IMPL = _implementations.nativeAssetLiquidityImpl;
         LIQUIDITY_CONTROLLER_IMPL = _implementations.liquidityControllerImpl;
+        // TODO(#19600): Remove FEE_SPLITTER_IMPL as part of revenue sharing deprecation.
         FEE_SPLITTER_IMPL = _implementations.feeSplitterImpl;
         CONDITIONAL_DEPLOYER_IMPL = _implementations.conditionalDeployerImpl;
         L2_DEV_FEATURE_FLAGS_IMPL = _implementations.l2DevFeatureFlagsImpl;
@@ -172,28 +174,34 @@ contract L2ContractsManager is ISemver {
 
         // L2CrossDomainMessenger
         fullConfig_.crossDomainMessenger = L2ContractsManagerTypes.CrossDomainMessengerConfig({
-            otherMessenger: ICrossDomainMessenger(Predeploys.L2_CROSS_DOMAIN_MESSENGER).otherMessenger()
+            // TODO(#19468): Remove legacy getter after Karst upgrade.
+            otherMessenger: ICrossDomainMessenger(Predeploys.L2_CROSS_DOMAIN_MESSENGER).OTHER_MESSENGER()
         });
 
         // L2StandardBridge
         fullConfig_.standardBridge = L2ContractsManagerTypes.StandardBridgeConfig({
-            otherBridge: IStandardBridge(payable(Predeploys.L2_STANDARD_BRIDGE)).otherBridge()
+            // TODO(#19468): Remove legacy getter after Karst upgrade.
+            otherBridge: IStandardBridge(payable(Predeploys.L2_STANDARD_BRIDGE)).OTHER_BRIDGE()
         });
 
         // L2ERC721Bridge
         fullConfig_.erc721Bridge = L2ContractsManagerTypes.ERC721BridgeConfig({
-            otherBridge: IERC721Bridge(Predeploys.L2_ERC721_BRIDGE).otherBridge()
+            // TODO(#19468): Remove legacy getter after Karst upgrade.
+            otherBridge: IERC721Bridge(Predeploys.L2_ERC721_BRIDGE).OTHER_BRIDGE()
         });
 
         // OptimismMintableERC20Factory
         fullConfig_.mintableERC20Factory = L2ContractsManagerTypes.MintableERC20FactoryConfig({
-            bridge: IOptimismMintableERC20Factory(Predeploys.OPTIMISM_MINTABLE_ERC20_FACTORY).bridge()
+            // TODO(#19468): Remove legacy getter after Karst upgrade.
+            bridge: IOptimismMintableERC20Factory(Predeploys.OPTIMISM_MINTABLE_ERC20_FACTORY).BRIDGE()
         });
 
         // OptimismMintableERC721Factory
         fullConfig_.mintableERC721Factory = L2ContractsManagerTypes.MintableERC721FactoryConfig({
-            bridge: IOptimismMintableERC721Factory(Predeploys.OPTIMISM_MINTABLE_ERC721_FACTORY).bridge(),
-            remoteChainID: IOptimismMintableERC721Factory(Predeploys.OPTIMISM_MINTABLE_ERC721_FACTORY).remoteChainID()
+            // TODO(#19468): Remove legacy getter after Karst upgrade.
+            bridge: IOptimismMintableERC721Factory(Predeploys.OPTIMISM_MINTABLE_ERC721_FACTORY).BRIDGE(),
+            // TODO(#19468): Remove legacy getter after Karst upgrade.
+            remoteChainID: IOptimismMintableERC721Factory(Predeploys.OPTIMISM_MINTABLE_ERC721_FACTORY).REMOTE_CHAIN_ID()
         });
 
         // SequencerFeeVault
@@ -218,10 +226,23 @@ contract L2ContractsManager is ISemver {
             });
         }
 
+        // TODO(#19600): Remove FeeSplitter loading config as part of revenue sharing deprecation.
         // FeeSplitter
-        fullConfig_.feeSplitter = L2ContractsManagerTypes.FeeSplitterConfig({
-            sharesCalculator: IFeeSplitter(payable(Predeploys.FEE_SPLITTER)).sharesCalculator()
-        });
+        ISharesCalculator sharesCalculator;
+
+        // FeeSplitter may not be deployed at the predeploy address, since fee vaults on
+        // earlier contract versions only support L1 withdrawals. We initialize with sharesCalculator as address(0)
+        // to preserve this behavior.
+        // eip150-safe
+        try IFeeSplitter(payable(Predeploys.FEE_SPLITTER)).sharesCalculator() returns (
+            ISharesCalculator sharesCalculator_
+        ) {
+            sharesCalculator = sharesCalculator_;
+        } catch {
+            sharesCalculator = ISharesCalculator(address(0));
+        }
+
+        fullConfig_.feeSplitter = L2ContractsManagerTypes.FeeSplitterConfig({ sharesCalculator: sharesCalculator });
     }
 
     /// @notice Upgrades each of the predeploys to its corresponding new implementation. Applies the appropriate
@@ -308,6 +329,7 @@ contract L2ContractsManager is ISemver {
             L2ContractsManagerUtils.upgradeTo(Predeploys.NATIVE_ASSET_LIQUIDITY, NATIVE_ASSET_LIQUIDITY_IMPL);
         }
 
+        // TODO(#19600): Remove FeeSplitter upgrade as part of revenue sharing deprecation.
         // FeeSplitter
         L2ContractsManagerUtils.upgradeToAndCall(
             Predeploys.FEE_SPLITTER,
@@ -318,6 +340,8 @@ contract L2ContractsManager is ISemver {
             0
         );
 
+        // TODO(#19600): Remove withdrawalNetwork arg from fee vault initializers as part of revenue sharing
+        // deprecation.
         // SequencerFeeVault
         L2ContractsManagerUtils.upgradeToAndCall(
             Predeploys.SEQUENCER_FEE_WALLET,

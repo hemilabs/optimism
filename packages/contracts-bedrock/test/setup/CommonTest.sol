@@ -116,7 +116,7 @@ abstract contract CommonTest is Test, Setup, Events {
         // Sync the bitmap to deploy config after overrides
         deploy.cfg().setDevFeatureBitmap(devFeatureBitmap);
 
-        if (isForkTest()) {
+        if (isL1ForkTest()) {
             // Skip any test suite which uses a nonstandard configuration.
             if (useAltDAOverride || useInteropOverride) {
                 vm.skip(true);
@@ -137,12 +137,17 @@ abstract contract CommonTest is Test, Setup, Events {
         excludeContract(address(deploy));
         excludeContract(address(deploy.cfg()));
 
-        // Deploy L1
-        Setup.L1();
-        // Deploy L2
-        Setup.L2();
+        if (isL2ForkTest()) {
+            Setup.L2Fork();
+            return;
+        }
 
-        // Call bridge initializer setup function
+        Setup.L1();
+
+        if (!isL1ForkTest()) {
+            Setup.L2();
+        }
+
         bridgeInitializerSetUp();
     }
 
@@ -167,7 +172,7 @@ abstract contract CommonTest is Test, Setup, Events {
         );
         vm.label(address(LegacyL2Token), "LegacyMintableERC20");
 
-        if (isForkTest()) {
+        if (isL1ForkTest()) {
             console.log("CommonTest: fork test detected, skipping L2 setup");
             L2Token = IOptimismMintableERC20Full(makeAddr("L2Token"));
         } else {

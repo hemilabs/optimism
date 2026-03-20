@@ -47,6 +47,9 @@ parameters:
   c-ai_contracts_test_dispatch:
     type: boolean
     default: false
+  c-l2_fork_test_dispatch:
+    type: boolean
+    default: false
   c-github-event-type:
     type: string
     default: "__not_set__"
@@ -118,6 +121,9 @@ parameters:
     type: boolean
     default: false
   ai_contracts_test_dispatch:
+    type: boolean
+    default: false
+  l2_fork_test_dispatch:
     type: boolean
     default: false
   rust_ci_dispatch:
@@ -349,7 +355,6 @@ commands:
                 unset IFS
               fi
             fi
-
 
   go-restore-cache:
     parameters:
@@ -1364,6 +1369,107 @@ jobs:
           path: packages/contracts-bedrock/results
           destination: junit-results
           when: always
+      - store_test_results:
+          path: packages/contracts-bedrock/results
+          when: always
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
+  contracts-bedrock-tests-l2-fork:
+    circleci_ip_ranges: true
+    parameters:
+      fork_op_chain:
+        description: L2 chain to fork for testing
+        type: string
+        default: "op-mainnet"
+      l2_fork_rpc:
+        description: RPC URL for L2 fork
+        type: string
+      l2_fork_block_number:
+        description: Block number to fork from
+        type: string
+        default: "latest"
+      test_profile:
+        description: Profile to use for testing
+        type: string
+        default: ci
+      features:
+        description: Comma-separated list of features to enable (e.g., "L2CM")
+        type: string
+        default: "L2CM"
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge
+    steps:
+      - utils/checkout-with-mise:
+          enable-mise-cache: true
+      - install-contracts-dependencies
+      - check-changed:
+          patterns: contracts-bedrock
+      - install-solc-compilers
+      - run:
+          name: Print dependencies
+          command: just dep-status
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Print forge version
+          command: forge --version
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Get latest block number if not specified
+          command: |
+            if [ "<<parameters.l2_fork_block_number>>" = "latest" ]; then
+              BLOCK_NUMBER=$(cast block-number --rpc-url <<parameters.l2_fork_rpc>>)
+              echo "export L2_FORK_BLOCK_NUMBER=$BLOCK_NUMBER" >> $BASH_ENV
+              echo "Using latest block number: $BLOCK_NUMBER"
+              echo "$BLOCK_NUMBER" > ./l2ForkBlockNumber.txt
+            else
+              echo "export L2_FORK_BLOCK_NUMBER=<<parameters.l2_fork_block_number>>" >> $BASH_ENV
+              echo "Using specified block number: <<parameters.l2_fork_block_number>>"
+              echo "<<parameters.l2_fork_block_number>>" > ./l2ForkBlockNumber.txt
+            fi
+          working_directory: packages/contracts-bedrock
+      - restore_cache:
+          name: Restore forked L2 state
+          key: forked-state-l2-<<parameters.fork_op_chain>>-{{ checksum "packages/contracts-bedrock/l2ForkBlockNumber.txt" }}
+      - setup-features:
+          features: <<parameters.features>>
+      - run:
+          name: Check NUT bundle is up-to-date
+          command: just nut-bundle-check-no-build
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Run L2 fork tests
+          command: |
+            mkdir -p results
+            JUNIT_TEST_PATH=results/results.xml just test-l2-fork-upgrade
+          environment:
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
+            L2_FORK_RPC_URL: <<parameters.l2_fork_rpc>>
+          working_directory: packages/contracts-bedrock
+          no_output_timeout: 20m
+      - run:
+          name: Print failed test traces
+          command: |
+            just test-l2-fork-upgrade-rerun | tee failed-test-traces-l2-fork.log
+          environment:
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
+            L2_FORK_RPC_URL: <<parameters.l2_fork_rpc>>
+          working_directory: packages/contracts-bedrock
+          when: on_fail
+      - save_cache:
+          name: Save Go build cache
+          key: golang-build-cache-contracts-bedrock-tests-{{ checksum "go.sum" }}
+          paths:
+            - "~/.cache/go-build"
+      - save_cache:
+          name: Save forked L2 state
+          key: forked-state-l2-<<parameters.fork_op_chain>>-{{ checksum "packages/contracts-bedrock/l2ForkBlockNumber.txt" }}
+          when: always
+          paths:
+            - "~/.foundry/cache"
+      - store_artifacts:
+          path: packages/contracts-bedrock/failed-test-traces-l2-fork.log
+          when: on_fail
       - store_test_results:
           path: packages/contracts-bedrock/results
           when: always
@@ -2452,6 +2558,16 @@ workflows:
           filters:
             branches:
               only: develop
+      # Always run L2 fork tests with ci profile
+      - contracts-bedrock-tests-l2-fork:
+          name: contracts-bedrock-tests-l2-fork op-mainnet
+          fork_op_chain: op-mainnet
+          l2_fork_rpc: https://op-mainnet-rpc.optimism.io/
+          l2_fork_block_number: latest
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
       - contracts-bedrock-checks-fast:
           context:
             - circleci-repo-readonly-authenticated-github-token
@@ -2955,6 +3071,22 @@ workflows:
             - circleci-repo-readonly-authenticated-github-token
             - circleci-api-token
             - devin-api
+            - slack
+
+  l2-fork-test-workflow:
+    when:
+      and:
+        - equal: [true, << pipeline.parameters.c-l2_fork_test_dispatch >>]
+        - equal: ["api", << pipeline.trigger_source >>]
+    jobs:
+      - contracts-bedrock-tests-l2-fork:
+          name: contracts-bedrock-tests-l2-fork-dispatch op-mainnet
+          fork_op_chain: op-mainnet
+          l2_fork_rpc: https://op-mainnet-rpc.optimism.io/
+          l2_fork_block_number: latest
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
             - slack
 
   # ============================================================================
