@@ -204,6 +204,32 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
   GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_INTEROP_MON_VERSION" \
   op-interop-mon/op-interop-mon
 
+# The Rust version must match rust/rust-toolchain.toml. We don't use "latest" to ensure reproducibility
+FROM --platform=$BUILDPLATFORM rust:1.92 AS kona-host-builder
+ARG TARGETARCH
+# Install build dependencies and cross-compilation toolchains
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  build-essential \
+  libssl-dev \
+  clang \
+  pkg-config \
+  gcc-aarch64-linux-gnu \
+  gcc-x86-64-linux-gnu \
+  && rm -rf /var/lib/apt/lists/*
+# Copy the entire rust workspace since kona depends on sibling crates (op-alloy, alloy-op-evm, etc.)
+COPY ./rust /rust
+WORKDIR /rust
+# Map TARGETARCH to Rust target triple, install it, and build
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/rust/target \
+  case "$TARGETARCH" in \
+    amd64) RUST_TARGET=x86_64-unknown-linux-gnu ;; \
+    arm64) RUST_TARGET=aarch64-unknown-linux-gnu ;; \
+    *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;; \
+  esac && \
+  rustup target add "$RUST_TARGET" && \
+  RUSTFLAGS="-C target-cpu=generic" cargo build --bin kona-host --profile release-perf --target "$RUST_TARGET" && \
+  cp "/rust/target/$RUST_TARGET/release-perf/kona-host" /kona-host
+
 FROM $TARGET_BASE_IMAGE AS cannon-target
 COPY --from=cannon-builder /app/cannon/bin/cannon /usr/local/bin/
 COPY --from=cannon-builder /app/cannon/multicannon/embeds/* /usr/local/bin/

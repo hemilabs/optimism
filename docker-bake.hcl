@@ -333,3 +333,64 @@ target "op-interop-mon" {
   platforms = split(",", PLATFORMS)
   tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-interop-mon:${tag}"]
 }
+
+// Rust-based images
+
+target "op-rbuilder" {
+  dockerfile = "Dockerfile"
+  context = "op-rbuilder"
+  target = "rbuilder-runtime"
+  args = {
+    RBUILDER_BIN = "op-rbuilder"
+    FEATURES = ""
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-rbuilder:${tag}"]
+}
+
+target "kona-node" {
+  dockerfile = "kona/docker/apps/kona_app_generic.dockerfile"
+  context = "rust"
+  args = {
+    REPO_LOCATION = "local"
+    BIN_TARGET = "kona-node"
+    BUILD_PROFILE = "release"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-node:${tag}"]
+}
+
+target "kona-host" {
+  dockerfile = "kona/docker/apps/kona_app_generic.dockerfile"
+  context = "rust"
+  args = {
+    REPO_LOCATION = "local"
+    BIN_TARGET = "kona-host"
+    BUILD_PROFILE = "release"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-host:${tag}"]
+}
+
+target "kona-client" {
+  dockerfile = "kona/docker/apps/kona_app_generic.dockerfile"
+  context = "rust"
+  args = {
+    REPO_LOCATION = "local"
+    BIN_TARGET = "kona-client"
+    BUILD_PROFILE = "release"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-client:${tag}"]
+}
+
+target "op-reth" {
+  dockerfile = "op-reth/DockerfileOp"
+  context = "rust"
+  args = {
+    BUILD_PROFILE = "maxperf"
+    FEATURES = ""
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-reth:${tag}"]
+}

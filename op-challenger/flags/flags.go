@@ -28,7 +28,6 @@ import (
 const EnvVarPrefix = "OP_CHALLENGER"
 
 func prefixEnvVars(names ...string) []string {
-
 	envs := make([]string, 0, len(names))
 	for _, name := range names {
 		envs = append(envs, EnvVarPrefix+"_"+name)
@@ -224,50 +223,14 @@ var (
 		Value:   false,
 		Hidden:  true,
 	}
-	AsteriscBinFlag = &cli.StringFlag{
-		Name:    "asterisc-bin",
-		Usage:   "Path to asterisc executable to use when generating trace data (asterisc game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_BIN"),
-	}
-	AsteriscServerFlag = &cli.StringFlag{
-		Name:    "asterisc-server",
-		Usage:   "Path to executable to use as pre-image oracle server when generating trace data (asterisc game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_SERVER"),
-	}
-	AsteriscKonaServerFlag = &cli.StringFlag{
-		Name:    "asterisc-kona-server",
-		Usage:   "Path to kona executable to use as pre-image oracle server when generating trace data (asterisc-kona game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_KONA_SERVER"),
-	}
-	AsteriscKonaL2CustomFlag = &cli.BoolFlag{
-		Name: "asterisc-kona-l2-custom",
-		Usage: "Notify the kona-host that the L2 chain uses custom config to be loaded via the preimage oracle. " +
-			"WARNING: This is incompatible with on-chain testing and must only be used for testing purposes.",
-		EnvVars: prefixEnvVars("ASTERISC_KONA_L2_CUSTOM"),
-		Value:   false,
-		Hidden:  true,
-	}
-	AsteriscPreStateFlag = &cli.StringFlag{
-		Name:    "asterisc-prestate",
-		Usage:   "Path to absolute prestate to use when generating trace data (asterisc game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_PRESTATE"),
-	}
-	AsteriscKonaPreStateFlag = &cli.StringFlag{
-		Name:    "asterisc-kona-prestate",
-		Usage:   "Path to absolute prestate to use when generating trace data (asterisc-kona game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_KONA_PRESTATE"),
-	}
-	AsteriscSnapshotFreqFlag = &cli.UintFlag{
-		Name:    "asterisc-snapshot-freq",
-		Usage:   "Frequency of asterisc snapshots to generate in VM steps (asterisc game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_SNAPSHOT_FREQ"),
-		Value:   config.DefaultAsteriscSnapshotFreq,
-	}
-	AsteriscInfoFreqFlag = &cli.UintFlag{
-		Name:    "asterisc-info-freq",
-		Usage:   "Frequency of asterisc info log messages to generate in VM steps (asterisc game type only)",
-		EnvVars: prefixEnvVars("ASTERISC_INFO_FREQ"),
-		Value:   config.DefaultAsteriscInfoFreq,
+	CannonKonaExperimentalWitnessEndpointFlag = &cli.BoolFlag{
+		Name: "cannon-kona-experimental-witness-endpoint",
+		Usage: "Enable experimental witness endpoint for Kona interop. " +
+			"Uses debug_executePayload RPC to collect execution witnesses, " +
+			"reducing proof generation time by avoiding re-execution. " +
+			"Requires op-reth or execution client started with " +
+			"--proofs-history enabled to provide debug_executePayload support.",
+		EnvVars: prefixEnvVars("CANNON_KONA_EXPERIMENTAL_WITNESS_ENDPOINT"),
 	}
 	GameWindowFlag = &cli.DurationFlag{
 		Name: "game-window",
@@ -332,14 +295,7 @@ var optionalFlags = []cli.Flag{
 	CannonKonaServerFlag,
 	CannonKonaPreStateFlag,
 	CannonKonaL2CustomFlag,
-	AsteriscBinFlag,
-	AsteriscServerFlag,
-	AsteriscKonaL2CustomFlag,
-	AsteriscKonaServerFlag,
-	AsteriscPreStateFlag,
-	AsteriscKonaPreStateFlag,
-	AsteriscSnapshotFreqFlag,
-	AsteriscInfoFreqFlag,
+	CannonKonaExperimentalWitnessEndpointFlag,
 	GameWindowFlag,
 	SelectiveClaimResolutionFlag,
 	UnsafeAllowInvalidPrestate,
@@ -773,23 +729,24 @@ func NewConfigFromCLI(ctx *cli.Context, logger log.Logger) (*config.Config, erro
 		CannonAbsolutePreState:        ctx.String(CannonPreStateFlag.Name),
 		CannonAbsolutePreStateBaseURL: cannonPreStatesURL,
 		CannonKona: vm.Config{
-			VmType:            gameTypes.CannonKonaGameType,
-			L1:                l1EthRpc,
-			L1Beacon:          l1Beacon,
-			L2s:               l2Rpcs,
-			L2Experimental:    l2Experimental,
-			VmBin:             ctx.String(CannonBinFlag.Name),
-			Server:            ctx.String(CannonKonaServerFlag.Name),
-			Networks:          networks,
-			L2Custom:          ctx.Bool(CannonKonaL2CustomFlag.Name),
-			RollupConfigPaths: RollupConfigFlag.StringSlice(ctx, gameTypes.CannonKonaGameType),
-			L1GenesisPath:     L1GenesisFlag.String(ctx, gameTypes.CannonKonaGameType),
-			L2GenesisPaths:    L2GenesisFlag.StringSlice(ctx, gameTypes.CannonKonaGameType),
-			DepsetConfigPath:  DepsetConfigFlag.String(ctx, gameTypes.CannonKonaGameType),
-			SnapshotFreq:      ctx.Uint(CannonSnapshotFreqFlag.Name),
-			InfoFreq:          ctx.Uint(CannonInfoFreqFlag.Name),
-			DebugInfo:         true,
-			BinarySnapshots:   true,
+			VmType:                            gameTypes.CannonKonaGameType,
+			L1:                                l1EthRpc,
+			L1Beacon:                          l1Beacon,
+			L2s:                               l2Rpcs,
+			L2Experimental:                    l2Experimental,
+			VmBin:                             ctx.String(CannonBinFlag.Name),
+			Server:                            ctx.String(CannonKonaServerFlag.Name),
+			Networks:                          networks,
+			L2Custom:                          ctx.Bool(CannonKonaL2CustomFlag.Name),
+			RollupConfigPaths:                 RollupConfigFlag.StringSlice(ctx, gameTypes.CannonKonaGameType),
+			L1GenesisPath:                     L1GenesisFlag.String(ctx, gameTypes.CannonKonaGameType),
+			L2GenesisPaths:                    L2GenesisFlag.StringSlice(ctx, gameTypes.CannonKonaGameType),
+			DepsetConfigPath:                  DepsetConfigFlag.String(ctx, gameTypes.CannonKonaGameType),
+			SnapshotFreq:                      ctx.Uint(CannonSnapshotFreqFlag.Name),
+			InfoFreq:                          ctx.Uint(CannonInfoFreqFlag.Name),
+			DebugInfo:                         true,
+			BinarySnapshots:                   true,
+			EnableExperimentalWitnessEndpoint: ctx.Bool(CannonKonaExperimentalWitnessEndpointFlag.Name),
 		},
 		CannonKonaAbsolutePreState:        ctx.String(CannonKonaPreStateFlag.Name),
 		CannonKonaAbsolutePreStateBaseURL: cannonKonaPreStatesURL,

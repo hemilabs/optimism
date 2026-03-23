@@ -94,7 +94,8 @@ EOF
     mise install -v -y >> "${LOG_FILE}" 2>&1
   fi
   rm -rf "${BIN_DIR}"
-  make reproducible-prestate >> "${LOG_FILE}" 2>&1
+  rm -rf rust/kona/prestate-artifacts-*
+  make reproducible-prestate >> "${log_file}" 2>&1
 
   if [ -f "${BIN_DIR}/prestate-proof.json" ]; then
     local HASH
@@ -108,20 +109,22 @@ EOF
     echo "Built cannon32 ${VERSION}: ${HASH}"
   fi
 
-  if [ -f "${BIN_DIR}/prestate-proof-mt64.json" ]; then
-    local HASH
-    HASH=$(cat "${BIN_DIR}/prestate-proof-mt64.json" | jq -r .pre)
-    cp "${BIN_DIR}/prestate-mt64.bin.gz" "${STATES_DIR}/${HASH}.mt64.bin.gz"
-    VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${SHORT_VERSION}\", \"hash\": \"${HASH}\", \"type\": \"cannon64\"}]")
-    echo "Built cannon64 ${VERSION}: ${HASH}"
-  fi
+  if [[ "${version}" =~ ^kona-client/v ]]; then
+    if [ -f "rust/kona/prestate-artifacts-cannon/prestate-proof.json" ]; then
+      local hash
+      hash=$(jq -r .pre rust/kona/prestate-artifacts-cannon/prestate-proof.json)
+      cp rust/kona/prestate-artifacts-cannon/prestate.bin.gz "${STATES_DIR}/${hash}.bin.gz"
+      VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${short_version}\", \"hash\": \"${hash}\", \"type\": \"cannon64-kona\"}]")
+      echo "Built cannon64-kona ${version}: ${hash}"
+    fi
 
-  if [ -f "${BIN_DIR}/prestate-proof-interop.json" ]; then
-    local HASH
-    HASH=$(cat "${BIN_DIR}/prestate-proof-interop.json" | jq -r .pre)
-    cp "${BIN_DIR}/prestate-interop.bin.gz" "${STATES_DIR}/${HASH}.interop.bin.gz"
-    VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${SHORT_VERSION}\", \"hash\": \"${HASH}\", \"type\": \"interop\"}]")
-    echo "Built cannon-interop ${VERSION}: ${HASH}"
+    if [ -f "rust/kona/prestate-artifacts-cannon-interop/prestate-proof.json" ]; then
+      local hash
+      hash=$(jq -r .pre rust/kona/prestate-artifacts-cannon-interop/prestate-proof.json)
+      cp rust/kona/prestate-artifacts-cannon-interop/prestate.bin.gz "${STATES_DIR}/${hash}.bin.gz"
+      VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${short_version}\", \"hash\": \"${hash}\", \"type\": \"cannon64-kona-interop\"}]")
+      echo "Built cannon64-kona-interop ${version}: ${hash}"
+    fi
   fi
 }
 

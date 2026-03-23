@@ -1,0 +1,59 @@
+# Copyright (c) 2026 Hemi Labs, Inc.
+# Use of this source code is governed by the MIT License,
+# which can be found in the LICENSE file.
+
+# GitHub Actions workflow to lint, build and test Rust.
+name: "Rust"
+on:
+  push:
+    branches: [ "hemi" ]
+  pull_request:
+    branches: [ "hemi" ]
+
+concurrency:
+  group: "rust-${{ github.workflow }}-${{ github.event.number || github.ref }}"
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
+
+env:
+  # Enable terminal colours, disable incremental builds to avoid overhead.
+  CARGO_TERM_COLOR: "always"
+  CARGO_INCREMENTAL: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: "test"
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: "Install toolchain"
+        run: rustup toolchain install --no-self-update
+
+      - name: "Setup Rust cache"
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: "clone just"
+        run: git clone https://github.com/casey/just
+
+      - name: "checkout stable just"
+        working-directory: just
+        run: git checkout f028de5b258a0cc4696b9dea729cc7d4d5828baa
+
+      - name: "install just"
+        working-directory: just
+        run: cargo install just
+
+      - name: "install nextest"
+        run: curl -LsSf https://get.nexte.st/latest/linux-musl | tar zxf - -C ${CARGO_HOME:-~/.cargo}/bin
+
+      - name: "just test"
+        working-directory: rust
+        run: just --justfile ./op-reth/justfile test
+
+      - name: "just test-integration"
+        working-directory: rust
+        run: just --justfile ./op-reth/justfile test-integration
