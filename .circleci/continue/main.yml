@@ -149,12 +149,12 @@ parameters:
     default: "v0.0"
 
 orbs:
+  utils: ethereum-optimism/circleci-utils@1.0.25
   go: circleci/go@1.8.0
   gcp-cli: circleci/gcp-cli@3.0.1
   slack: circleci/slack@6.0.0
   shellcheck: circleci/shellcheck@3.2.0
   codecov: codecov/codecov@5.0.3
-  utils: ethereum-optimism/circleci-utils@1.0.24
   docker: circleci/docker@2.8.2
   github-cli: circleci/github-cli@2.7.0
 
@@ -689,6 +689,12 @@ commands:
                 features: << parameters.features >>
 
 jobs:
+  ci-gate:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    steps:
+      - utils/ci-gate
+
   # Build a single Rust binary from a workspace. Will cache the binary by default.
   rust-build-binary:
     description: "Build a Rust workspace with target directory caching"
@@ -2804,6 +2810,28 @@ workflows:
             - memory-all-opn-op-geth
             - memory-all-opn-op-reth
             - memory-all-kona-op-reth
+      # Gate job - single stable job used as GitHub required status check for develop.
+      # Uses terminal requires so it always runs (even when deps fail), giving the
+      # merge queue an immediate failure signal instead of a timeout.
+      # To add a new mandatory check: add it to requires here. No GitHub ruleset changes needed.
+      - ci-gate:
+          requires:
+            - check-kontrol-build: terminal
+            - shell-check: terminal
+            - go-lint: terminal
+            - semgrep-scan-local: terminal
+            - go-tests-short: terminal
+            - contracts-bedrock-coverage main: terminal
+            - contracts-bedrock-tests main: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified main: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet main: terminal
+            - memory-all: terminal
+            - contracts-bedrock-checks-fast: terminal
+          context:
+            - circleci-api-token
+          filters:
+            branches:
+              ignore: develop
       # Generate flaky test report
       - generate-flaky-report:
           name: generate-flaky-tests-report
