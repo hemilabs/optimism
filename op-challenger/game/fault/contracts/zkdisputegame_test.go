@@ -8,7 +8,9 @@ import (
 	"time"
 
 	contractMetrics "github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
+	faultTypes "github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	batchingTest "github.com/ethereum-optimism/optimism/op-service/sources/batching/test"
@@ -29,7 +31,7 @@ var (
 var zkVersions = []contractVersion{
 	{
 		version:  versZKLatest,
-		gameType: gameTypes.OptimisticZKGameType,
+		gameType: gameTypes.ZKDisputeGameType,
 		loadAbi:  snapshots.LoadZKDisputeGameABI,
 	},
 }
@@ -41,14 +43,14 @@ func TestZKSimpleGetters(t *testing.T) {
 		args        []interface{}
 		result      interface{}
 		expected    interface{} // Defaults to expecting the same as result
-		call        func(game OptimisticZKDisputeGameContract) (any, error)
+		call        func(game ZKDisputeGameContract) (any, error)
 		applies     func(version contractVersion) bool
 	}{
 		{
 			methodAlias: "status",
 			method:      methodStatus,
 			result:      gameTypes.GameStatusChallengerWon,
-			call: func(game OptimisticZKDisputeGameContract) (any, error) {
+			call: func(game ZKDisputeGameContract) (any, error) {
 				return game.GetStatus(context.Background())
 			},
 		},
@@ -56,7 +58,7 @@ func TestZKSimpleGetters(t *testing.T) {
 			methodAlias: "l1Head",
 			method:      methodL1Head,
 			result:      common.Hash{0xdd, 0xbb},
-			call: func(game OptimisticZKDisputeGameContract) (any, error) {
+			call: func(game ZKDisputeGameContract) (any, error) {
 				return game.GetL1Head(context.Background())
 			},
 		},
@@ -64,7 +66,7 @@ func TestZKSimpleGetters(t *testing.T) {
 			methodAlias: "resolve",
 			method:      methodResolve,
 			result:      gameTypes.GameStatusInProgress,
-			call: func(game OptimisticZKDisputeGameContract) (any, error) {
+			call: func(game ZKDisputeGameContract) (any, error) {
 				return game.CallResolve(context.Background())
 			},
 		},
@@ -73,7 +75,7 @@ func TestZKSimpleGetters(t *testing.T) {
 			method:      methodResolvedAt,
 			result:      uint64(240402),
 			expected:    time.Unix(240402, 0),
-			call: func(game OptimisticZKDisputeGameContract) (any, error) {
+			call: func(game ZKDisputeGameContract) (any, error) {
 				return game.GetResolvedAt(context.Background(), rpcblock.Latest)
 			},
 		},
@@ -166,14 +168,14 @@ func TestZKGetChallengerMetadata(t *testing.T) {
 			stubRpc, contract := setupZKDisputeGameTest(t, version)
 			expectedParentIndex := uint32(525)
 			expectedProposalStatus := ProposalStatusChallengedAndValidProofProvided
-			counteredBy := common.Address{0xad}
+			challenger := common.Address{0xad}
 			prover := common.Address{0xac}
 			expectedL2BlockNumber := uint64(123)
 			expectedRootClaim := common.Hash{0x01, 0x02}
 			expectedDeadline := time.Unix(84928429020, 0)
 			block := rpcblock.ByNumber(889)
 			stubRpc.SetResponse(zkGameAddr, methodClaimData, block, nil, []interface{}{
-				expectedParentIndex, counteredBy, prover, expectedRootClaim, expectedProposalStatus, uint64(expectedDeadline.Unix()),
+				expectedParentIndex, expectedProposalStatus, challenger, prover, uint64(expectedDeadline.Unix()), expectedRootClaim,
 			})
 			stubRpc.SetResponse(zkGameAddr, methodL2SequenceNumber, block, nil, []interface{}{new(big.Int).SetUint64(expectedL2BlockNumber)})
 			actual, err := contract.GetChallengerMetadata(context.Background(), block)
@@ -220,7 +222,7 @@ func TestZKGetProposal(t *testing.T) {
 			actualClaim, actualSeqNum, err := game.GetProposal(context.Background())
 			require.NoError(t, err)
 			require.Equal(t, rootClaim, actualClaim)
-			require.Equal(t, l2SequenceNumber.Uint64(), actualSeqNum)
+			require.Equal(t, bigs.Uint64Strict(l2SequenceNumber), actualSeqNum)
 		})
 	}
 }
@@ -271,7 +273,46 @@ func TestZKGame_ClaimCreditTx(t *testing.T) {
 	}
 }
 
-func setupZKDisputeGameTest(t *testing.T, version contractVersion) (*batchingTest.AbiBasedRpc, OptimisticZKDisputeGameContract) {
+func TestZKGame_GetBondDistributionMode(t *testing.T) {
+	for _, version := range zkVersions {
+		version := version
+		t.Run(version.String(), func(t *testing.T) {
+			stubRpc, game := setupZKDisputeGameTest(t, version)
+			stubRpc.SetResponse(zkGameAddr, methodBondDistributionMode, rpcblock.Latest, nil, []interface{}{uint8(faultTypes.NormalDistributionMode)})
+
+			mode, err := game.GetBondDistributionMode(context.Background(), rpcblock.Latest)
+			require.NoError(t, err)
+			require.Equal(t, faultTypes.NormalDistributionMode, mode)
+		})
+	}
+}
+
+func TestZKGame_CloseGameTx(t *testing.T) {
+	for _, version := range zkVersions {
+		version := version
+		t.Run(version.String(), func(t *testing.T) {
+			t.Run("Success", func(t *testing.T) {
+				stubRpc, game := setupZKDisputeGameTest(t, version)
+				stubRpc.SetResponse(zkGameAddr, methodCloseGame, rpcblock.Latest, nil, nil)
+
+				tx, err := game.CloseGameTx(context.Background())
+				require.NoError(t, err)
+				stubRpc.VerifyTxCandidate(tx)
+			})
+
+			t.Run("SimulationFails", func(t *testing.T) {
+				stubRpc, game := setupZKDisputeGameTest(t, version)
+				stubRpc.SetError(zkGameAddr, methodCloseGame, rpcblock.Latest, nil, errors.New("game not ready"))
+
+				tx, err := game.CloseGameTx(context.Background())
+				require.ErrorIs(t, err, ErrSimulationFailed)
+				require.Equal(t, txmgr.TxCandidate{}, tx)
+			})
+		})
+	}
+}
+
+func setupZKDisputeGameTest(t *testing.T, version contractVersion) (*batchingTest.AbiBasedRpc, ZKDisputeGameContract) {
 	fdgAbi := version.loadAbi()
 
 	vmAbi := snapshots.LoadMIPSABI()
@@ -285,7 +326,7 @@ func setupZKDisputeGameTest(t *testing.T, version contractVersion) (*batchingTes
 	stubRpc.SetResponse(zkGameAddr, methodGameType, rpcblock.Latest, nil, []interface{}{uint32(version.gameType)})
 	stubRpc.SetResponse(zkGameAddr, methodVersion, rpcblock.Latest, nil, []interface{}{version.version})
 	stubRpc.SetResponse(oracleAddr, methodVersion, rpcblock.Latest, nil, []interface{}{oracleLatest})
-	game, err := NewOptimisticZKDisputeGameContract(contractMetrics.NoopContractMetrics, zkGameAddr, caller)
+	game, err := NewZKDisputeGameContract(contractMetrics.NoopContractMetrics, zkGameAddr, caller)
 	require.NoError(t, err)
 	return stubRpc, game
 }
