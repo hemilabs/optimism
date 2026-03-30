@@ -17,6 +17,7 @@ import (
 var (
 	ErrNotFound     = errors.New("not found")
 	ErrInvalidEntry = errors.New("invalid db entry")
+	ErrClosed       = errors.New("safe db closed")
 )
 
 const (
@@ -100,7 +101,10 @@ func (d *SafeDB) Enabled() bool {
 func (d *SafeDB) SafeHeadUpdated(safeHead eth.L2BlockRef, l1Head eth.BlockID) error {
 	d.m.Lock()
 	defer d.m.Unlock()
-	d.log.Info("Record safe head", "l2", safeHead.ID(), "l1", l1Head)
+	if d.closed {
+		return ErrClosed
+	}
+	d.log.Info("Record local safe head", "l2", safeHead.ID(), "l1", l1Head)
 	batch := d.db.NewBatch()
 	defer batch.Close()
 	if err := batch.Set(safeByL1BlockNumKey.Of(l1Head.Number), safeByL1BlockNumValue(l1Head, safeHead.ID()), d.writeOpts); err != nil {
@@ -115,6 +119,9 @@ func (d *SafeDB) SafeHeadUpdated(safeHead eth.L2BlockRef, l1Head eth.BlockID) er
 func (d *SafeDB) SafeHeadReset(safeHead eth.L2BlockRef) error {
 	d.m.Lock()
 	defer d.m.Unlock()
+	if d.closed {
+		return ErrClosed
+	}
 	d.log.Info("Resetting safe head db", "l2", safeHead.ID())
 	iter, err := d.db.NewIter(safeByL1BlockNumKey.IterRange())
 	if err != nil {
@@ -167,6 +174,10 @@ func (d *SafeDB) SafeHeadReset(safeHead eth.L2BlockRef) error {
 func (d *SafeDB) SafeHeadAtL1(ctx context.Context, l1BlockNum uint64) (l1Block eth.BlockID, safeHead eth.BlockID, err error) {
 	d.m.RLock()
 	defer d.m.RUnlock()
+	if d.closed {
+		err = ErrClosed
+		return
+	}
 	iter, err := d.db.NewIterWithContext(ctx, safeByL1BlockNumKey.IterRange())
 	if err != nil {
 		return
