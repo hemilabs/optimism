@@ -329,6 +329,8 @@ func initL1Source(ctx context.Context, cfg *config.Config, node *OpNode) (*sourc
 		return nil, fmt.Errorf("failed to get L1 RPC client: %w", err)
 	}
 
+	l1Cfg.HemitrapEnabled = cfg.HemitrapEnabled
+
 	l1Source, err := sources.NewL1Client(l1RPC, node.log, node.metrics.L1SourceCache, l1Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create L1 source: %w", err)
