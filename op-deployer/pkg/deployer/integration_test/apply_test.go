@@ -806,6 +806,205 @@ func runEndToEndBootstrapAndApplyUpgradeTest(t *testing.T, afactsFS foundry.Stat
 			err = embedded.DefaultUpgrader.Upgrade(host, upgradeConfigBytes)
 			require.NoError(t, err, "OPCM upgrade should succeed")
 		})
+		t.Run("upgrade opcm v2", func(t *testing.T) {
+			if !deployer.IsDevFeatureEnabled(implementationsConfig.DevFeatureBitmap, deployer.OPCMV2DevFlag) {
+				t.Skip("Skipping OPCM V2 upgrade for non-OPCM V2 dev feature")
+				return
+			}
+			require.NotEqual(t, common.Address{}, impls.OpcmV2, "OpcmV2 address should not be zero")
+			t.Logf("Using OpcmV2 at address: %s", impls.OpcmV2.Hex())
+			t.Logf("Using OpcmUtils at address: %s", impls.OpcmUtils.Hex())
+			t.Logf("Using OpcmContainer at address: %s", impls.OpcmContainer.Hex())
+
+			// Verify OPCM V2 has code deployed
+			opcmCode, err := versionClient.CodeAt(ctx, impls.OpcmV2, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, opcmCode, "OPCM V2 should have code deployed")
+			t.Logf("OPCM V2 code size: %d bytes", len(opcmCode))
+
+			// Verify OpcmUtils has code deployed
+			utilsCode, err := versionClient.CodeAt(ctx, impls.OpcmUtils, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, utilsCode, "OpcmUtils should have code deployed")
+			t.Logf("OpcmUtils code size: %d bytes", len(utilsCode))
+
+			// Verify OpcmContainer has code deployed
+			containerCode, err := versionClient.CodeAt(ctx, impls.OpcmContainer, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, containerCode, "OpcmContainer should have code deployed")
+			t.Logf("OpcmContainer code size: %d bytes", len(containerCode))
+
+			// First, upgrade the superchain with V2
+			t.Run("upgrade superchain v2", func(t *testing.T) {
+				superchainUpgradeConfig := embedded.UpgradeSuperchainConfigInput{
+					Prank:             superchainProxyAdminOwner,
+					Opcm:              impls.OpcmV2,
+					SuperchainConfig:  implementationsConfig.SuperchainConfigProxy,
+					ExtraInstructions: []embedded.ExtraInstruction{},
+				}
+				err := embedded.UpgradeSuperchainConfig(host, superchainUpgradeConfig)
+				if err != nil {
+					t.Logf("Superchain upgrade may have failed (could already be upgraded): %v", err)
+				} else {
+					t.Log("Superchain V2 upgrade succeeded")
+				}
+			})
+
+			// Then test upgrade on the V2-deployed chain
+			t.Run("upgrade chain v2", func(t *testing.T) {
+				// FaultDisputeGameConfig just needs absolutePrestate (bytes32)
+				testPrestate := common.Hash{'P', 'R', 'E', 'S', 'T', 'A', 'T', 'E'}
+
+				// PermissionedDisputeGameConfig needs absolutePrestate, proposer, challenger
+				testProposer := common.Address{'P'}
+				testChallenger := common.Address{'C'}
+
+				upgradeConfig := embedded.UpgradeOPChainInput{
+					Prank: superchainProxyAdminOwner,
+					Opcm:  impls.OpcmV2,
+					UpgradeInputV2: &embedded.UpgradeInputV2{
+						SystemConfig: deployer.DefaultSystemConfigProxySepolia,
+						DisputeGameConfigs: []embedded.DisputeGameConfig{
+							{
+								Enabled:  true,
+								InitBond: big.NewInt(1000000000000000000),
+								GameType: embedded.GameTypeCannon,
+								FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
+									AbsolutePrestate: testPrestate,
+								},
+							},
+							{
+								Enabled:  true,
+								InitBond: big.NewInt(1000000000000000000),
+								GameType: embedded.GameTypePermissionedCannon,
+								PermissionedDisputeGameConfig: &embedded.PermissionedDisputeGameConfig{
+									AbsolutePrestate: testPrestate,
+									Proposer:         testProposer,
+									Challenger:       testChallenger,
+								},
+							},
+							{
+								Enabled:  false,
+								InitBond: big.NewInt(0),
+								GameType: embedded.GameTypeCannonKona,
+							},
+							{
+								Enabled:  false,
+								InitBond: big.NewInt(0),
+								GameType: embedded.GameTypeSuperCannon,
+							},
+							{
+								Enabled:  false,
+								InitBond: big.NewInt(0),
+								GameType: embedded.GameTypeSuperPermCannon,
+							},
+							{
+								Enabled:  false,
+								InitBond: big.NewInt(0),
+								GameType: embedded.GameTypeSuperCannonKona,
+							},
+						},
+						ExtraInstructions: []embedded.ExtraInstruction{
+							{
+								Key:  "PermittedProxyDeployment",
+								Data: []byte("DelayedWETH"),
+							},
+						},
+					},
+				}
+
+				upgradeConfigBytes, err := json.Marshal(upgradeConfig)
+				require.NoError(t, err, "UpgradeOPChainV2Input should marshal to JSON")
+
+				// Verify input encoding
+				encodedData, err := upgradeConfig.EncodedUpgradeInputV2()
+				require.NoError(t, err, "Should encode UpgradeInputV2")
+				require.NotEmpty(t, encodedData, "Encoded data should not be empty")
+
+				// Build expected hex encoding
+				// Structure breakdown:
+				// - Tuple offset (0x20)
+				// - SystemConfig address (0x034edd2a225f7f429a63e0f1d2084b9e0a93b538)
+				// - DisputeGameConfigs array offset (0x60) and ExtraInstructions array offset (0x580)
+				// - DisputeGameConfigs[]: 6 configs
+				//   [0] Cannon: enabled=true, initBond=1e18, gameType=0, gameArgs="PRESTATE"
+				//   [1] PermissionedCannon: enabled=true, initBond=1e18, gameType=1, gameArgs="PRESTATE"+proposer+challenger
+				//   [2] CannonKona: enabled=false, initBond=0, gameType=8, gameArgs=empty
+				//   [3] SuperCannon: enabled=false, initBond=0, gameType=4, gameArgs=empty
+				//   [4] SuperPermCannon: enabled=false, initBond=0, gameType=5, gameArgs=empty
+				//   [5] SuperCannonKona: enabled=false, initBond=0, gameType=9, gameArgs=empty
+				// - ExtraInstructions[]: 1 instruction
+				//   [0] key="PermittedProxyDeployment", data="DelayedWETH"
+				expected := "0000000000000000000000000000000000000000000000000000000000000020" + // offset to tuple
+					"000000000000000000000000034edd2a225f7f429a63e0f1d2084b9e0a93b538" + // systemConfig address
+					"0000000000000000000000000000000000000000000000000000000000000060" + // offset to disputeGameConfigs
+					"0000000000000000000000000000000000000000000000000000000000000580" + // offset to extraInstructions
+					"0000000000000000000000000000000000000000000000000000000000000006" + // disputeGameConfigs.length (6)
+					"00000000000000000000000000000000000000000000000000000000000000c0" + // offset to disputeGameConfigs[0]
+					"0000000000000000000000000000000000000000000000000000000000000180" + // offset to disputeGameConfigs[1]
+					"0000000000000000000000000000000000000000000000000000000000000280" + // offset to disputeGameConfigs[2]
+					"0000000000000000000000000000000000000000000000000000000000000320" + // offset to disputeGameConfigs[3]
+					"00000000000000000000000000000000000000000000000000000000000003c0" + // offset to disputeGameConfigs[4]
+					"0000000000000000000000000000000000000000000000000000000000000460" + // offset to disputeGameConfigs[5]
+					// DisputeGameConfigs[0] - Cannon
+					"0000000000000000000000000000000000000000000000000000000000000001" + // enabled=true
+					"0000000000000000000000000000000000000000000000000de0b6b3a7640000" + // initBond=1e18
+					"0000000000000000000000000000000000000000000000000000000000000000" + // gameType=0 (Cannon)
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+					"0000000000000000000000000000000000000000000000000000000000000020" + // gameArgs.length (32 bytes)
+					"5052455354415445000000000000000000000000000000000000000000000000" + // gameArgs data "PRESTATE"
+					// DisputeGameConfigs[1] - PermissionedCannon
+					"0000000000000000000000000000000000000000000000000000000000000001" + // enabled=true
+					"0000000000000000000000000000000000000000000000000de0b6b3a7640000" + // initBond=1e18
+					"0000000000000000000000000000000000000000000000000000000000000001" + // gameType=1 (PermissionedCannon)
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+					"0000000000000000000000000000000000000000000000000000000000000060" + // gameArgs.length (96 bytes)
+					"5052455354415445000000000000000000000000000000000000000000000000" + // gameArgs data "PRESTATE"
+					"0000000000000000000000005000000000000000000000000000000000000000" + // proposer address
+					"0000000000000000000000004300000000000000000000000000000000000000" + // challenger address
+					// DisputeGameConfigs[2] - CannonKona (disabled)
+					"0000000000000000000000000000000000000000000000000000000000000000" + // enabled=false
+					"0000000000000000000000000000000000000000000000000000000000000000" + // initBond=0
+					"0000000000000000000000000000000000000000000000000000000000000008" + // gameType=8 (CannonKona)
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+					"0000000000000000000000000000000000000000000000000000000000000000" + // gameArgs.length (0)
+					// DisputeGameConfigs[3] - SuperCannon (disabled)
+					"0000000000000000000000000000000000000000000000000000000000000000" + // enabled=false
+					"0000000000000000000000000000000000000000000000000000000000000000" + // initBond=0
+					"0000000000000000000000000000000000000000000000000000000000000004" + // gameType=4 (SuperCannon)
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+					"0000000000000000000000000000000000000000000000000000000000000000" + // gameArgs.length (0)
+					// DisputeGameConfigs[4] - SuperPermCannon (disabled)
+					"0000000000000000000000000000000000000000000000000000000000000000" + // enabled=false
+					"0000000000000000000000000000000000000000000000000000000000000000" + // initBond=0
+					"0000000000000000000000000000000000000000000000000000000000000005" + // gameType=5 (SuperPermCannon)
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+					"0000000000000000000000000000000000000000000000000000000000000000" + // gameArgs.length (0)
+					// DisputeGameConfigs[5] - SuperCannonKona (disabled)
+					"0000000000000000000000000000000000000000000000000000000000000000" + // enabled=false
+					"0000000000000000000000000000000000000000000000000000000000000000" + // initBond=0
+					"0000000000000000000000000000000000000000000000000000000000000009" + // gameType=9 (SuperCannonKona)
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+					"0000000000000000000000000000000000000000000000000000000000000000" + // gameArgs.length (0)
+					// ExtraInstructions array
+					"0000000000000000000000000000000000000000000000000000000000000001" + // extraInstructions.length (1)
+					"0000000000000000000000000000000000000000000000000000000000000020" + // offset to extraInstructions[0]
+					// ExtraInstructions[0] - PermittedProxyDeployment
+					"0000000000000000000000000000000000000000000000000000000000000040" + // offset to key
+					"0000000000000000000000000000000000000000000000000000000000000080" + // offset to data
+					"0000000000000000000000000000000000000000000000000000000000000018" + // key.length (24 bytes)
+					"5065726d697474656450726f78794465706c6f796d656e74000000000000000" + // "PermittedProxyDeployment"
+					"0" + // padding
+					"000000000000000000000000000000000000000000000000000000000000000b" + // data.length (11 bytes)
+					"44656c617965645745544800000000000000000000000000000000000000000" + // "DelayedWETH"
+					"0" // padding
+
+				require.Equal(t, expected, hex.EncodeToString(encodedData), "Encoded calldata should match expected structure")
+
+				err = embedded.DefaultUpgrader.Upgrade(host, upgradeConfigBytes)
+				require.NoError(t, err, "OPCM V2 chain upgrade should succeed")
+			})
+		})
 	})
 }
 

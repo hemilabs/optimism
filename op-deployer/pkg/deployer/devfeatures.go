@@ -17,6 +17,19 @@ var (
 
 	// DeployV2DisputeGamesDevFlag enables deployment of V2 dispute game contracts.
 	DeployV2DisputeGamesDevFlag = common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000100")
+
+	// OPCMV2DevFlag enables the OPContractsManagerV2 contract.
+	OPCMV2DevFlag = common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000010000")
+
+	// L2CMDevFlag enables L2CM.
+	L2CMDevFlag = common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000100000")
+
+	// ZKDisputeGameDevFlag enables the ZK dispute game system (ZKDisputeGame).
+	// TODO(#19432): Use this flag in the OPCM/OPD integration pipeline.
+	ZKDisputeGameDevFlag = common.HexToHash("0x0000000000000000000000000000000000000000000000000000000001000000")
+
+	// SuperRootGamesMigrationDevFlag enables the super root games migration path in OPCM upgrade.
+	SuperRootGamesMigrationDevFlag = common.HexToHash("0x0000000000000000000000000000000000000000000000000000000010000000")
 )
 
 // IsDevFeatureEnabled checks if a specific development feature is enabled in a feature bitmap.

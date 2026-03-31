@@ -108,7 +108,7 @@ contract SetDisputeGameImpl_Test is Test {
         anchorStateRegistryProxy.upgradeToAndCall(
             address(anchorStateRegistryImpl),
             abi.encodeCall(
-                anchorStateRegistryImpl.initialize,
+                IAnchorStateRegistry.initialize,
                 (
                     ISystemConfig(address(systemConfigProxy)),
                     factory,

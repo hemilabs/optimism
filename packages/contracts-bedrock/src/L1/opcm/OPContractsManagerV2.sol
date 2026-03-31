@@ -169,9 +169,9 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     ///         - Major bump: New required sequential upgrade
     ///         - Minor bump: Replacement OPCM for same upgrade
     ///         - Patch bump: Development changes (expected for normal dev work)
-    /// @custom:semver 7.0.1
+    /// @custom:semver 7.0.14
     function version() public pure returns (string memory) {
-        return "7.0.1";
+        return "7.0.14";
     }
 
     /// @param _contractsContainer The container of blueprint and implementation contract addresses.
@@ -310,10 +310,20 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             if (_isMatchingInstruction(_instruction, Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, "DelayedWETH")) {
                 return true;
             }
-            // Custom Gas Token is being enabled for the first time.
-            // TODO:(#18502): Remove this allowance after U18 ships.
-            if (_isMatchingInstructionByKey(_instruction, "overrides.cfg.useCustomGasToken")) {
-                return true;
+
+            // Super root games migration requires overriding anchor root.
+            if (isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)) {
+                if (_isMatchingInstructionByKey(_instruction, "overrides.cfg.startingAnchorRoot")) return true;
+            }
+        }
+
+        // Allow overriding the starting respected game type during upgrades. This is needed when
+        // disabling the currently-respected game type, since the validation requires the starting
+        // respected game type to correspond to an enabled game config.
+        if (_isMatchingInstructionByKey(_instruction, "overrides.cfg.startingRespectedGameType")) {
+            GameType gameType = abi.decode(_instruction.data, (GameType));
+            if (gameType.raw() == GameTypes.CANNON_KONA.raw()) {
+                return isDevFeatureEnabled(DevFeatures.CANNON_KONA);
             }
         }
 
@@ -645,21 +655,26 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
 
     /// @notice Validates the deployment/upgrade config.
     /// @param _cfg The full config.
-    function _assertValidFullConfig(FullConfig memory _cfg) internal pure {
-        // Start validating the dispute game configs. Put allowed game types here.
-        GameType[] memory validGameTypes = new GameType[](3);
+    /// @param _isInitialDeployment Whether or not this is an initial deployment.
+    function _assertValidFullConfig(FullConfig memory _cfg, bool _isInitialDeployment) internal pure {
+        // All valid game types. StandardValidator is responsible for rejecting game types that
+        // should not be used in a given mode (e.g., legacy types in super root mode).
+        GameType[] memory validGameTypes = new GameType[](6);
         validGameTypes[0] = GameTypes.CANNON;
         validGameTypes[1] = GameTypes.PERMISSIONED_CANNON;
         validGameTypes[2] = GameTypes.CANNON_KONA;
+        validGameTypes[3] = GameTypes.SUPER_CANNON;
+        validGameTypes[4] = GameTypes.SUPER_PERMISSIONED_CANNON;
+        validGameTypes[5] = GameTypes.SUPER_CANNON_KONA;
 
         // We must have a config for each valid game type.
         if (_cfg.disputeGameConfigs.length != validGameTypes.length) {
             revert OPContractsManagerV2_InvalidGameConfigs();
         }
 
-        // Simplest possible check, iterate over each provided config and confirm that it matches
-        // the game type array. This places a requirement on the user to order the configs properly
-        // but that's probably a good thing, keeps the config consistent.
+        // Iterate over each provided config and confirm that it matches the game type array.
+        // This places a requirement on the user to order the configs properly but that's
+        // probably a good thing, keeps the config consistent.
         for (uint256 i = 0; i < _cfg.disputeGameConfigs.length; i++) {
             if (_cfg.disputeGameConfigs[i].gameType.raw() != validGameTypes[i].raw()) {
                 revert OPContractsManagerV2_InvalidGameConfigs();
@@ -669,12 +684,30 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             if (!_cfg.disputeGameConfigs[i].enabled && _cfg.disputeGameConfigs[i].initBond != 0) {
                 revert OPContractsManagerV2_InvalidGameConfigs();
             }
+
+            // Check if this is a permissioned type.
+            bool isPermissioned = validGameTypes[i].raw() == GameTypes.PERMISSIONED_CANNON.raw()
+                || validGameTypes[i].raw() == GameTypes.SUPER_PERMISSIONED_CANNON.raw();
+
+            // During initial deployment, only permissioned types can be enabled, because no
+            // prestate exists for permissionless games.
+            if (_isInitialDeployment && !isPermissioned && _cfg.disputeGameConfigs[i].enabled) {
+                revert OPContractsManagerV2_InvalidGameConfigs();
+            }
         }
 
-        // We currently REQUIRE that the PermissionedDisputeGame is enabled. We may be able to
-        // remove this check at some point in the future if we stop making this assumption, but for
-        // now we explicitly assert that it is enabled.
-        if (!_cfg.disputeGameConfigs[1].enabled) {
+        // Validate that the starting respected game type corresponds to an enabled game config.
+        bool startingGameTypeFound = false;
+        for (uint256 i = 0; i < _cfg.disputeGameConfigs.length; i++) {
+            if (
+                _cfg.disputeGameConfigs[i].gameType.raw() == _cfg.startingRespectedGameType.raw()
+                    && _cfg.disputeGameConfigs[i].enabled
+            ) {
+                startingGameTypeFound = true;
+                break;
+            }
+        }
+        if (!startingGameTypeFound) {
             revert OPContractsManagerV2_InvalidGameConfigs();
         }
     }

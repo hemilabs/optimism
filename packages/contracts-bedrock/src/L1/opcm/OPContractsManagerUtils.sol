@@ -329,4 +329,79 @@ contract OPContractsManagerUtils {
     function blueprints() public view returns (IOPContractsManagerContainer.Blueprints memory) {
         return contractsContainer.blueprints();
     }
+
+    /// @notice Helper for retrieving the dispute game implementation for a given game type.
+    /// @param _gameType The game type to retrieve the implementation for.
+    /// @return The dispute game implementation.
+    function getGameImpl(GameType _gameType) public view returns (IDisputeGame) {
+        IOPContractsManagerContainer.Implementations memory impls = implementations();
+        if (_gameType.raw() == GameTypes.CANNON.raw()) {
+            return IDisputeGame(impls.faultDisputeGameImpl);
+        } else if (_gameType.raw() == GameTypes.PERMISSIONED_CANNON.raw()) {
+            return IDisputeGame(impls.permissionedDisputeGameImpl);
+        } else if (_gameType.raw() == GameTypes.CANNON_KONA.raw()) {
+            return IDisputeGame(impls.faultDisputeGameImpl);
+        } else if (_gameType.raw() == GameTypes.SUPER_CANNON.raw()) {
+            return IDisputeGame(impls.superFaultDisputeGameImpl);
+        } else if (_gameType.raw() == GameTypes.SUPER_PERMISSIONED_CANNON.raw()) {
+            return IDisputeGame(impls.superPermissionedDisputeGameImpl);
+        } else if (_gameType.raw() == GameTypes.SUPER_CANNON_KONA.raw()) {
+            return IDisputeGame(impls.superFaultDisputeGameImpl);
+        } else {
+            revert IOPContractsManagerUtils.OPContractsManagerUtils_UnsupportedGameType();
+        }
+    }
+
+    /// @notice Helper for creating game constructor arguments.
+    /// @param _l2ChainId The L2 chain ID.
+    /// @param _anchorStateRegistry The AnchorStateRegistry to use for dispute games.
+    /// @param _delayedWETH The DelayedWETH to use for dispute games.
+    /// @param _gcfg Configuration for the dispute game to create.
+    /// @return The game constructor arguments.
+    function makeGameArgs(
+        uint256 _l2ChainId,
+        IAnchorStateRegistry _anchorStateRegistry,
+        IDelayedWETH _delayedWETH,
+        IOPContractsManagerUtils.DisputeGameConfig memory _gcfg
+    )
+        public
+        view
+        returns (bytes memory)
+    {
+        IOPContractsManagerContainer.Implementations memory impls = implementations();
+
+        // Super game types require l2ChainId=0 in game args because the chain ID is
+        // embedded in the super root proof extraData, not in the game args.
+        uint32 rawGT = _gcfg.gameType.raw();
+        uint256 chainId = GameTypes.isSuperGame(_gcfg.gameType) ? 0 : _l2ChainId;
+
+        if (
+            rawGT == GameTypes.CANNON.raw() || rawGT == GameTypes.CANNON_KONA.raw()
+                || rawGT == GameTypes.SUPER_CANNON.raw() || rawGT == GameTypes.SUPER_CANNON_KONA.raw()
+        ) {
+            IOPContractsManagerUtils.FaultDisputeGameConfig memory parsedInputArgs =
+                abi.decode(_gcfg.gameArgs, (IOPContractsManagerUtils.FaultDisputeGameConfig));
+            return abi.encodePacked(
+                parsedInputArgs.absolutePrestate,
+                impls.mipsImpl,
+                address(_anchorStateRegistry),
+                address(_delayedWETH),
+                chainId
+            );
+        } else if (rawGT == GameTypes.PERMISSIONED_CANNON.raw() || rawGT == GameTypes.SUPER_PERMISSIONED_CANNON.raw()) {
+            IOPContractsManagerUtils.PermissionedDisputeGameConfig memory parsedInputArgs =
+                abi.decode(_gcfg.gameArgs, (IOPContractsManagerUtils.PermissionedDisputeGameConfig));
+            return abi.encodePacked(
+                parsedInputArgs.absolutePrestate,
+                impls.mipsImpl,
+                address(_anchorStateRegistry),
+                address(_delayedWETH),
+                chainId,
+                parsedInputArgs.proposer,
+                parsedInputArgs.challenger
+            );
+        } else {
+            revert IOPContractsManagerUtils.OPContractsManagerUtils_UnsupportedGameType();
+        }
+    }
 }

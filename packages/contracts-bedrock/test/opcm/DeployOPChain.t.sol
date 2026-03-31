@@ -184,9 +184,14 @@ contract DeployOPChain_Test is DeployOPChain_TestBase {
 
         // Check dispute game deployments
         // Validate permissionedDisputeGame (PDG) address
-        IOPContractsManager.Implementations memory impls = opcm.implementations();
-        address expectedPDGAddress = impls.permissionedDisputeGameV2Impl;
-        address actualPDGAddress = address(doo.disputeGameFactoryProxy.gameImpls(GameTypes.PERMISSIONED_CANNON));
+        GameType permGameType = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+            ? GameTypes.SUPER_PERMISSIONED_CANNON
+            : GameTypes.PERMISSIONED_CANNON;
+        IOPContractsManager.Implementations memory impls = IOPContractsManager(opcmAddr).implementations();
+        address expectedPDGAddress = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+            ? impls.superPermissionedDisputeGameImpl
+            : impls.permissionedDisputeGameImpl;
+        address actualPDGAddress = address(doo.disputeGameFactoryProxy.gameImpls(permGameType));
         assertNotEq(actualPDGAddress, address(0), "PDG address should be non-zero");
         assertEq(actualPDGAddress, expectedPDGAddress, "PDG address should match expected address");
 
@@ -230,6 +235,236 @@ contract DeployOPChain_Test is DeployOPChain_TestBase {
         view
         returns (IPermissionedDisputeGame)
     {
-        return IPermissionedDisputeGame(address(doo.disputeGameFactoryProxy.gameImpls(GameTypes.PERMISSIONED_CANNON)));
+        GameType permGameType = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+            ? GameTypes.SUPER_PERMISSIONED_CANNON
+            : GameTypes.PERMISSIONED_CANNON;
+        return IPermissionedDisputeGame(address(doo.disputeGameFactoryProxy.gameImpls(permGameType)));
+    }
+
+    function test_runWithBytes_succeeds() public {
+        bytes memory inputBytes = abi.encode(deployOPChainInput);
+        bytes memory outputBytes = deployOPChain.runWithBytes(inputBytes);
+        DeployOPChain.Output memory doo = abi.decode(outputBytes, (DeployOPChain.Output));
+
+        // covers basic non-zero and code checks are covered inside run->checkOutput.
+        _checkDeploymentAssertions(doo);
+    }
+
+    function test_run_cannonGameType_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.OPCM_V2);
+
+        deployOPChainInput.disputeGameType = GameTypes.CANNON;
+        vm.expectRevert("DeployOPChain: only PERMISSIONED_CANNON game type is supported for initial deployment");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_cannonKonaGameType_reverts() public {
+        skipIfDevFeatureDisabled(DevFeatures.OPCM_V2);
+
+        deployOPChainInput.disputeGameType = GameTypes.CANNON_KONA;
+        vm.expectRevert("DeployOPChain: only PERMISSIONED_CANNON game type is supported for initial deployment");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    /// @notice Tests that faultDisputeGame is set to address(0) and permissionedDisputeGame is set to the correct
+    /// implementation for GameTypes.PERMISSIONED_CANNON.
+    function test_run_faultDisputeGamePermissionedCannon_succeeds() public {
+        skipIfDevFeatureDisabled(DevFeatures.OPCM_V2);
+
+        deployOPChainInput.disputeGameType = GameTypes.PERMISSIONED_CANNON;
+        DeployOPChain.Output memory doo = deployOPChain.run(deployOPChainInput);
+
+        GameType permType = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+            ? GameTypes.SUPER_PERMISSIONED_CANNON
+            : GameTypes.PERMISSIONED_CANNON;
+        address expectedPermissioned = address(doo.disputeGameFactoryProxy.gameImpls(permType));
+        assertEq(address(doo.permissionedDisputeGame), expectedPermissioned, "PDG impl");
+        assertEq(address(doo.faultDisputeGame), address(0), "FDG should be set to address(0)");
+    }
+
+    /// @notice Checks for additional assertions that are not covered by the basic non-zero and code checks in
+    /// `DeployOPChain.checkOutput`.
+    /// @param doo The output of the deployment.
+    function _checkDeploymentAssertions(DeployOPChain.Output memory doo) internal view {
+        IPermissionedDisputeGame pdg = getPermissionedDisputeGame(doo);
+        assertEq(pdg.splitDepth(), disputeSplitDepth, "PDG splitDepth");
+        assertEq(pdg.maxGameDepth(), disputeMaxGameDepth, "PDG maxGameDepth");
+        assertEq(Duration.unwrap(pdg.clockExtension()), Duration.unwrap(disputeClockExtension), "PDG clockExtension");
+        assertEq(
+            Duration.unwrap(pdg.maxClockDuration()), Duration.unwrap(disputeMaxClockDuration), "PDG maxClockDuration"
+        );
+
+        // For v2 contracts, some immutable args are passed in at game creation time from DGF.gameArgs.
+        // Super game impls use a different immutable args layout so skip these checks.
+        if (!isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)) {
+            assertEq(address(pdg.proposer()), address(0), "PDG proposer");
+            assertEq(address(pdg.challenger()), address(0), "PDG challenger");
+            assertEq(Claim.unwrap(pdg.absolutePrestate()), bytes32(0), "PDG absolutePrestate");
+        }
+
+        // Custom gas token feature should reflect input
+        assertEq(doo.systemConfigProxy.isCustomGasToken(), useCustomGasToken, "SystemConfig isCustomGasToken");
+        assertEq(
+            doo.systemConfigProxy.isFeatureEnabled(Features.CUSTOM_GAS_TOKEN),
+            useCustomGasToken,
+            "SystemConfig CUSTOM_GAS_TOKEN feature"
+        );
+
+        // Verify superchainConfig is set correctly
+        assertEq(
+            address(doo.systemConfigProxy.superchainConfig()),
+            address(deployOPChainInput.superchainConfig),
+            "superchainConfig mismatch"
+        );
+
+        // OPCM v2 specific assertions
+        if (isDevFeatureEnabled(DevFeatures.OPCM_V2)) {
+            bool isSuperRoot = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+            GameType permType = isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
+            GameType konaType = isSuperRoot ? GameTypes.SUPER_CANNON_KONA : GameTypes.CANNON_KONA;
+
+            // Permissioned game must always be enabled with DEFAULT_INIT_BOND init bond
+            assertEq(doo.disputeGameFactoryProxy.initBonds(permType), deployOPChain.DEFAULT_INIT_BOND());
+            assertNotEq(address(doo.disputeGameFactoryProxy.gameImpls(permType)), address(0));
+
+            // CANNON must be disabled for initial deployment (not deployed for super root path)
+            if (!isSuperRoot) {
+                assertEq(doo.disputeGameFactoryProxy.initBonds(GameTypes.CANNON), 0, "CANNON init bond should be 0");
+                assertEq(
+                    address(doo.disputeGameFactoryProxy.gameImpls(GameTypes.CANNON)),
+                    address(0),
+                    "CANNON impl should be the zero address"
+                );
+            }
+
+            // Kona must be disabled for initial deployment
+            assertEq(doo.disputeGameFactoryProxy.initBonds(konaType), 0, "CANNON_KONA init bond should be 0");
+            assertEq(
+                address(doo.disputeGameFactoryProxy.gameImpls(konaType)),
+                address(0),
+                "CANNON_KONA impl should be the zero address"
+            );
+        }
+    }
+}
+
+contract DeployOPChain_TestFail is DeployOPChain_TestBase {
+    function test_run_zeroOpChainProxyAdminOwner_reverts() public {
+        deployOPChainInput.opChainProxyAdminOwner = address(0);
+        vm.expectRevert("DeployOPChainInput: opChainProxyAdminOwner not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroSystemConfigOwner_reverts() public {
+        deployOPChainInput.systemConfigOwner = address(0);
+        vm.expectRevert("DeployOPChainInput: systemConfigOwner not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroBatcher_reverts() public {
+        deployOPChainInput.batcher = address(0);
+        vm.expectRevert("DeployOPChainInput: batcher not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroUnsafeBlockSigner_reverts() public {
+        deployOPChainInput.unsafeBlockSigner = address(0);
+        vm.expectRevert("DeployOPChainInput: unsafeBlockSigner not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroProposer_reverts() public {
+        deployOPChainInput.proposer = address(0);
+        vm.expectRevert("DeployOPChainInput: proposer not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroChallenger_reverts() public {
+        deployOPChainInput.challenger = address(0);
+        vm.expectRevert("DeployOPChainInput: challenger not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroBasefeeScalar_reverts() public {
+        deployOPChainInput.basefeeScalar = 0;
+        vm.expectRevert("DeployOPChainInput: basefeeScalar not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroBlobBaseFeeScalar_reverts() public {
+        deployOPChainInput.blobBaseFeeScalar = 0;
+        vm.expectRevert("DeployOPChainInput: blobBaseFeeScalar not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroGasLimit_reverts() public {
+        deployOPChainInput.gasLimit = 0;
+        vm.expectRevert("DeployOPChainInput: gasLimit not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroL2ChainId_reverts() public {
+        deployOPChainInput.l2ChainId = 0;
+        vm.expectRevert("DeployOPChainInput: l2ChainId not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_l2ChainIdMatchesBlockChainId_reverts() public {
+        deployOPChainInput.l2ChainId = block.chainid;
+        vm.expectRevert("DeployOPChainInput: l2ChainId matches block.chainid");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroOpcm_reverts() public {
+        deployOPChainInput.opcm = address(0);
+        vm.expectRevert("DeployOPChainInput: opcm not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_invalidOpcmAddress_reverts() public {
+        // It should revert if the opcm address is not a contract.
+        address eoaAddress = makeAddr("EOA");
+        deployOPChainInput.opcm = eoaAddress;
+        // nosemgrep: sol-safety-expectrevert-no-args
+        vm.expectRevert();
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroDisputeMaxGameDepth_reverts() public {
+        deployOPChainInput.disputeMaxGameDepth = 0;
+        vm.expectRevert("DeployOPChainInput: disputeMaxGameDepth not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroDisputeSplitDepth_reverts() public {
+        deployOPChainInput.disputeSplitDepth = 0;
+        vm.expectRevert("DeployOPChainInput: disputeSplitDepth not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroDisputeMaxClockDuration_reverts() public {
+        deployOPChainInput.disputeMaxClockDuration = Duration.wrap(0);
+        vm.expectRevert("DeployOPChainInput: disputeMaxClockDuration not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_run_zeroDisputeAbsolutePrestate_reverts() public {
+        deployOPChainInput.disputeAbsolutePrestate = Claim.wrap(bytes32(0));
+        vm.expectRevert("DeployOPChainInput: disputeAbsolutePrestate not set");
+        deployOPChain.run(deployOPChainInput);
+    }
+
+    function test_runWithBytes_invalidInput_reverts() public {
+        // It should revert if the input bytes cannot be decoded.
+        bytes memory invalidInput = "invalid";
+        // nosemgrep: sol-safety-expectrevert-no-args
+        vm.expectRevert();
+        deployOPChain.runWithBytes(invalidInput);
+    }
+
+    function test_runWithBytes_emptyInput_reverts() public {
+        bytes memory emptyInput = "";
+        vm.expectRevert("DeployOPChain: input cannot be empty");
+        deployOPChain.runWithBytes(emptyInput);
     }
 }

@@ -18,8 +18,8 @@ import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.so
 import { IFaultDisputeGameV2 } from "interfaces/dispute/v2/IFaultDisputeGameV2.sol";
 import { ISuperFaultDisputeGame } from "interfaces/dispute/ISuperFaultDisputeGame.sol";
 import { ISuperPermissionedDisputeGame } from "interfaces/dispute/ISuperPermissionedDisputeGame.sol";
-import { IPermissionedDisputeGameV2 } from "interfaces/dispute/v2/IPermissionedDisputeGameV2.sol";
-import { Duration } from "src/dispute/lib/Types.sol";
+import { IPermissionedDisputeGame } from "interfaces/dispute/IPermissionedDisputeGame.sol";
+import { Duration, GameType, GameTypes } from "src/dispute/lib/Types.sol";
 import {
     IOPContractsManager,
     IOPContractsManagerGameTypeAdder,
@@ -132,9 +132,12 @@ contract DeployImplementations is Script {
         deployMipsSingleton(_input, output_);
         deployDisputeGameFactoryImpl(output_);
         deployAnchorStateRegistryImpl(_input, output_);
-        deployFaultDisputeGameV2Impl(_input, output_);
-        deployPermissionedDisputeGameV2Impl(_input, output_);
-        if (DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
+        deployFaultDisputeGameImpl(_input, output_);
+        deployPermissionedDisputeGameImpl(_input, output_);
+        if (
+            DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
+                || DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+        ) {
             deploySuperFaultDisputeGameImpl(_input, output_);
             deploySuperPermissionedDisputeGameImpl(_input, output_);
         }
@@ -729,8 +732,10 @@ contract DeployImplementations is Script {
         opcmImplementations.anchorStateRegistryImpl = _implementations.anchorStateRegistryImpl;
         opcmImplementations.delayedWETHImpl = _implementations.delayedWETHImpl;
         opcmImplementations.mipsImpl = _implementations.mipsImpl;
-        opcmImplementations.faultDisputeGameImpl = _implementations.faultDisputeGameV2Impl;
-        opcmImplementations.permissionedDisputeGameImpl = _implementations.permissionedDisputeGameV2Impl;
+        opcmImplementations.faultDisputeGameImpl = _implementations.faultDisputeGameImpl;
+        opcmImplementations.permissionedDisputeGameImpl = _implementations.permissionedDisputeGameImpl;
+        opcmImplementations.superFaultDisputeGameImpl = _implementations.superFaultDisputeGameImpl;
+        opcmImplementations.superPermissionedDisputeGameImpl = _implementations.superPermissionedDisputeGameImpl;
 
         IOPContractsManagerStandardValidator impl = IOPContractsManagerStandardValidator(
             DeployUtils.createDeterministic({
@@ -772,7 +777,69 @@ contract DeployImplementations is Script {
     function deployOPCMV2(Output memory _output) private {
         IOPContractsManagerV2 impl = IOPContractsManagerV2(
             DeployUtils.createDeterministic({
-                _name: "OPContractsManagerV2.sol:OPContractsManagerV2",
+                _name: "OPContractsManagerMigrator.sol:OPContractsManagerMigrator",
+                _args: DeployUtils.encodeConstructor(
+                    abi.encodeCall(IOPContractsManagerMigrator.__constructor__, (_output.opcmUtils))
+                ),
+                _salt: _salt
+            })
+        );
+        vm.label(address(impl), "OPContractsManagerMigratorImpl");
+        _output.opcmMigrator = impl;
+    }
+
+    function deployOPCMStandardValidatorV2(
+        Input memory _input,
+        Output memory _output,
+        IOPContractsManagerContainer.Implementations memory _implementations
+    )
+        private
+    {
+        IOPContractsManagerStandardValidator.Implementations memory opcmImplementations;
+        opcmImplementations.l1ERC721BridgeImpl = _implementations.l1ERC721BridgeImpl;
+        opcmImplementations.optimismPortalImpl = _implementations.optimismPortalImpl;
+        opcmImplementations.optimismPortalInteropImpl = _implementations.optimismPortalInteropImpl;
+        opcmImplementations.ethLockboxImpl = _implementations.ethLockboxImpl;
+        opcmImplementations.systemConfigImpl = _implementations.systemConfigImpl;
+        opcmImplementations.optimismMintableERC20FactoryImpl = _implementations.optimismMintableERC20FactoryImpl;
+        opcmImplementations.l1CrossDomainMessengerImpl = _implementations.l1CrossDomainMessengerImpl;
+        opcmImplementations.l1StandardBridgeImpl = _implementations.l1StandardBridgeImpl;
+        opcmImplementations.disputeGameFactoryImpl = _implementations.disputeGameFactoryImpl;
+        opcmImplementations.anchorStateRegistryImpl = _implementations.anchorStateRegistryImpl;
+        opcmImplementations.delayedWETHImpl = _implementations.delayedWETHImpl;
+        opcmImplementations.mipsImpl = _implementations.mipsImpl;
+        opcmImplementations.faultDisputeGameImpl = _implementations.faultDisputeGameImpl;
+        opcmImplementations.permissionedDisputeGameImpl = _implementations.permissionedDisputeGameImpl;
+        opcmImplementations.superFaultDisputeGameImpl = _implementations.superFaultDisputeGameImpl;
+        opcmImplementations.superPermissionedDisputeGameImpl = _implementations.superPermissionedDisputeGameImpl;
+
+        IOPContractsManagerStandardValidator impl = IOPContractsManagerStandardValidator(
+            DeployUtils.createDeterministic({
+                _name: "OPContractsManagerStandardValidator.sol:OPContractsManagerStandardValidator",
+                _args: DeployUtils.encodeConstructor(
+                    abi.encodeCall(
+                        IOPContractsManagerStandardValidator.__constructor__,
+                        (
+                            opcmImplementations,
+                            _input.superchainConfigProxy,
+                            _input.l1ProxyAdminOwner,
+                            _input.challenger,
+                            _input.withdrawalDelaySeconds,
+                            _input.devFeatureBitmap
+                        )
+                    )
+                ),
+                _salt: _salt
+            })
+        );
+        vm.label(address(impl), "OPContractsManagerStandardValidatorImpl");
+        _output.opcmStandardValidator = impl;
+    }
+
+    function deployOPCMV2(Output memory _output) private returns (IOPContractsManagerV2 opcmV2_) {
+        opcmV2_ = IOPContractsManagerV2(
+            DeployUtils.createDeterministic({
+                _name: "OPContractsManagerV2",
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(
                         IOPContractsManagerV2.__constructor__,
@@ -874,7 +941,10 @@ contract DeployImplementations is Script {
             address(_output.permissionedDisputeGameV2Impl)
         );
 
-        if (DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
+        if (
+            DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
+                || DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+        ) {
             address[] memory superGameAddrs = Solarray.addresses(
                 address(_output.superFaultDisputeGameImpl), address(_output.superPermissionedDisputeGameImpl)
             );
@@ -883,21 +953,50 @@ contract DeployImplementations is Script {
 
         DeployUtils.assertValidContractAddresses(Solarray.extend(addrs1, addrs2));
 
-        if (!DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
+        // Validate OPCM V2 flag
+        if (DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPCM_V2)) {
+            require(
+                address(_output.opcmV2) != address(0),
+                "DeployImplementations: OPCM V2 flag enabled but OPCM V2 not deployed"
+            );
+            require(
+                address(_output.opcm) == address(0),
+                "DeployImplementations: OPCM V2 flag enabled but OPCM V1 was deployed"
+            );
+        } else {
+            require(
+                address(_output.opcm) != address(0),
+                "DeployImplementations: OPCM V2 flag disabled but OPCM V1 not deployed"
+            );
+            require(
+                address(_output.opcmV2) == address(0),
+                "DeployImplementations: OPCM V2 flag disabled but OPCM V2 was deployed"
+            );
+        }
+
+        if (
+            !DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
+                && !DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION)
+        ) {
             require(
                 address(_output.superFaultDisputeGameImpl) == address(0),
-                "DeployImplementations: OptimismPortalInterop flag disabled but SuperFaultDisputeGame was deployed"
+                "DeployImplementations: super game flag disabled but SuperFaultDisputeGame was deployed"
             );
             require(
                 address(_output.superPermissionedDisputeGameImpl) == address(0),
-                "DeployImplementations: OptimismPortalInterop flag disabled but SuperPermissionedDisputeGame was deployed"
+                "DeployImplementations: super game flag disabled but SuperPermissionedDisputeGame was deployed"
             );
         }
 
         Types.ContractSet memory impls = ChainAssertions.dioToContractSet(_output);
 
         ChainAssertions.checkDelayedWETHImpl(_output.delayedWETHImpl, _input.withdrawalDelaySeconds);
-        ChainAssertions.checkDisputeGameFactory(_output.disputeGameFactoryImpl, address(0), address(0), false);
+        GameType permGameType = DevFeatures.isDevFeatureEnabled(
+            _input.devFeatureBitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION
+        ) ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
+        ChainAssertions.checkDisputeGameFactory(
+            _output.disputeGameFactoryImpl, address(0), address(0), false, permGameType
+        );
         DeployUtils.assertInitialized({
             _contractAddress: address(_output.anchorStateRegistryImpl),
             _isProxy: false,

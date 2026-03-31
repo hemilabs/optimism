@@ -33,6 +33,74 @@ func (u *UpgradeOPChainInput) OpChainConfigs() ([]byte, error) {
 	return data[4:], nil
 }
 
+// EncodedUpgradeInputV2 encodes the upgrade input for the upgrade input, assumes is not nil
+func (u *UpgradeOPChainInput) EncodedUpgradeInputV2() ([]byte, error) {
+
+	encodableConfigs := make([]EncodableDisputeGameConfig, len(u.UpgradeInputV2.DisputeGameConfigs))
+
+	// Validate and encode each game config.
+	// We iterate over the game configs in the upgrade input config and encode them into the encodable configs.
+	// We return an error if a game config is not valid.
+	for i, gameConfig := range u.UpgradeInputV2.DisputeGameConfigs {
+		var gameArgs []byte
+		var err error
+
+		if gameConfig.Enabled {
+			switch gameConfig.GameType {
+			case GameTypeCannon, GameTypeCannonKona, GameTypeSuperCannon, GameTypeSuperCannonKona:
+				if gameConfig.FaultDisputeGameConfig == nil {
+					return nil, fmt.Errorf("faultDisputeGameConfig is required for game type %d", gameConfig.GameType)
+				}
+				// Encode the fault dispute game args
+				gameArgs, err = faultEncoder.EncodeArgs(gameConfig.FaultDisputeGameConfig)
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode fault game config: %w", err)
+				}
+			case GameTypePermissionedCannon, GameTypeSuperPermCannon:
+				if gameConfig.PermissionedDisputeGameConfig == nil {
+					return nil, fmt.Errorf("permissionedDisputeGameConfig is required for game type %d", gameConfig.GameType)
+				}
+				// Encode the permissioned dispute game args
+				gameArgs, err = permEncoder.EncodeArgs(gameConfig.PermissionedDisputeGameConfig)
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode permissioned game config: %w", err)
+				}
+			default:
+				return nil, fmt.Errorf("invalid game type %d for opcm v2", gameConfig.GameType)
+			}
+
+			// Edge case check when the encoded game args length is less than 4
+			if len(gameArgs) < 4 {
+				return nil, fmt.Errorf("encoded game args length is less than 4 for game type %d", gameConfig.GameType)
+			}
+
+			// Skip the selector bytes
+			gameArgs = gameArgs[4:]
+		}
+
+		encodableConfigs[i] = EncodableDisputeGameConfig{
+			Enabled:  gameConfig.Enabled,
+			InitBond: gameConfig.InitBond,
+			GameType: uint32(gameConfig.GameType),
+			GameArgs: gameArgs,
+		}
+	}
+
+	// Create encodable input
+	encodableInput := EncodableUpgradeInput{
+		SystemConfig:       u.UpgradeInputV2.SystemConfig,
+		DisputeGameConfigs: encodableConfigs,
+		ExtraInstructions:  u.UpgradeInputV2.ExtraInstructions,
+	}
+
+	data, err := upgradeInputEncoder.EncodeArgs(encodableInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode upgrade input: %w", err)
+	}
+
+	return data[4:], nil
+}
+
 type UpgradeOPChain struct {
 	Run func(input common.Address)
 }

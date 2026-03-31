@@ -24,9 +24,21 @@ import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
-import { IOPContractsManager } from "../../interfaces/L1/IOPContractsManager.sol";
+import { GameType, GameTypes } from "src/dispute/lib/Types.sol";
+import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
 contract DeployOPChain is Script {
+    /// @notice The default init bond for the dispute games.
+    uint256 public constant DEFAULT_INIT_BOND = 0.08 ether;
+
+    /// @notice Whether to use OPCM v2.
+    bool public isOPCMv2;
+
+    /// @notice Whether the OPCM has SUPER_ROOT_GAMES_MIGRATION enabled.
+    bool public isSuperRoot;
+
+    /// @notice The output of the DeployOPChain script. This is the same as the DeployOPChainOutput type in the
+    /// op-deployer package.
     struct Output {
         IProxyAdmin opChainProxyAdmin;
         IAddressManager addressManager;
@@ -56,6 +68,54 @@ contract DeployOPChain is Script {
 
         IOPContractsManager opcm = IOPContractsManager(_input.opcm);
 
+        if (isOPCMv2) {
+            IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
+            isSuperRoot =
+                DevFeatures.isDevFeatureEnabled(opcmV2.devFeatureBitmap(), DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+            IOPContractsManagerV2.FullConfig memory config = _toOPCMV2DeployInput(_input);
+
+            vm.broadcast(msg.sender);
+            IOPContractsManagerV2.ChainContracts memory chainContracts = opcmV2.deploy(config);
+            output_ = _fromOPCMV2OutputToOutput(chainContracts);
+        } else {
+            IOPContractsManager opcm = IOPContractsManager(_input.opcm);
+            IOPContractsManager.DeployInput memory deployInput = _toOPCMV1DeployInput(_input);
+
+            vm.broadcast(msg.sender);
+            IOPContractsManager.DeployOutput memory deployOutput = opcm.deploy(deployInput);
+
+            output_ = _fromOPCMV1OutputToOutput(deployOutput);
+        }
+
+        checkOutput(_input, output_);
+
+        vm.label(address(output_.opChainProxyAdmin), "opChainProxyAdmin");
+        vm.label(address(output_.addressManager), "addressManager");
+        vm.label(address(output_.l1ERC721BridgeProxy), "l1ERC721BridgeProxy");
+        vm.label(address(output_.systemConfigProxy), "systemConfigProxy");
+        vm.label(address(output_.optimismMintableERC20FactoryProxy), "optimismMintableERC20FactoryProxy");
+        vm.label(address(output_.l1StandardBridgeProxy), "l1StandardBridgeProxy");
+        vm.label(address(output_.l1CrossDomainMessengerProxy), "l1CrossDomainMessengerProxy");
+        vm.label(address(output_.optimismPortalProxy), "optimismPortalProxy");
+        vm.label(address(output_.ethLockboxProxy), "ethLockboxProxy");
+        vm.label(address(output_.disputeGameFactoryProxy), "disputeGameFactoryProxy");
+        vm.label(address(output_.anchorStateRegistryProxy), "anchorStateRegistryProxy");
+        vm.label(address(output_.delayedWETHPermissionedGameProxy), "delayedWETHPermissionedGameProxy");
+        // TODO: Eventually switch from Permissioned to Permissionless.
+        // vm.label(address(output_.faultDisputeGame), "faultDisputeGame");
+        // vm.label(address(output_.delayedWETHPermissionlessGameProxy), "delayedWETHPermissionlessGameProxy");
+    }
+
+    // -------- Features --------
+
+    /// @notice Converts Types.DeployOPChainInput to IOPContractsManager.DeployInput.
+    /// @param _input The input parameters.
+    /// @return deployInput_ The deployed input parameters.
+    function _toOPCMV1DeployInput(Types.DeployOPChainInput memory _input)
+        internal
+        pure
+        returns (IOPContractsManager.DeployInput memory deployInput_)
+    {
         IOPContractsManager.Roles memory roles = IOPContractsManager.Roles({
             opChainProxyAdminOwner: _input.opChainProxyAdminOwner,
             systemConfigOwner: _input.systemConfigOwner,
@@ -81,25 +141,124 @@ contract DeployOPChain is Script {
             useCustomGasToken: _input.useCustomGasToken
         });
 
-        vm.broadcast(msg.sender);
-        IOPContractsManager.DeployOutput memory deployOutput = opcm.deploy(deployInput);
+    /// @notice Converts Types.DeployOPChainInput to IOPContractsManagerV2.FullConfig.
+    /// @param _input The input parameters.
+    /// @return config_ The deployed input parameters.
+    function _toOPCMV2DeployInput(Types.DeployOPChainInput memory _input)
+        internal
+        view
+        returns (IOPContractsManagerV2.FullConfig memory config_)
+    {
+        // Only PERMISSIONED_CANNON is allowed for initial deployment since no prestate exists for permissionless games.
+        require(
+            _input.disputeGameType.raw() == GameTypes.PERMISSIONED_CANNON.raw(),
+            "DeployOPChain: only PERMISSIONED_CANNON game type is supported for initial deployment"
+        );
 
-        vm.label(address(deployOutput.opChainProxyAdmin), "opChainProxyAdmin");
-        vm.label(address(deployOutput.addressManager), "addressManager");
-        vm.label(address(deployOutput.l1ERC721BridgeProxy), "l1ERC721BridgeProxy");
-        vm.label(address(deployOutput.systemConfigProxy), "systemConfigProxy");
-        vm.label(address(deployOutput.optimismMintableERC20FactoryProxy), "optimismMintableERC20FactoryProxy");
-        vm.label(address(deployOutput.l1StandardBridgeProxy), "l1StandardBridgeProxy");
-        vm.label(address(deployOutput.l1CrossDomainMessengerProxy), "l1CrossDomainMessengerProxy");
-        vm.label(address(deployOutput.optimismPortalProxy), "optimismPortalProxy");
-        vm.label(address(deployOutput.ethLockboxProxy), "ethLockboxProxy");
-        vm.label(address(deployOutput.disputeGameFactoryProxy), "disputeGameFactoryProxy");
-        vm.label(address(deployOutput.anchorStateRegistryProxy), "anchorStateRegistryProxy");
-        vm.label(address(deployOutput.permissionedDisputeGame), "permissionedDisputeGame");
-        vm.label(address(deployOutput.delayedWETHPermissionedGameProxy), "delayedWETHPermissionedGameProxy");
-        // TODO: Eventually switch from Permissioned to Permissionless.
-        // vm.label(address(deployOutput.faultDisputeGame), "faultDisputeGame");
-        // vm.label(address(deployOutput.delayedWETHPermissionlessGameProxy), "delayedWETHPermissionlessGameProxy");
+        // Shared permissioned game config — identical for both legacy and super root modes.
+        IOPContractsManagerUtils.PermissionedDisputeGameConfig memory pdgConfig = IOPContractsManagerUtils
+            .PermissionedDisputeGameConfig({
+            absolutePrestate: _input.disputeAbsolutePrestate,
+            proposer: _input.proposer,
+            challenger: _input.challenger
+        });
+
+        // Build dispute game configs - OPCMV2 requires all 6 game type configs.
+        // Order must match validGameTypes in OPContractsManagerV2._assertValidFullConfig().
+        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
+            new IOPContractsManagerUtils.DisputeGameConfig[](6);
+
+        // Config 0: CANNON (disabled for initial deployment — no prestate exists)
+        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.CANNON,
+            gameArgs: bytes("")
+        });
+
+        // Config 1: PERMISSIONED_CANNON — enabled only in non-super-root mode.
+        disputeGameConfigs[1] = isSuperRoot
+            ? IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: false,
+                initBond: 0,
+                gameType: GameTypes.PERMISSIONED_CANNON,
+                gameArgs: bytes("")
+            })
+            : IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: true,
+                initBond: DEFAULT_INIT_BOND,
+                gameType: GameTypes.PERMISSIONED_CANNON,
+                gameArgs: abi.encode(pdgConfig)
+            });
+
+        // Config 2: CANNON_KONA (disabled for initial deployment — no prestate exists)
+        disputeGameConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.CANNON_KONA,
+            gameArgs: bytes("")
+        });
+
+        // Config 3: SUPER_CANNON (disabled for initial deployment — no prestate exists)
+        disputeGameConfigs[3] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.SUPER_CANNON,
+            gameArgs: bytes("")
+        });
+
+        // Config 4: SUPER_PERMISSIONED_CANNON — enabled only in super-root mode.
+        disputeGameConfigs[4] = isSuperRoot
+            ? IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: true,
+                initBond: DEFAULT_INIT_BOND,
+                gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
+                gameArgs: abi.encode(pdgConfig)
+            })
+            : IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: false,
+                initBond: 0,
+                gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
+                gameArgs: bytes("")
+            });
+
+        // Config 5: SUPER_CANNON_KONA (disabled for initial deployment)
+        disputeGameConfigs[5] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.SUPER_CANNON_KONA,
+            gameArgs: bytes("")
+        });
+
+        config_ = IOPContractsManagerV2.FullConfig({
+            saltMixer: _input.saltMixer,
+            superchainConfig: _input.superchainConfig,
+            proxyAdminOwner: _input.opChainProxyAdminOwner,
+            systemConfigOwner: _input.systemConfigOwner,
+            unsafeBlockSigner: _input.unsafeBlockSigner,
+            batcher: _input.batcher,
+            startingAnchorRoot: ScriptConstants.DEFAULT_OUTPUT_ROOT(),
+            startingRespectedGameType: isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON,
+            basefeeScalar: _input.basefeeScalar,
+            blobBasefeeScalar: _input.blobBaseFeeScalar,
+            gasLimit: _input.gasLimit,
+            l2ChainId: _input.l2ChainId,
+            resourceConfig: Constants.DEFAULT_RESOURCE_CONFIG(),
+            disputeGameConfigs: disputeGameConfigs,
+            useCustomGasToken: _input.useCustomGasToken
+        });
+    }
+
+    /// @notice Converts IOPContractsManagerV2.ChainContracts to Output.
+    /// @param _chainContracts The chain contracts.
+    /// @return output_ The output parameters.
+    function _fromOPCMV2OutputToOutput(IOPContractsManagerV2.ChainContracts memory _chainContracts)
+        internal
+        view
+        returns (Output memory output_)
+    {
+        GameType permGameType = isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
+        address permissionedDgImpl = address(_chainContracts.disputeGameFactory.gameImpls(permGameType));
 
         output_ = Output({
             opChainProxyAdmin: deployOutput.opChainProxyAdmin,
@@ -190,11 +349,25 @@ contract DeployOPChain is Script {
             SuperchainConfig: address(0)
         });
 
-        // Check dispute games
-        // With v2 game contracts enabled, we use the predeployed pdg implementation
-        address expectedPDGImpl = IOPContractsManager(_i.opcm).implementations().permissionedDisputeGameV2Impl;
+        // Check dispute games and get superchain config
+        address expectedPDGImpl = address(_o.permissionedDisputeGame);
+
+        if (isOPCMv2) {
+            // OPCM v2: use implementations from v2 contract
+            IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_i.opcm);
+            expectedPDGImpl = isSuperRoot
+                ? opcmV2.implementations().superPermissionedDisputeGameImpl
+                : opcmV2.implementations().permissionedDisputeGameImpl;
+        } else {
+            // OPCM v1: use implementations from v1 contract
+            IOPContractsManager opcm = IOPContractsManager(_i.opcm);
+            // With v2 game contracts enabled, we use the predeployed pdg implementation
+            expectedPDGImpl = opcm.implementations().permissionedDisputeGameImpl;
+        }
+
+        GameType permGameType = isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
         ChainAssertions.checkDisputeGameFactory(
-            _o.disputeGameFactoryProxy, _i.opChainProxyAdminOwner, expectedPDGImpl, true
+            _o.disputeGameFactoryProxy, _i.opChainProxyAdminOwner, expectedPDGImpl, true, permGameType
         );
 
         ChainAssertions.checkAnchorStateRegistryProxy(_o.anchorStateRegistryProxy, true);
