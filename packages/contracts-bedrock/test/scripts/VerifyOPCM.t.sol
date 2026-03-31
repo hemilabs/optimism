@@ -75,6 +75,12 @@ abstract contract VerifyOPCM_TestInit is CommonTest {
         vm.setEnv("EXPECTED_SUPERCHAIN_CONFIG", vm.toString(address(opcm.superchainConfig())));
         vm.setEnv("EXPECTED_PROTOCOL_VERSIONS", vm.toString(address(opcm.protocolVersions())));
     }
+
+    function superGamesEnabled() internal view returns (bool) {
+        bytes32 bitmap = opcm.devFeatureBitmap();
+        return DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
+            || DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+    }
 }
 
 /// @title VerifyOPCM_Run_Test
@@ -161,10 +167,6 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
         // Grab the list of implementations.
         VerifyOPCM.OpcmContractRef[] memory refs = harness.getOpcmContractRefs(opcm, "implementations", false);
 
-        // Check if V2 dispute games feature is enabled
-        bytes32 bitmap = opcm.devFeatureBitmap();
-        bool superGamesEnabled = DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP);
-
         // Change 256 bytes at random.
         for (uint256 i = 0; i < 255; i++) {
             // Pick a random implementation to change.
@@ -172,7 +174,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
             VerifyOPCM.OpcmContractRef memory ref = refs[randomImplIndex];
 
             // Skip super dispute games when feature disabled
-            if (_isSuperDisputeGameContractRef(ref) && !superGamesEnabled) {
+            if (_isSuperDisputeGameContractRef(ref) && !superGamesEnabled()) {
                 continue;
             }
 
@@ -230,10 +232,6 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
         // Grab the list of implementations.
         VerifyOPCM.OpcmContractRef[] memory refs = harness.getOpcmContractRefs(opcm, "implementations", false);
 
-        // Check if V2 dispute games feature is enabled
-        bytes32 bitmap = opcm.devFeatureBitmap();
-        bool superGamesEnabled = DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP);
-
         // Change 256 bytes at random.
         for (uint8 i = 0; i < 255; i++) {
             // Pick a random implementation to change.
@@ -241,7 +239,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
             VerifyOPCM.OpcmContractRef memory ref = refs[randomImplIndex];
 
             // Skip super dispute games when feature disabled
-            if (_isSuperDisputeGameContractRef(ref) && !superGamesEnabled) {
+            if (_isSuperDisputeGameContractRef(ref) && !superGamesEnabled()) {
                 continue;
             }
 

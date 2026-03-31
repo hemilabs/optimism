@@ -179,6 +179,38 @@ contract VerifyOPCM is Script {
         expectedGetters["isDevFeatureEnabled"] = "SKIP";
         expectedGetters["version"] = "SKIP";
 
+        // StandardValidator getter verification methods
+        // Implementation addresses - verify against Container
+        validatorGetterChecks["l1ERC721BridgeImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["optimismPortalImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["optimismPortalInteropImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["ethLockboxImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["systemConfigImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["optimismMintableERC20FactoryImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["l1CrossDomainMessengerImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["l1StandardBridgeImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["disputeGameFactoryImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["anchorStateRegistryImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["delayedWETHImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["mipsImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["faultDisputeGameImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["permissionedDisputeGameImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["superFaultDisputeGameImpl"] = "CONTAINER_IMPL";
+        validatorGetterChecks["superPermissionedDisputeGameImpl"] = "CONTAINER_IMPL";
+
+        // Verify against env vars
+        validatorGetterChecks["superchainConfig"] = "ENV:ADDRESS:EXPECTED_SUPERCHAIN_CONFIG";
+        validatorGetterChecks["l1PAOMultisig"] = "ENV:ADDRESS:EXPECTED_L1_PAO_MULTISIG";
+        validatorGetterChecks["challenger"] = "ENV:ADDRESS:EXPECTED_CHALLENGER";
+        validatorGetterChecks["withdrawalDelaySeconds"] = "ENV:UINT256:EXPECTED_WITHDRAWAL_DELAY_SECONDS";
+
+        // Must be empty on mainnet
+        validatorGetterChecks["devFeatureBitmap"] = "ZERO_ON_MAINNET";
+
+        // Skip - no security relevance or verified elsewhere
+        validatorGetterChecks["version"] = "SKIP";
+        validatorGetterChecks["preimageOracleVersion"] = "SKIP";
+
         // Mark as ready.
         ready = true;
     }
@@ -569,7 +601,8 @@ contract VerifyOPCM is Script {
     /// @return True if super dispute games are enabled.
     function _isSuperDisputeGamesEnabled(IOPContractsManager _opcm) internal view returns (bool) {
         bytes32 bitmap = _opcm.devFeatureBitmap();
-        return DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP);
+        return DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
+            || DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
     }
 
     /// @notice Checks if a contract is a V1 dispute game implementation.
