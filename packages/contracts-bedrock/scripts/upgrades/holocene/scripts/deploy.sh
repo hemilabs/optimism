@@ -42,5 +42,4 @@ forge script DeployUpgrade.s.sol \
   "$USE_FAULT_PROOFS" \
   "$USE_PERMISSIONLESS_FAULT_PROOFS" \
   --broadcast \
-  --verify \
   --slow
