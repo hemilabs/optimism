@@ -338,6 +338,15 @@ validate-spacers: build validate-spacers-no-build
 check-kontrol-summaries-unchanged:
   ./scripts/checks/check-kontrol-summaries-unchanged.sh
 
+# Checks that the Network Upgrade Transaction (NUT) bundle is up to date.
+# Assumes contracts are already built.
+nut-bundle-check-no-build:
+  @forge script scripts/upgrade/GenerateNUTBundle.s.sol:GenerateNUTBundle --sig 'run()' > /dev/null
+  git diff --exit-code snapshots/upgrades/current-upgrade-bundle.json
+
+# Checks that the Network Upgrade Transaction (NUT) bundle is up to date.
+nut-bundle-check: build-no-tests nut-bundle-check-no-build
+
 # Runs semgrep on the contracts.
 semgrep:
   cd ../../ && semgrep scan --config .semgrep/rules/ ./packages/contracts-bedrock
