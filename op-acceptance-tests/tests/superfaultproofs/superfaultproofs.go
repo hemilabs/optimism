@@ -727,6 +727,105 @@ func RunVariedBlockTimesTest(t devtest.T, sys *presets.SimpleInterop) {
 	}
 }
 
+// RunPreForkActivationTest verifies that super-root transitions produce
+// correct results when the interop fork is scheduled but not yet active.
+// It sends an initiating message on chain A and a (reverting) executing
+// message on chain B to ensure the proof system handles interop-related
+// transactions correctly even before the fork activates.
+func RunPreForkActivationTest(t devtest.T, sys *presets.SimpleInterop) {
+	t.Require().NotNil(sys.SuperRoots, "supernode is required for this test")
+	rng := rand.New(rand.NewSource(1234))
+
+	chains := orderedChains(sys)
+	t.Require().Len(chains, 2, "expected exactly 2 interop chains")
+
+	aliceA := sys.FunderA.NewFundedEOA(eth.OneEther)
+	aliceB := aliceA.AsEL(sys.L2ELB)
+	sys.FunderB.Fund(aliceB, eth.OneEther)
+
+	// Send an initiating message on chain A (just emits a log via EventLogger).
+	eventLogger := aliceA.DeployEventLogger()
+	initMsg := aliceA.SendRandomInitMessage(rng, eventLogger, 2, 10)
+
+	// Execute the message on chain B. Interop is not active so the CrossL2Inbox
+	// call reverts, but the tx is still included. This mirrors the original action
+	// test which verified the supervisor does not re-org out reverted interop
+	// transactions when the fork is inactive.
+	execMsg := aliceB.SendExecMessage(initMsg, dsl.WithFixedGasLimit(100_000), dsl.WithExpectRevert())
+
+	endTimestamp := sys.L2ChainB.TimestampForBlockNum(bigs.Uint64Strict(execMsg.BlockNumber()))
+	t.Require().False(chains[0].Cfg.IsInterop(endTimestamp), "Interop should not be active")
+
+	sys.SuperRoots.AwaitValidatedTimestamp(endTimestamp)
+	l1Head := latestRequiredL1(sys.SuperRoots.SuperRootAtTimestamp(endTimestamp))
+
+	startTimestamp := endTimestamp - 1
+	start := superRootAtTimestamp(t, chains, startTimestamp)
+	end := superRootAtTimestamp(t, chains, endTimestamp)
+
+	firstOptimistic := optimisticBlockAtTimestamp(t, sys.SuperRoots.QueryAPI(), chains[0].ID, endTimestamp)
+	secondOptimistic := optimisticBlockAtTimestamp(t, sys.SuperRoots.QueryAPI(), chains[1].ID, endTimestamp)
+
+	step1 := marshalTransition(start, 1, firstOptimistic)
+	step2 := marshalTransition(start, 2, firstOptimistic, secondOptimistic)
+	padding := func(step uint64) []byte {
+		return marshalTransition(start, step, firstOptimistic, secondOptimistic)
+	}
+
+	tests := []*transitionTest{
+		{
+			Name:               "FirstChainOptimisticBlock",
+			AgreedClaim:        start.Marshal(),
+			DisputedClaim:      step1,
+			DisputedTraceIndex: 0,
+			L1Head:             l1Head,
+			ClaimTimestamp:     endTimestamp,
+			ExpectValid:        true,
+		},
+		{
+			Name:               "SecondChainOptimisticBlock",
+			AgreedClaim:        step1,
+			DisputedClaim:      step2,
+			DisputedTraceIndex: 1,
+			L1Head:             l1Head,
+			ClaimTimestamp:     endTimestamp,
+			ExpectValid:        true,
+		},
+		{
+			Name:               "FirstPaddingStep",
+			AgreedClaim:        step2,
+			DisputedClaim:      padding(3),
+			DisputedTraceIndex: 2,
+			L1Head:             l1Head,
+			ClaimTimestamp:     endTimestamp,
+			ExpectValid:        true,
+		},
+		{
+			Name:               "Consolidate",
+			AgreedClaim:        padding(consolidateStep),
+			DisputedClaim:      end.Marshal(),
+			DisputedTraceIndex: consolidateStep,
+			L1Head:             l1Head,
+			ClaimTimestamp:     endTimestamp,
+			ExpectValid:        true,
+		},
+	}
+
+	challengerCfg := sys.L2ChainA.Escape().L2Challengers()[0].Config()
+	gameDepth := sys.DisputeGameFactory().GameImpl(gameTypes.SuperCannonKonaGameType).SplitDepth()
+
+	for _, test := range tests {
+		t.Run(test.Name+"-fpp", func(t devtest.T) {
+			runKonaInteropProgram(t, challengerCfg.CannonKona, test.L1Head.Hash,
+				test.AgreedClaim, crypto.Keccak256Hash(test.DisputedClaim),
+				test.ClaimTimestamp, test.ExpectValid)
+		})
+		t.Run(test.Name+"-challenger", func(t devtest.T) {
+			runChallengerProviderTest(t, sys.SuperRoots.QueryAPI(), gameDepth, startTimestamp, test.ClaimTimestamp, test)
+		})
+	}
+}
+
 func RunConsolidateValidCrossChainMessageTest(t devtest.T, sys *presets.SimpleInterop) {
 	t.Require().NotNil(sys.SuperRoots, "supernode is required for this test")
 	rng := rand.New(rand.NewSource(1234))
