@@ -633,4 +633,98 @@ mod test {
             }
         );
     }
+
+    #[tokio::test]
+    async fn test_derive_and_resolve_graph_message_expired_custom_window() {
+        let mut superchain = default_superchain();
+        const CUSTOM_EXPIRY: u64 = 10;
+
+        let chain_a_time = superchain.chain(CHAIN_A_ID).header.timestamp;
+
+        superchain.chain(CHAIN_A_ID).add_initiating_message(MOCK_MESSAGE.into());
+        superchain
+            .chain(CHAIN_B_ID)
+            .with_timestamp(chain_a_time + CUSTOM_EXPIRY + 1)
+            .add_executing_message(
+                ExecutingMessageBuilder::default()
+                    .with_message_hash(keccak256(MOCK_MESSAGE))
+                    .with_origin_chain_id(CHAIN_A_ID)
+                    .with_origin_timestamp(chain_a_time),
+            );
+
+        let (headers, cfgs, provider) = superchain.build();
+
+        let graph = MessageGraph::derive(&headers, &provider, &cfgs, CUSTOM_EXPIRY).await.unwrap();
+        let MessageGraphError::InvalidMessages(invalid_messages) =
+            graph.resolve().await.unwrap_err()
+        else {
+            panic!("Expected invalid messages")
+        };
+
+        assert_eq!(invalid_messages.len(), 1);
+        assert_eq!(
+            *invalid_messages.get(&CHAIN_B_ID).unwrap(),
+            MessageGraphError::MessageExpired {
+                initiating_timestamp: chain_a_time,
+                executing_timestamp: chain_a_time + CUSTOM_EXPIRY + 1
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_derive_and_resolve_graph_message_not_expired_within_custom_window() {
+        let mut superchain = default_superchain();
+        const CUSTOM_EXPIRY: u64 = 10;
+
+        let chain_a_time = superchain.chain(CHAIN_A_ID).header.timestamp;
+
+        superchain.chain(CHAIN_A_ID).add_initiating_message(MOCK_MESSAGE.into());
+        superchain
+            .chain(CHAIN_B_ID)
+            .with_timestamp(chain_a_time + CUSTOM_EXPIRY - 1)
+            .add_executing_message(
+                ExecutingMessageBuilder::default()
+                    .with_message_hash(keccak256(MOCK_MESSAGE))
+                    .with_origin_chain_id(CHAIN_A_ID)
+                    .with_origin_timestamp(chain_a_time),
+            );
+
+        let (headers, cfgs, provider) = superchain.build();
+
+        let graph = MessageGraph::derive(&headers, &provider, &cfgs, CUSTOM_EXPIRY).await.unwrap();
+        graph.resolve().await.unwrap();
+    }
+
+    /// When a chain has been replaced with a deposit-only block, it is excluded from the headers
+    /// passed to `derive` (since deposit-only blocks cannot contain executing messages). Executing
+    /// messages on other chains that reference initiating messages from the replaced chain must
+    /// still resolve successfully, because the provider retains the replaced chain's data.
+    #[tokio::test]
+    async fn test_resolve_with_replaced_chain_excluded_from_headers() {
+        let mut superchain = default_superchain();
+
+        let chain_a_time = superchain.chain(CHAIN_A_ID).header.timestamp;
+
+        // Chain A has an initiating message. Chain B executes it.
+        superchain.chain(CHAIN_A_ID).add_initiating_message(MOCK_MESSAGE.into());
+        superchain.chain(CHAIN_B_ID).add_executing_message(
+            ExecutingMessageBuilder::default()
+                .with_message_hash(keccak256(MOCK_MESSAGE))
+                .with_origin_chain_id(CHAIN_A_ID)
+                .with_origin_timestamp(chain_a_time),
+        );
+
+        let (headers, cfgs, provider) = superchain.build();
+
+        // Simulate chain A having been replaced with a deposit-only block by excluding it
+        // from the headers passed to derive. The provider still has chain A's data.
+        let filtered_headers =
+            headers.into_iter().filter(|(chain_id, _)| *chain_id != CHAIN_A_ID).collect();
+
+        let graph =
+            MessageGraph::derive(&filtered_headers, &provider, &cfgs, MESSAGE_EXPIRY_WINDOW)
+                .await
+                .unwrap();
+        graph.resolve().await.unwrap();
+    }
 }
