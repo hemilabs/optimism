@@ -4,8 +4,40 @@ REPO_ROOT := `realpath ..`  # path to the root of the optimism monorepo
 default:
     @just acceptance-test
 
+# Build all dependencies for local acceptance test runs. Skipped in CI where jobs handle this.
+build-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${CIRCLECI:-}" ]]; then exit 0; fi
+
+    echo "Building contracts (local build)..."
+    cd {{REPO_ROOT}}
+    echo " - Installing mise..."
+    mise install
+    cd packages/contracts-bedrock
+    echo " - Installing contracts..."
+    just install
+    echo " - Forge build..."
+    just build-no-tests
+    cd {{REPO_ROOT}}
+
+    echo "Building cannon dependencies..."
+    cd {{REPO_ROOT}}
+    just cannon-prestates
+
+    echo "Building Rust binaries (kona-node, op-rbuilder, rollup-boost)..."
+    cd {{REPO_ROOT}}
+    just build-rust-release
+
+# Run specific acceptance tests. Builds dependencies first, then passes all arguments to go test.
+# Examples:
+#   just test ./op-acceptance-tests/tests/base/...
+#   just test -run TestMyTest ./op-acceptance-tests/tests/base/
+test *args: build-deps
+    cd {{REPO_ROOT}} && go test -count=1 -timeout 30m {{args}}
+
 # Run acceptance tests, optionally filtered by a gate (reads packages from gates/<gate>.txt)
-acceptance-test gate="":
+acceptance-test gate="": build-deps
     #!/usr/bin/env bash
     set -euo pipefail
     GATE="{{gate}}"
@@ -13,34 +45,6 @@ acceptance-test gate="":
         echo -e "DEVNET: in-memory, GATE: $GATE\n"
     else
         echo -e "DEVNET: in-memory, MODE: all tests\n"
-    fi
-
-    # Build dependencies for in-process mode if not in CI.
-    # In CI jobs already take care of this, so we skip it.
-    if [[ -z "${CIRCLECI:-}" ]]; then
-        echo "Building contracts (local build)..."
-        cd {{REPO_ROOT}}
-        echo " - Updating submodules..."
-        git submodule update --init --recursive --single-branch -j 8
-        echo " - Installing mise..."
-        mise install
-        cd packages/contracts-bedrock
-        echo " - Installing contracts..."
-        just install
-        echo " - Forge build..."
-        just build-no-tests
-        cd {{REPO_ROOT}}
-
-        echo "Checking cannon dependencies..."
-        if [ ! -e {{REPO_ROOT}}/cannon/bin/cannon ] || [ ! -e {{REPO_ROOT}}/op-program/bin/prestate-mt64.bin.gz ]; then
-            echo "Building cannon dependencies..."
-            cd {{REPO_ROOT}}
-            make cannon-prestates
-        fi
-
-        echo "Building Rust binaries (kona-node, op-rbuilder, rollup-boost)..."
-        cd {{REPO_ROOT}}
-        just build-rust-release
     fi
 
     LOG_LEVEL="$(echo "${LOG_LEVEL:-info}" | grep -E '^(debug|info|warn|error)$' || echo 'info')"
