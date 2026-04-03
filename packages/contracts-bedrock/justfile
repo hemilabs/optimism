@@ -360,10 +360,6 @@ valid-semver-check-no-build:
 # Checks that the semver of contracts are valid.
 valid-semver-check: build valid-semver-check-no-build
 
-# Checks that the deploy configs are valid.
-validate-deploy-configs:
-  ./scripts/checks/check-deploy-configs.sh
-
 # Checks that spacer variables are correctly inserted without building.
 validate-spacers-no-build:
   go run ./scripts/checks/spacers
@@ -405,7 +401,6 @@ check:
   strict-pragma-check-no-build \
   valid-semver-check-no-build \
   semver-diff-check-no-build \
-  validate-deploy-configs \
   validate-spacers-no-build \
   reinitializer-check-no-build \
   interfaces-check-no-build \

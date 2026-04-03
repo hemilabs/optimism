@@ -88,12 +88,8 @@ library Config {
 
     /// @notice Returns the path on the local filesystem where the deploy config is
     function deployConfigPath() internal view returns (string memory env_) {
-        if (vm.isContext(VmSafe.ForgeContext.TestGroup)) {
-            env_ = string.concat(vm.projectRoot(), "/deploy-config/hardhat.json");
-        } else {
-            env_ = vm.envOr("DEPLOY_CONFIG_PATH", string(""));
-            require(bytes(env_).length > 0, "Config: must set DEPLOY_CONFIG_PATH to filesystem path of deploy config");
-        }
+        env_ = vm.envOr("DEPLOY_CONFIG_PATH", string(""));
+        require(bytes(env_).length > 0, "Config: must set DEPLOY_CONFIG_PATH to filesystem path of deploy config");
     }
 
     /// @notice Returns the chainid from the EVM context or the value of the CHAIN_ID env var as
@@ -336,5 +332,10 @@ library Config {
     /// @notice Returns true if the system feature custom_gas_token is enabled.
     function sysFeatureCustomGasToken() internal view returns (bool) {
         return vm.envOr("SYS_FEATURE__CUSTOM_GAS_TOKEN", false);
+    }
+
+    /// @notice Returns true if running in kontrol context.
+    function isKontrolContext() internal view returns (bool) {
+        return vm.envOr("KONTROL_CONTEXT", false);
     }
 }
