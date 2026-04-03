@@ -130,7 +130,8 @@ func TestEndToEndBootstrapApply(t *testing.T) {
 
 		intent, st := shared.NewIntent(t, l1ChainID, dk, l2ChainID, loc, loc, testCustomGasLimit)
 		intent.SuperchainRoles = nil
-		intent.OPCMAddress = &impls.Opcm
+		intent.OPCMAddress = &impls.OpcmV2
+		intent.SuperchainConfigProxy = &bstrap.SuperchainConfigProxy
 
 		require.NoError(t, deployer.ApplyPipeline(
 			ctx,
@@ -169,7 +170,17 @@ func TestEndToEndBootstrapApply(t *testing.T) {
 func TestEndToEndBootstrapApplyWithUpgrade(t *testing.T) {
 	op_e2e.InitParallel(t)
 
-	lgr := testlog.Logger(t, slog.LevelDebug)
+	tests := []struct {
+		name       string
+		devFeature common.Hash
+	}{
+		// "default" (non-V2) test case removed: v1 OPCM was deleted.
+		{"opcm-v2", deployer.OPCMV2DevFlag},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op_e2e.InitParallel(t)
+			lgr := testlog.Logger(t, slog.LevelDebug)
 
 	forkedL1, stopL1, err := devnet.NewForkedSepolia(lgr)
 	require.NoError(t, err)
@@ -345,6 +356,89 @@ func TestEndToEndApply(t *testing.T) {
 		account, exists := l2Genesis[nativeAssetLiquidityAddr]
 		require.True(t, exists, "Native asset liquidity predeploy should exist in L2 genesis")
 		require.Equal(t, amount, account.Balance, "Native asset liquidity predeploy should have the configured balance")
+	})
+
+	t.Run("with L2CM", func(t *testing.T) {
+		intent, st := shared.NewIntent(t, l1ChainID, dk, l2ChainID1, loc, loc, testCustomGasLimit)
+
+		intent.GlobalDeployOverrides = map[string]any{
+			"devFeatureBitmap": deployer.L2CMDevFlag,
+		}
+
+		require.NoError(t, deployer.ApplyPipeline(ctx, deployer.ApplyPipelineOpts{
+			DeploymentTarget:   deployer.DeploymentTargetLive,
+			L1RPCUrl:           l1RPC,
+			DeployerPrivateKey: pk,
+			Intent:             intent,
+			State:              st,
+			Logger:             lgr,
+			StateWriter:        pipeline.NoopStateWriter(),
+			CacheDir:           testCacheDir,
+		}))
+
+		// Check that the conditional deployer predeploy is deployed in L2 genesis
+		conditionalDeployerAddr := common.HexToAddress("0x420000000000000000000000000000000000002C")
+		l2Genesis := st.Chains[0].Allocs.Data.Accounts
+		account, exists := l2Genesis[conditionalDeployerAddr]
+		require.True(t, exists, "Conditional deployer should exist in L2 genesis")
+		require.NotEmpty(t, account.Code, "Conditional deployer should have code deployed")
+	})
+
+	t.Run("OPCMV2 deployment", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		lgr := testlog.Logger(t, slog.LevelDebug)
+		l1RPC, l1Client := devnet.DefaultAnvilRPC(t, lgr)
+		_, pk, dk := shared.DefaultPrivkey(t)
+		l1ChainID := new(big.Int).SetUint64(devnet.DefaultChainID)
+		l2ChainID := uint256.NewInt(1)
+		loc, _ := testutil.LocalArtifacts(t)
+		testCacheDir := testutils.IsolatedTestDirWithAutoCleanup(t)
+
+		intent, st := shared.NewIntent(t, l1ChainID, dk, l2ChainID, loc, loc, testCustomGasLimit)
+
+		// Enable OPCMV2 dev flag
+		intent.GlobalDeployOverrides = map[string]any{
+			"devFeatureBitmap": deployer.OPCMV2DevFlag,
+		}
+
+		require.NoError(t, deployer.ApplyPipeline(
+			ctx,
+			deployer.ApplyPipelineOpts{
+				DeploymentTarget:   deployer.DeploymentTargetLive,
+				L1RPCUrl:           l1RPC,
+				DeployerPrivateKey: pk,
+				Intent:             intent,
+				State:              st,
+				Logger:             lgr,
+				StateWriter:        pipeline.NoopStateWriter(),
+				CacheDir:           testCacheDir,
+			},
+		))
+
+		// Verify that OPCMV2 was deployed in implementations
+		require.NotEmpty(t, st.ImplementationsDeployment.OpcmV2Impl, "OPCMV2 implementation should be deployed")
+		require.NotEmpty(t, st.ImplementationsDeployment.OpcmContainerImpl, "OPCM container implementation should be deployed")
+		require.NotEmpty(t, st.ImplementationsDeployment.OpcmStandardValidatorImpl, "OPCM standard validator implementation should be deployed")
+		require.NotEmpty(t, st.ImplementationsDeployment.OpcmInteropMigratorImpl, "OPCM interop migrator implementation should be deployed")
+
+		// Verify that implementations are deployed on L1
+		cg := ethClientCodeGetter(ctx, l1Client)
+
+		opcmV2Code := cg(t, st.ImplementationsDeployment.OpcmV2Impl)
+		require.NotEmpty(t, opcmV2Code, "OPCMV2 should have code deployed")
+
+		// Verify that the dev feature bitmap is set to OPCMV2
+		require.Equal(t, deployer.OPCMV2DevFlag, intent.GlobalDeployOverrides["devFeatureBitmap"])
+
+		// OpcmImpl is populated with the v2 address for downstream compat (v1 deleted)
+		require.Equal(t, st.ImplementationsDeployment.OpcmV2Impl, st.ImplementationsDeployment.OpcmImpl, "OpcmImpl should equal OpcmV2Impl")
+		// V1 sub-contract addresses are zero (v1 deleted, deprecated output fields)
+		require.Equal(t, common.Address{}, st.ImplementationsDeployment.OpcmContractsContainerImpl, "OPCM container implementation should be zero")
+		require.Equal(t, common.Address{}, st.ImplementationsDeployment.OpcmGameTypeAdderImpl, "OPCM game type adder implementation should be zero")
+		require.Equal(t, common.Address{}, st.ImplementationsDeployment.OpcmDeployerImpl, "OPCM deployer implementation should be zero")
+		require.Equal(t, common.Address{}, st.ImplementationsDeployment.OpcmUpgraderImpl, "OPCM upgrader implementation should be zero")
 	})
 }
 
@@ -1105,7 +1199,7 @@ func validateSuperchainDeployment(t *testing.T, st *state.State, cg codeGetter, 
 		{"SuperchainProxyAdminImpl", st.SuperchainDeployment.SuperchainProxyAdminImpl},
 		{"SuperchainConfigProxy", st.SuperchainDeployment.SuperchainConfigProxy},
 		{"ProtocolVersionsProxy", st.SuperchainDeployment.ProtocolVersionsProxy},
-		{"OpcmImpl", st.ImplementationsDeployment.OpcmImpl},
+		{"OpcmV2Impl", st.ImplementationsDeployment.OpcmV2Impl},
 		{"PreimageOracleImpl", st.ImplementationsDeployment.PreimageOracleImpl},
 		{"MipsImpl", st.ImplementationsDeployment.MipsImpl},
 	}

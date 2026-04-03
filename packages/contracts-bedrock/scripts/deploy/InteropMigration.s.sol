@@ -3,8 +3,9 @@ pragma solidity 0.8.15;
 
 import { Script } from "forge-std/Script.sol";
 import { BaseDeployIO } from "scripts/deploy/BaseDeployIO.sol";
-import { IOPContractsManagerInteropMigrator, IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
-import { Duration, Proposal, Hash } from "src/dispute/lib/Types.sol";
+import { IOPContractsManagerMigrator } from "interfaces/L1/opcm/IOPContractsManagerMigrator.sol";
+import { ISemver } from "interfaces/universal/ISemver.sol";
+import { SemverComp } from "src/libraries/SemverComp.sol";
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { IOptimismPortal2 as IOptimismPortal } from "interfaces/L1/IOptimismPortal2.sol";
@@ -40,50 +41,11 @@ contract InteropMigrationInput is BaseDeployIO {
         else revert("InteropMigrationInput: unknown selector");
     }
 
-    function set(bytes4 _sel, bool _value) public {
-        if (_sel == this.usePermissionlessGame.selector) _usePermissionlessGame = _value;
-        else revert("InteropMigrationInput: unknown selector");
-    }
-
-    function set(bytes4 _sel, uint256 _value) public {
-        if (_sel == this.maxGameDepth.selector) {
-            require(_value != 0, "InteropMigrationInput: maxGameDepth cannot be 0");
-            _maxGameDepth = _value;
-        } else if (_sel == this.splitDepth.selector) {
-            require(_value != 0, "InteropMigrationInput: splitDepth cannot be 0");
-            _splitDepth = _value;
-        } else if (_sel == this.initBond.selector) {
-            require(_value != 0, "InteropMigrationInput: initBond cannot be 0");
-            _initBond = _value;
-        } else if (_sel == this.clockExtension.selector) {
-            require(_value <= type(uint64).max, "InteropMigrationInput: clockExtension must fit inside uint64");
-            require(_value != 0, "InteropMigrationInput: clockExtension cannot be 0");
-            _clockExtension = _value;
-        } else if (_sel == this.maxClockDuration.selector) {
-            require(_value <= type(uint64).max, "InteropMigrationInput: maxClockDuration must fit inside uint64");
-            require(_value != 0, "InteropMigrationInput: maxClockDuration cannot be 0");
-            _maxClockDuration = _value;
-        } else if (_sel == this.startingAnchorL2SequenceNumber.selector) {
-            require(_value != 0, "InteropMigrationInput: startingAnchorL2SequenceNumber cannot be 0");
-            _startingAnchorL2SequenceNumber = _value;
-        } else {
-            revert("InteropMigrationInput: unknown selector");
-        }
-    }
-
-    function set(bytes4 _sel, bytes32 _value) public {
-        if (_sel == this.startingAnchorRoot.selector) {
-            require(_value != bytes32(0), "InteropMigrationInput: startingAnchorRoot cannot be 0");
-            _startingAnchorRoot = _value;
-        } else {
-            revert("InteropMigrationInput: unknown selector");
-        }
-    }
-
-    function set(bytes4 _sel, IOPContractsManager.OpChainConfig[] memory _value) public {
-        require(_value.length > 0, "InteropMigrationInput: cannot set empty array");
-
-        if (_sel == this.opChainConfigs.selector) _opChainConfigs = abi.encode(_value);
+    /// @notice Sets the migrate input using the IOPContractsManagerMigrator.MigrateInput type.
+    /// @param _sel The selector of the field to set.
+    /// @param _value The value to set.
+    function set(bytes4 _sel, IOPContractsManagerMigrator.MigrateInput memory _value) public {
+        if (_sel == this.migrateInput.selector) _migrateInput = abi.encode(_value);
         else revert("InteropMigrationInput: unknown selector");
     }
 
@@ -169,9 +131,12 @@ contract InteropMigrationOutput is BaseDeployIO {
 
 contract InteropMigration is Script {
     function run(InteropMigrationInput _imi, InteropMigrationOutput _imo) public {
-        IOPContractsManager opcm = _imi.opcm();
-        IOPContractsManager.OpChainConfig[] memory opChainConfigs =
-            abi.decode(_imi.opChainConfigs(), (IOPContractsManager.OpChainConfig[]));
+        address opcm = _imi.opcm();
+        require(opcm.code.length > 0, "InteropMigration: OPCM address has no code");
+        require(
+            SemverComp.gte(ISemver(opcm).version(), "7.0.0"),
+            "InteropMigration: OPCM must be v7.0.0 or later (OPCMv2). OPCMv1 is no longer supported."
+        );
 
         IOPContractsManagerInteropMigrator.MigrateInput memory inputs = IOPContractsManagerInteropMigrator.MigrateInput({
             usePermissionlessGame: _imi.usePermissionlessGame(),
@@ -196,14 +161,16 @@ contract InteropMigration is Script {
         address prank = _imi.prank();
         bytes memory code = vm.getDeployedCode("InteropMigration.s.sol:DummyCaller");
         vm.etch(prank, code);
-        vm.store(prank, bytes32(0), bytes32(uint256(uint160(address(opcm)))));
+        vm.store(prank, bytes32(0), bytes32(uint256(uint160(opcm))));
         vm.label(prank, "DummyCaller");
 
-        // Call into the DummyCaller. This will perform the delegatecall under the hood and
-        // return the result.
-        vm.broadcast(msg.sender);
-        (bool success,) = DummyCaller(prank).migrate(inputs);
-        require(success, "InteropMigration: migrate failed");
+        // Call into the DummyCaller. This will perform the delegatecall under the hood.
+        // The DummyCaller uses a fallback that reverts on failure, so no need to check success.
+        vm.startBroadcast(msg.sender);
+        IOPContractsManagerMigrator(prank).migrate(
+            abi.decode(_imi.migrateInput(), (IOPContractsManagerMigrator.MigrateInput))
+        );
+        vm.stopBroadcast();
 
         // After migration all portals will have the same DGF
         IOptimismPortal portal = IOptimismPortal(payable(opChainConfigs[0].systemConfigProxy.optimismPortal()));
@@ -212,12 +179,22 @@ contract InteropMigration is Script {
         checkOutput(_imi, _imo);
     }
 
-    function checkOutput(InteropMigrationInput _imi, InteropMigrationOutput _imo) public view {
-        IOPContractsManager.OpChainConfig[] memory opChainConfigs =
-            abi.decode(_imi.opChainConfigs(), (IOPContractsManager.OpChainConfig[]));
+    /// @notice Helper function to set the dispute game factory in the output.
+    /// @param _imi The migration input.
+    /// @param _imo The migration output.
+    function _setDisputeGameFactory(InteropMigrationInput _imi, InteropMigrationOutput _imo) internal {
+        IOPContractsManagerMigrator.MigrateInput memory migrateInput =
+            abi.decode(_imi.migrateInput(), (IOPContractsManagerMigrator.MigrateInput));
+        IOptimismPortal portal = IOptimismPortal(payable(migrateInput.chainSystemConfigs[0].optimismPortal()));
+        _imo.set(_imo.disputeGameFactory.selector, portal.disputeGameFactory());
+    }
 
-        for (uint256 i = 0; i < opChainConfigs.length; i++) {
-            IOptimismPortal portal = IOptimismPortal(payable(opChainConfigs[i].systemConfigProxy.optimismPortal()));
+    function checkOutput(InteropMigrationInput _imi, InteropMigrationOutput _imo) public view {
+        IOPContractsManagerMigrator.MigrateInput memory migrateInput =
+            abi.decode(_imi.migrateInput(), (IOPContractsManagerMigrator.MigrateInput));
+
+        for (uint256 i = 0; i < migrateInput.chainSystemConfigs.length; i++) {
+            IOptimismPortal portal = IOptimismPortal(payable(migrateInput.chainSystemConfigs[i].optimismPortal()));
             require(
                 IDisputeGameFactory(portal.disputeGameFactory()) == _imo.disputeGameFactory(),
                 "InteropMigration: disputeGameFactory mismatch"

@@ -12,19 +12,23 @@ import { CommonTest } from "test/setup/CommonTest.sol";
 import { VerifyOPCM } from "scripts/deploy/VerifyOPCM.s.sol";
 
 // Interfaces
-import { IOPContractsManager, IOPContractsManagerUpgrader } from "interfaces/L1/IOPContractsManager.sol";
+import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContractsManagerStandardValidator.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOptimismPortal2 } from "interfaces/L1/IOptimismPortal2.sol";
+import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IMIPS64 } from "interfaces/cannon/IMIPS64.sol";
 
 contract VerifyOPCM_Harness is VerifyOPCM {
     function loadArtifactInfo(string memory _artifactPath) public view returns (ArtifactInfo memory) {
         return _loadArtifactInfo(_artifactPath);
     }
 
-    function getOpcmPropertyRefs(IOPContractsManager _opcm) public returns (OpcmContractRef[] memory) {
+    function getOpcmPropertyRefs(IOPContractsManagerV2 _opcm) public returns (OpcmContractRef[] memory) {
         return _getOpcmPropertyRefs(_opcm);
     }
 
     function getOpcmContractRefs(
-        IOPContractsManager _opcm,
+        IOPContractsManagerV2 _opcm,
         string memory _property,
         bool _blueprint
     )
@@ -42,7 +46,11 @@ contract VerifyOPCM_Harness is VerifyOPCM {
         return _verifyContractsContainerConsistency(_propRefs);
     }
 
-    function verifyOpcmImmutableVariables(IOPContractsManager _opcm) public returns (bool) {
+    function verifyOpcmUtilsConsistency(OpcmContractRef[] memory _propRefs) public view {
+        return _verifyOpcmUtilsConsistency(_propRefs);
+    }
+
+    function verifyOpcmImmutableVariables(IOPContractsManagerV2 _opcm) public returns (bool) {
         return _verifyOpcmImmutableVariables(_opcm);
     }
 
@@ -57,23 +65,66 @@ contract VerifyOPCM_Harness is VerifyOPCM {
     function removeExpectedGetter(string memory _getter) public {
         expectedGetters[_getter] = "";
     }
+
+    function verifyPreimageOracle(IMIPS64 _mips) public view returns (bool) {
+        return _verifyPreimageOracle(_mips);
+    }
+
+    function verifyPortalDelays(IOptimismPortal2 _portal) public view returns (bool) {
+        return _verifyPortalDelays(_portal);
+    }
+
+    function verifyAnchorStateRegistryDelays(IAnchorStateRegistry _asr) public view returns (bool) {
+        return _verifyAnchorStateRegistryDelays(_asr);
+    }
+
+    function verifyStandardValidatorArgs(IOPContractsManagerV2 _opcm, address _validator) public returns (bool) {
+        return _verifyStandardValidatorArgs(_opcm, _validator);
+    }
+
+    function setValidatorGetterCheck(string memory _getter, string memory _check) public {
+        validatorGetterChecks[_getter] = _check;
+    }
 }
 
 /// @title VerifyOPCM_TestInit
 /// @notice Reusable test initialization for `VerifyOPCM` tests.
 abstract contract VerifyOPCM_TestInit is CommonTest {
     VerifyOPCM_Harness internal harness;
+    IOPContractsManagerV2 internal opcm;
 
     function setUp() public virtual override {
         super.setUp();
         harness = new VerifyOPCM_Harness();
         harness.setUp();
+
+        opcm = IOPContractsManagerV2(address(opcmV2));
+
+        // Always set up the environment variables for the test.
+        setupEnvVars();
+
+        // Set the OPCM address.
+        vm.setEnv("OPCM_ADDRESS", vm.toString(address(opcm)));
     }
 
     /// @notice Sets up the environment variables for the VerifyOPCM test.
     function setupEnvVars() public {
-        vm.setEnv("EXPECTED_SUPERCHAIN_CONFIG", vm.toString(address(opcm.superchainConfig())));
-        vm.setEnv("EXPECTED_PROTOCOL_VERSIONS", vm.toString(address(opcm.protocolVersions())));
+        // Grab a reference to the validator.
+        IOPContractsManagerStandardValidator validator =
+            IOPContractsManagerStandardValidator(opcm.opcmStandardValidator());
+
+        // Fetch all of the expected values from existing contracts, this just makes the tests pass
+        // by default. We will override these with bad values during tests to demonstrate that the
+        // script correctly rejects them.
+        vm.setEnv("EXPECTED_L1_PAO_MULTISIG", vm.toString(validator.l1PAOMultisig()));
+        vm.setEnv("EXPECTED_CHALLENGER", vm.toString(validator.challenger()));
+        vm.setEnv("EXPECTED_WITHDRAWAL_DELAY_SECONDS", vm.toString(validator.withdrawalDelaySeconds()));
+        vm.setEnv("EXPECTED_SUPERCHAIN_CONFIG", vm.toString(address(optimismPortal2.superchainConfig())));
+        vm.setEnv("EXPECTED_PROOF_MATURITY_DELAY_SECONDS", vm.toString(optimismPortal2.proofMaturityDelaySeconds()));
+        vm.setEnv(
+            "EXPECTED_DISPUTE_GAME_FINALITY_DELAY_SECONDS",
+            vm.toString(anchorStateRegistry.disputeGameFinalityDelaySeconds())
+        );
     }
 
     function superGamesEnabled() internal view returns (bool) {
@@ -143,7 +194,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
 
         // Mock opcm to return a non-zero dev feature bitmap.
         vm.mockCall(
-            address(opcm), abi.encodeCall(IOPContractsManager.devFeatureBitmap, ()), abi.encode(_devFeatureBitmap)
+            address(opcm), abi.encodeCall(IOPContractsManagerV2.devFeatureBitmap, ()), abi.encode(_devFeatureBitmap)
         );
 
         // Set the chain ID to 1.
@@ -375,7 +426,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
                 // Mock this specific component to return a different address
                 vm.mockCall(
                     propRefs[i].addr,
-                    abi.encodeCall(IOPContractsManagerUpgrader.contractsContainer, ()),
+                    abi.encodeCall(IOPContractsManagerV2.contractsContainer, ()),
                     abi.encode(differentContainer)
                 );
 
@@ -393,8 +444,66 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
         assertGt(componentsWithContainerTested, 0, "Should have tested at least one component");
     }
 
-    function _isDisputeGameV2ContractRef(VerifyOPCM.OpcmContractRef memory ref) internal pure returns (bool) {
-        return LibString.eq(ref.name, "FaultDisputeGameV2") || LibString.eq(ref.name, "PermissionedDisputeGameV2");
+    /// @notice Tests that the script verifies all component contracts with opcmUtils() have the same address.
+    function test_verifyOpcmUtilsConsistency_succeeds() public {
+        skipIfUnoptimized();
+
+        // Get the property references (which include the component addresses)
+        VerifyOPCM.OpcmContractRef[] memory propRefs = harness.getOpcmPropertyRefs(opcm);
+
+        // This should succeed with the current setup where all contracts have the same opcmUtils address.
+        harness.verifyOpcmUtilsConsistency(propRefs);
+    }
+
+    /// @notice Tests that the script reverts when contracts have different opcmUtils addresses.
+    function test_verifyOpcmUtilsConsistency_mismatch_reverts() public {
+        skipIfUnoptimized();
+
+        // Get the property references (which include the component addresses)
+        VerifyOPCM.OpcmContractRef[] memory propRefs = harness.getOpcmPropertyRefs(opcm);
+
+        // Create a different address to simulate a mismatch.
+        address differentUtils = address(0x9999999999999999999999999999999999999999);
+
+        // Mock the first component with opcmUtils() to return a different address
+        _mockFirstOpcmUtilsComponent(propRefs, differentUtils);
+
+        // Now the consistency check should fail.
+        vm.expectRevert(VerifyOPCM.VerifyOPCM_OpcmUtilsMismatch.selector);
+        harness.verifyOpcmUtilsConsistency(propRefs);
+    }
+
+    /// @notice Tests that each OPCM component with opcmUtils() can be individually tested for mismatch.
+    function test_verifyOpcmUtilsConsistency_eachComponent_reverts() public {
+        skipIfUnoptimized();
+
+        // Get the property references (which include the component addresses)
+        VerifyOPCM.OpcmContractRef[] memory propRefs = harness.getOpcmPropertyRefs(opcm);
+
+        // Test each OPCM component individually (only those that actually have opcmUtils())
+        address differentUtils = address(0x9999999999999999999999999999999999999999);
+
+        uint256 componentsWithUtilsTested = 0;
+        for (uint256 i = 0; i < propRefs.length; i++) {
+            string memory field = propRefs[i].field;
+            if (_hasOpcmUtils(field)) {
+                // Mock this specific component to return a different address
+                vm.mockCall(
+                    propRefs[i].addr, abi.encodeCall(IOPContractsManagerV2.opcmUtils, ()), abi.encode(differentUtils)
+                );
+
+                // The consistency check should fail
+                vm.expectRevert(VerifyOPCM.VerifyOPCM_OpcmUtilsMismatch.selector);
+                harness.verifyOpcmUtilsConsistency(propRefs);
+
+                // Clear the mock for next iteration
+                vm.clearMockedCalls();
+                componentsWithUtilsTested++;
+            }
+        }
+
+        // Ensure we actually tested some components (currently: opcmV2, opcmMigrator)
+        assertGt(componentsWithUtilsTested, 0, "Should have tested at least one component with opcmUtils");
     }
 
     function _isSuperDisputeGameContractRef(VerifyOPCM.OpcmContractRef memory ref) internal pure returns (bool) {
@@ -411,7 +520,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
             if (_hasContractsContainer(field)) {
                 vm.mockCall(
                     _propRefs[i].addr,
-                    abi.encodeCall(IOPContractsManagerUpgrader.contractsContainer, ()),
+                    abi.encodeCall(IOPContractsManagerV2.contractsContainer, ()),
                     abi.encode(_mockAddress)
                 );
                 return;
@@ -473,40 +582,6 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
 
         // Clear mock calls and restore original environment variables to avoid test isolation issues
         vm.clearMockedCalls();
-    }
-
-    /// @notice Tests that the script fails when OPCM immutable variables are invalid.
-    /// We test this by setting expected addresses and mocking OPCM methods to return different addresses.
-    function test_verifyOpcmImmutableVariables_mismatch_fails() public {
-        // Coverage changes bytecode and causes failures, skip.
-        skipIfCoverage();
-
-        // If OPCM V2 is enabled because we do not use environment variables for OPCM V2.
-        skipIfDevFeatureEnabled(DevFeatures.OPCM_V2);
-
-        // Set expected addresses via environment variables
-        address expectedSuperchainConfig = address(0x1111);
-        address expectedProtocolVersions = address(0x2222);
-
-        // Use vm.mockCall instead of vm.setEnv to avoid global env mutation. We need to ignore
-        // semgrep here because envAddress has multiple potential signatures so we can't use
-        // abi.encodeCall.
-        // nosemgrep: sol-style-use-abi-encodecall
-        vm.mockCall(
-            address(vm),
-            abi.encodeWithSignature("envAddress(string)", "EXPECTED_SUPERCHAIN_CONFIG"),
-            abi.encode(expectedSuperchainConfig)
-        );
-        // nosemgrep: sol-style-use-abi-encodecall
-        vm.mockCall(
-            address(vm),
-            abi.encodeWithSignature("envAddress(string)", "EXPECTED_PROTOCOL_VERSIONS"),
-            abi.encode(expectedProtocolVersions)
-        );
-
-        // Test that mocking each individual getter causes verification to fail
-        _assertOnOpcmGetter(IOPContractsManager.superchainConfig.selector);
-        _assertOnOpcmGetter(IOPContractsManager.protocolVersions.selector);
     }
 
     /// @notice Tests that the ABI getter validation succeeds when all getters are accounted for.

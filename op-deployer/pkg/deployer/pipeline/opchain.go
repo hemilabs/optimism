@@ -104,6 +104,11 @@ func makeDCI(intent *state.Intent, thisIntent *state.ChainIntent, chainID common
 		return opcm.DeployOPChainInput{}, fmt.Errorf("error merging proof params from overrides: %w", err)
 	}
 
+	opcmAddr := st.ImplementationsDeployment.OpcmV2Impl
+	if opcmAddr == (common.Address{}) {
+		return opcm.DeployOPChainInput{}, fmt.Errorf("OPCM implementation is not deployed")
+	}
+
 	return opcm.DeployOPChainInput{
 		OpChainProxyAdminOwner:       thisIntent.Roles.L1ProxyAdminOwner,
 		SystemConfigOwner:            thisIntent.Roles.SystemConfigOwner,

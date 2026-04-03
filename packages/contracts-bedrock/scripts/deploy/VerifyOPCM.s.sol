@@ -13,10 +13,13 @@ import { Process } from "scripts/libraries/Process.sol";
 import { Config } from "scripts/libraries/Config.sol";
 import { Bytes } from "src/libraries/Bytes.sol";
 import { DevFeatures } from "src/libraries/DevFeatures.sol";
-import { SemverComp } from "src/libraries/SemverComp.sol";
+import { Constants } from "src/libraries/Constants.sol";
 
 // Interfaces
-import { IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOptimismPortal2 } from "interfaces/L1/IOptimismPortal2.sol";
+import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IMIPS64 } from "interfaces/cannon/IMIPS64.sol";
 
 /// @title VerifyOPCM
 /// @notice Verifies the bytecode of an OPContractsManager instance and all associated blueprints
@@ -143,13 +146,6 @@ contract VerifyOPCM is Script {
         fieldNameOverrides["opcmV2"] = "OPContractsManagerV2";
         fieldNameOverrides["opcmUtils"] = "OPContractsManagerUtils";
 
-        // Overrides for situations where contracts have differently named source files.
-        sourceNameOverrides["OPContractsManagerGameTypeAdder"] = "OPContractsManager";
-        sourceNameOverrides["OPContractsManagerDeployer"] = "OPContractsManager";
-        sourceNameOverrides["OPContractsManagerUpgrader"] = "OPContractsManager";
-        sourceNameOverrides["OPContractsManagerInteropMigrator"] = "OPContractsManager";
-        sourceNameOverrides["OPContractsManagerContractsContainer"] = "OPContractsManager";
-
         // Expected getter functions and their verification methods.
         // CRITICAL: Any getter in the ABI that's not in this list will cause verification to fail.
         // NEVER add a getter without understanding HOW it's being verified!
@@ -232,7 +228,7 @@ contract VerifyOPCM is Script {
         // This function is used as part of the release checklist to verify new contracts.
         // Rather than requiring an opcm input parameter, just pass in an empty reference
         // as we really only need this for features that are in development.
-        IOPContractsManager emptyOpcm = IOPContractsManager(address(0));
+        IOPContractsManagerV2 emptyOpcm = IOPContractsManagerV2(address(0));
         _verifyOpcmContractRef(
             emptyOpcm,
             OpcmContractRef({ field: _name, name: _name, addr: _addr, blueprint: false }),
@@ -257,7 +253,7 @@ contract VerifyOPCM is Script {
         }
 
         // Fetch Implementations & Blueprints from OPCM
-        IOPContractsManager opcm = IOPContractsManager(_opcmAddress);
+        IOPContractsManagerV2 opcm = IOPContractsManagerV2(_opcmAddress);
 
         // Validate that all ABI getters are accounted for.
         _validateAllGettersAccounted();
@@ -287,7 +283,7 @@ contract VerifyOPCM is Script {
     /// @notice Collects all the references from the OPCM contract.
     /// @param _opcm The live OPCM contract.
     /// @return Array of OpcmContractRef structs containing contract names/addresses.
-    function _collectOpcmContractRefs(IOPContractsManager _opcm) internal returns (OpcmContractRef[] memory) {
+    function _collectOpcmContractRefs(IOPContractsManagerV2 _opcm) internal returns (OpcmContractRef[] memory) {
         // Collect property references.
         OpcmContractRef[] memory propRefs = _getOpcmPropertyRefs(_opcm);
         if (propRefs.length == 0) {
@@ -328,8 +324,7 @@ contract VerifyOPCM is Script {
         refs[0] = OpcmContractRef({ field: "opcm", name: _opcmContractName(), addr: address(_opcm), blueprint: false });
         refs[1] = OpcmContractRef({
             field: "contractsContainer",
-            // nosemgrep: sol-style-vm-env-only-in-config-sol
-            name: _isOPCMV2() ? "OPContractsManagerContainer" : "OPContractsManagerContractsContainer",
+            name: "OPContractsManagerContainer",
             addr: contractsContainerAddr,
             blueprint: false
         });
@@ -445,7 +440,7 @@ contract VerifyOPCM is Script {
     /// @param _skipConstructorVerification Whether to skip constructor verification.
     /// @return True if the contract reference is verified, false otherwise.
     function _verifyOpcmContractRef(
-        IOPContractsManager _opcm,
+        IOPContractsManagerV2 _opcm,
         OpcmContractRef memory _target,
         bool _skipConstructorVerification
     )
@@ -549,7 +544,7 @@ contract VerifyOPCM is Script {
 
         // If this is the OPCM contract itself, verify the immutable variables as well.
         if (keccak256(bytes(_target.field)) == keccak256(bytes("opcm"))) {
-            success = _verifyOpcmImmutableVariables(IOPContractsManager(_target.addr)) && success;
+            success = _verifyOpcmImmutableVariables(IOPContractsManagerV2(_target.addr)) && success;
         }
 
         // Log final status for this field.
@@ -599,7 +594,7 @@ contract VerifyOPCM is Script {
     /// @notice Checks if super dispute games feature is enabled in the dev feature bitmap.
     /// @param _opcm The OPContractsManager to check.
     /// @return True if super dispute games are enabled.
-    function _isSuperDisputeGamesEnabled(IOPContractsManager _opcm) internal view returns (bool) {
+    function _isSuperDisputeGamesEnabled(IOPContractsManagerV2 _opcm) internal view returns (bool) {
         bytes32 bitmap = _opcm.devFeatureBitmap();
         return DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP)
             || DevFeatures.isDevFeatureEnabled(bitmap, DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
@@ -631,7 +626,7 @@ contract VerifyOPCM is Script {
     /// @notice Verifies that the immutable variables in the OPCM contract match expected values.
     /// @param _opcm The OPCM contract to verify immutable variables for.
     /// @return True if all immutable variables are verified, false otherwise.
-    function _verifyOpcmImmutableVariables(IOPContractsManager _opcm) internal returns (bool) {
+    function _verifyOpcmImmutableVariables(IOPContractsManagerV2 _opcm) internal returns (bool) {
         console.log("  Verifying OPCM immutable variables...");
 
         bool success = true;
@@ -810,7 +805,7 @@ contract VerifyOPCM is Script {
     ///         references to other OPCM contracts.
     /// @param _opcm The live OPCM contract.
     /// @return Array of OpcmContractRef structs containing contract names/addresses.
-    function _getOpcmPropertyRefs(IOPContractsManager _opcm) internal returns (OpcmContractRef[] memory) {
+    function _getOpcmPropertyRefs(IOPContractsManagerV2 _opcm) internal returns (OpcmContractRef[] memory) {
         // Find all functions that start with "opcm".
         string[] memory functionNames = abi.decode(
             vm.parseJson(
@@ -859,7 +854,7 @@ contract VerifyOPCM is Script {
     /// @param _blueprint Whether this is a blueprint or an implementation.
     /// @return Array of OpcmContractRef structs containing contract names/addresses.
     function _getOpcmContractRefs(
-        IOPContractsManager _opcm,
+        IOPContractsManagerV2 _opcm,
         string memory _property,
         bool _blueprint
     )
@@ -920,7 +915,7 @@ contract VerifyOPCM is Script {
     /// @return The contract name.
     function _getContractNameFromFieldName(string memory _fieldName) internal view returns (string memory) {
         if (LibString.eq(_fieldName, "contractsContainer")) {
-            _fieldName = _isOPCMV2() ? "contractsContainerV2" : "contractsContainerV1";
+            _fieldName = "contractsContainerV2";
         }
 
         // Check for an explicit override
@@ -1057,7 +1052,7 @@ contract VerifyOPCM is Script {
 
     /// @notice Validates that the dev feature bitmap is empty on mainnet.
     /// @param _opcm The OPCM contract.
-    function _validateDevFeatureBitmap(IOPContractsManager _opcm) internal view {
+    function _validateDevFeatureBitmap(IOPContractsManagerV2 _opcm) internal view {
         // Get the dev feature bitmap.
         bytes32 devFeatureBitmap = _opcm.devFeatureBitmap();
 
@@ -1101,26 +1096,10 @@ contract VerifyOPCM is Script {
         }
     }
 
-    /// @notice Returns the name of the OPCM contract depending on whether the OPCM is V2.
+    /// @notice Returns the name of the OPCM contract.
     /// @return The name of the OPCM contract.
-    function _opcmContractName() internal view returns (string memory) {
-        return _isOPCMV2() ? "OPContractsManagerV2" : "OPContractsManager";
-    }
-
-    /// @notice Checks if the OPCM is V2.
-    /// @dev If the OPCM address is not set, default to false.
-    /// @return True if the OPCM is V2, false otherwise.
-    function _isOPCMV2() internal view returns (bool) {
-        // Get the OPCM contract address from the environment variables.
-        address opcmAddress = _getOPCMAddress();
-
-        // If the OPCM contract address is not set, default to V1.
-        if (opcmAddress == address(0)) {
-            return false;
-        }
-
-        // If the OPCM contract version is greater than or equal to 7.0.0, then it is OPCM V2.
-        return SemverComp.gte(IOPContractsManager(opcmAddress).version(), "7.0.0");
+    function _opcmContractName() internal pure returns (string memory) {
+        return "OPContractsManagerV2";
     }
 
     /// @notice Gets the address of the OPCM contract from the environment variables.
@@ -1129,5 +1108,352 @@ contract VerifyOPCM is Script {
     function _getOPCMAddress() internal view returns (address) {
         // nosemgrep: sol-style-vm-env-only-in-config-sol
         return vm.envOr("OPCM_ADDRESS", address(0));
+    }
+
+    /// @notice Verifies security-critical values for contracts where immutables matter.
+    /// @param _opcm The OPCM contract that contains the target contract reference.
+    /// @param _target The contract reference being verified.
+    /// @param _artifact The artifact info for the contract.
+    /// @return True if all security-critical values are correct.
+    function _verifySecurityCriticalValues(
+        IOPContractsManagerV2 _opcm,
+        OpcmContractRef memory _target,
+        ArtifactInfo memory _artifact
+    )
+        internal
+        returns (bool)
+    {
+        // Silence unused variable warning - artifact is available for future use
+        _artifact;
+
+        // Allow skipping security-critical value checks (for tests that modify immutables)
+        if (skipSecurityValueChecks()) {
+            return true;
+        }
+
+        bool success = true;
+
+        // MIPS64: Verify the PreimageOracle it points to
+        if (LibString.eq(_target.name, "MIPS64")) {
+            success = _verifyPreimageOracle(IMIPS64(_target.addr)) && success;
+        }
+
+        // OptimismPortal2: Verify PROOF_MATURITY_DELAY_SECONDS
+        if (LibString.eq(_target.name, "OptimismPortal2") || LibString.eq(_target.name, "OptimismPortalInterop")) {
+            success = _verifyPortalDelays(IOptimismPortal2(payable(_target.addr))) && success;
+        }
+
+        // AnchorStateRegistry: Verify DISPUTE_GAME_FINALITY_DELAY_SECONDS
+        if (LibString.eq(_target.name, "AnchorStateRegistry")) {
+            success = _verifyAnchorStateRegistryDelays(IAnchorStateRegistry(_target.addr)) && success;
+        }
+
+        // OPContractsManagerStandardValidator: Verify all constructor arg values
+        if (LibString.eq(_target.name, "OPContractsManagerStandardValidator")) {
+            success = _verifyStandardValidatorArgs(_opcm, _target.addr) && success;
+        }
+
+        return success;
+    }
+
+    /// @notice Verifies the PreimageOracle bytecode that MIPS64 points to.
+    /// @param _mips The MIPS64 contract.
+    /// @return True if the PreimageOracle bytecode matches expected.
+    function _verifyPreimageOracle(IMIPS64 _mips) internal view returns (bool) {
+        address oracleAddr = address(_mips.oracle());
+        console.log("  Verifying PreimageOracle bytecode...");
+        console.log(string.concat("    Address: ", vm.toString(oracleAddr)));
+
+        ArtifactInfo memory oracleArtifact = _loadArtifactInfo(_buildArtifactPath("PreimageOracle"));
+        return _compareBytecode(
+            oracleAddr.code,
+            oracleArtifact.deployedBytecode,
+            "PreimageOracle",
+            oracleArtifact,
+            true // allow immutables for challengePeriod/minProposalSize
+        );
+    }
+
+    /// @notice Verifies OptimismPortal2 security-critical delay values.
+    /// @param _portal The OptimismPortal2 contract.
+    /// @return True if delay values match expected.
+    function _verifyPortalDelays(IOptimismPortal2 _portal) internal view returns (bool) {
+        // nosemgrep: sol-style-vm-env-only-in-config-sol
+        uint256 expectedDelay = vm.envOr("EXPECTED_PROOF_MATURITY_DELAY_SECONDS", uint256(604800));
+        uint256 actualDelay = _portal.proofMaturityDelaySeconds();
+
+        console.log("  Verifying PROOF_MATURITY_DELAY_SECONDS...");
+        console.log(string.concat("    Expected: ", vm.toString(expectedDelay)));
+        console.log(string.concat("    Actual: ", vm.toString(actualDelay)));
+
+        if (actualDelay != expectedDelay) {
+            console.log("    [FAIL] PROOF_MATURITY_DELAY_SECONDS mismatch");
+            return false;
+        }
+        console.log("    [OK] PROOF_MATURITY_DELAY_SECONDS verified");
+        return true;
+    }
+
+    /// @notice Verifies AnchorStateRegistry security-critical delay values.
+    /// @param _asr The AnchorStateRegistry contract.
+    /// @return True if delay values match expected.
+    function _verifyAnchorStateRegistryDelays(IAnchorStateRegistry _asr) internal view returns (bool) {
+        // nosemgrep: sol-style-vm-env-only-in-config-sol
+        uint256 expectedDelay = vm.envOr("EXPECTED_DISPUTE_GAME_FINALITY_DELAY_SECONDS", uint256(302400));
+        uint256 actualDelay = _asr.disputeGameFinalityDelaySeconds();
+
+        console.log("  Verifying DISPUTE_GAME_FINALITY_DELAY_SECONDS...");
+        console.log(string.concat("    Expected: ", vm.toString(expectedDelay)));
+        console.log(string.concat("    Actual: ", vm.toString(actualDelay)));
+
+        if (actualDelay != expectedDelay) {
+            console.log("    [FAIL] DISPUTE_GAME_FINALITY_DELAY_SECONDS mismatch");
+            return false;
+        }
+        console.log("    [OK] DISPUTE_GAME_FINALITY_DELAY_SECONDS verified");
+        return true;
+    }
+
+    /// @notice Verifies all StandardValidator getters are properly validated.
+    /// @param _opcm The OPCM contract.
+    /// @param _validator The StandardValidator contract address.
+    /// @return True if all getters are valid.
+    function _verifyStandardValidatorArgs(IOPContractsManagerV2 _opcm, address _validator) internal returns (bool) {
+        bool success = true;
+        console.log("  Verifying StandardValidator args...");
+
+        // Get ALL zero-arg view getters from ABI
+        string[] memory allGetters = abi.decode(
+            vm.parseJson(
+                Process.bash(
+                    string.concat(
+                        "jq -r '[.abi[] | select(.type == \"function\" and .stateMutability == \"view\" and (.inputs | length) == 0) | .name]' ",
+                        _buildArtifactPath("OPContractsManagerStandardValidator")
+                    )
+                )
+            ),
+            (string[])
+        );
+
+        // Load Container impls for comparison
+        // nosemgrep: sol-style-use-abi-encodecall
+        (bool callOk, bytes memory containerData) =
+            address(_opcm).staticcall(abi.encodeWithSignature("implementations()"));
+        if (!callOk) {
+            console.log("    [FAIL] Could not fetch implementations from OPCM");
+            return false;
+        }
+
+        // Get container impl field names
+        string[] memory containerFields = _getContainerImplFields();
+
+        // Verify each getter
+        for (uint256 i = 0; i < allGetters.length; i++) {
+            string memory getter = allGetters[i];
+            string memory check = validatorGetterChecks[getter];
+
+            // Fail if getter is unaccounted for
+            if (bytes(check).length == 0) {
+                console.log(string.concat("    [FAIL] Unaccounted getter: ", getter));
+                success = false;
+                continue;
+            }
+
+            // Skip explicitly skipped getters
+            if (LibString.eq(check, "SKIP")) {
+                continue;
+            }
+
+            // Handle each check type
+            if (LibString.eq(check, "CONTAINER_IMPL")) {
+                success = _verifyContainerImpl(_validator, getter, containerFields, containerData) && success;
+            } else if (LibString.startsWith(check, "ENV:ADDRESS:")) {
+                string memory envVar = LibString.slice(check, bytes("ENV:ADDRESS:").length, bytes(check).length);
+                success = _verifyEnvAddress(_validator, getter, envVar) && success;
+            } else if (LibString.startsWith(check, "ENV:UINT256:")) {
+                string memory envVar = LibString.slice(check, bytes("ENV:UINT256:").length, bytes(check).length);
+                success = _verifyEnvUint256(_validator, getter, envVar) && success;
+            } else if (LibString.eq(check, "ZERO_ON_MAINNET")) {
+                success = _verifyZeroOnMainnet(_validator, getter) && success;
+            }
+        }
+
+        if (success) {
+            console.log("    [OK] All StandardValidator args verified");
+        }
+        return success;
+    }
+
+    /// @notice Gets the field names from the Container implementations struct.
+    /// @return Array of field names.
+    function _getContainerImplFields() internal returns (string[] memory) {
+        return abi.decode(
+            vm.parseJson(
+                Process.bash(
+                    string.concat(
+                        "jq -r '[.abi[] | select(.name == \"implementations\") | .outputs[0].components[].name]' ",
+                        _buildArtifactPath(_opcmContractName())
+                    )
+                )
+            ),
+            (string[])
+        );
+    }
+
+    /// @notice Verifies a StandardValidator getter matches the corresponding Container impl.
+    /// @param _validator The StandardValidator address.
+    /// @param _getter The getter name.
+    /// @param _containerFields Array of Container field names.
+    /// @param _containerData ABI-encoded Container implementations struct.
+    /// @return True if the values match.
+    function _verifyContainerImpl(
+        address _validator,
+        string memory _getter,
+        string[] memory _containerFields,
+        bytes memory _containerData
+    )
+        internal
+        view
+        returns (bool)
+    {
+        address actual = _getAddressFromValidator(_validator, string.concat(_getter, "()"));
+        address expected = _findContainerImpl(_getter, _containerFields, _containerData);
+
+        if (actual != expected) {
+            console.log(string.concat("    [FAIL] ", _getter));
+            console.log(string.concat("      Container: ", vm.toString(expected)));
+            console.log(string.concat("      Validator: ", vm.toString(actual)));
+            return false;
+        }
+        return true;
+    }
+
+    /// @notice Verifies a StandardValidator getter matches an environment variable address.
+    /// @param _validator The StandardValidator address.
+    /// @param _getter The getter name.
+    /// @param _envVar The environment variable name.
+    /// @return True if the values match.
+    function _verifyEnvAddress(
+        address _validator,
+        string memory _getter,
+        string memory _envVar
+    )
+        internal
+        view
+        returns (bool)
+    {
+        address actual = _getAddressFromValidator(_validator, string.concat(_getter, "()"));
+        // nosemgrep: sol-style-vm-env-only-in-config-sol
+        address expected = vm.envAddress(_envVar);
+
+        if (actual != expected) {
+            console.log(string.concat("    [FAIL] ", _getter));
+            console.log(string.concat("      Expected (", _envVar, "): ", vm.toString(expected)));
+            console.log(string.concat("      Actual: ", vm.toString(actual)));
+            return false;
+        }
+        return true;
+    }
+
+    /// @notice Verifies a StandardValidator getter matches an environment variable uint256.
+    /// @param _validator The StandardValidator address.
+    /// @param _getter The getter name.
+    /// @param _envVar The environment variable name.
+    /// @return True if the values match.
+    function _verifyEnvUint256(
+        address _validator,
+        string memory _getter,
+        string memory _envVar
+    )
+        internal
+        view
+        returns (bool)
+    {
+        uint256 actual = _getUintFromValidator(_validator, string.concat(_getter, "()"));
+        // nosemgrep: sol-style-vm-env-only-in-config-sol
+        uint256 expected = vm.envUint(_envVar);
+
+        if (actual != expected) {
+            console.log(string.concat("    [FAIL] ", _getter));
+            console.log(string.concat("      Expected (", _envVar, "): ", vm.toString(expected)));
+            console.log(string.concat("      Actual: ", vm.toString(actual)));
+            return false;
+        }
+        return true;
+    }
+
+    /// @notice Verifies a StandardValidator getter is zero on mainnet.
+    /// @param _validator The StandardValidator address.
+    /// @param _getter The getter name.
+    /// @return True if zero on mainnet (or not mainnet).
+    function _verifyZeroOnMainnet(address _validator, string memory _getter) internal view returns (bool) {
+        // Skip check if not mainnet or if in a testing environment
+        // Testing environment is detected by code at the TESTING_ENVIRONMENT_ADDRESS
+        if (block.chainid != 1 || Constants.TESTING_ENVIRONMENT_ADDRESS.code.length > 0) {
+            return true;
+        }
+
+        bytes32 actual = _getBytes32FromValidator(_validator, string.concat(_getter, "()"));
+
+        if (actual != bytes32(0)) {
+            console.log(string.concat("    [FAIL] ", _getter, " must be zero on mainnet"));
+            return false;
+        }
+        return true;
+    }
+
+    /// @notice Finds the address of a field in the Container implementations struct.
+    /// @param _getter The field name to find.
+    /// @param _containerFields Array of field names.
+    /// @param _containerData ABI-encoded implementations struct.
+    /// @return The address at the matching field, or address(0) if not found.
+    function _findContainerImpl(
+        string memory _getter,
+        string[] memory _containerFields,
+        bytes memory _containerData
+    )
+        internal
+        pure
+        returns (address)
+    {
+        for (uint256 i = 0; i < _containerFields.length; i++) {
+            if (LibString.eq(_getter, _containerFields[i])) {
+                return abi.decode(Bytes.slice(_containerData, i * 32, 32), (address));
+            }
+        }
+        return address(0);
+    }
+
+    /// @notice Gets an address value from a StandardValidator getter.
+    /// @param _validator The StandardValidator address.
+    /// @param _sig The function signature (e.g., "superchainConfig()").
+    /// @return The address returned by the getter.
+    function _getAddressFromValidator(address _validator, string memory _sig) internal view returns (address) {
+        // nosemgrep: sol-style-use-abi-encodecall
+        (bool ok, bytes memory data) = _validator.staticcall(abi.encodeWithSignature(_sig));
+        if (!ok) revert VerifyOPCM_ValidatorCallFailed(_sig);
+        return abi.decode(data, (address));
+    }
+
+    /// @notice Gets a uint256 value from a StandardValidator getter.
+    /// @param _validator The StandardValidator address.
+    /// @param _sig The function signature.
+    /// @return The uint256 returned by the getter.
+    function _getUintFromValidator(address _validator, string memory _sig) internal view returns (uint256) {
+        // nosemgrep: sol-style-use-abi-encodecall
+        (bool ok, bytes memory data) = _validator.staticcall(abi.encodeWithSignature(_sig));
+        if (!ok) revert VerifyOPCM_ValidatorCallFailed(_sig);
+        return abi.decode(data, (uint256));
+    }
+
+    /// @notice Gets a bytes32 value from a StandardValidator getter.
+    /// @param _validator The StandardValidator address.
+    /// @param _sig The function signature.
+    /// @return The bytes32 returned by the getter.
+    function _getBytes32FromValidator(address _validator, string memory _sig) internal view returns (bytes32) {
+        // nosemgrep: sol-style-use-abi-encodecall
+        (bool ok, bytes memory data) = _validator.staticcall(abi.encodeWithSignature(_sig));
+        if (!ok) revert VerifyOPCM_ValidatorCallFailed(_sig);
+        return abi.decode(data, (bytes32));
     }
 }

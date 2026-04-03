@@ -37,7 +37,26 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 			return fmt.Errorf("cannot set superchain roles for predeployed OPCM")
 		}
 
-		superDeployment, superRoles, err := PopulateSuperchainState(env.L1ScriptHost, *intent.OPCMAddress)
+		opcmAddr := common.Address{}
+		if hasPredeployedOPCM {
+			opcmAddr = *intent.OPCMAddress
+		}
+
+		superchainConfigAddr := common.Address{}
+		if hasSuperchainConfigProxy {
+			superchainConfigAddr = *intent.SuperchainConfigProxy
+		}
+
+		// If only an OPCM address is provided, resolve SuperchainConfigProxy from it on-chain.
+		if superchainConfigAddr == (common.Address{}) && opcmAddr != (common.Address{}) {
+			opcmContract := opcm.NewContract(opcmAddr, env.L1Client)
+			resolved, err := opcmContract.SuperchainConfig(ctx)
+			if err != nil {
+				return fmt.Errorf("error resolving SuperchainConfig from OPCM at %s: %w", opcmAddr, err)
+			}
+			superchainConfigAddr = resolved
+		}
+		superDeployment, superRoles, err := PopulateSuperchainState(env, opcmAddr, superchainConfigAddr)
 		if err != nil {
 			return fmt.Errorf("error populating superchain state: %w", err)
 		}
@@ -45,7 +64,8 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 		st.SuperchainRoles = superRoles
 		if st.ImplementationsDeployment == nil {
 			st.ImplementationsDeployment = &addresses.ImplementationsContracts{
-				OpcmImpl: *intent.OPCMAddress,
+				OpcmImpl:   opcmAddr,
+				OpcmV2Impl: opcmAddr,
 			}
 		}
 	}

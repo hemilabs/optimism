@@ -168,7 +168,7 @@ contract DeployImplementations_Test is Test, FeatureFlags {
         assertEq(address(output1.mipsSingleton), address(output2.mipsSingleton), "900");
         assertEq(address(output1.disputeGameFactoryImpl), address(output2.disputeGameFactoryImpl), "1000");
         assertEq(address(output1.anchorStateRegistryImpl), address(output2.anchorStateRegistryImpl), "1100");
-        assertEq(address(output1.opcm), address(output2.opcm), "1200");
+        assertEq(address(output1.opcmV2), address(output2.opcmV2), "1200");
         assertEq(address(output1.ethLockboxImpl), address(output2.ethLockboxImpl), "1300");
         assertEq(address(output1.faultDisputeGameV2Impl), address(output2.faultDisputeGameV2Impl), "1400");
         assertEq(address(output1.permissionedDisputeGameV2Impl), address(output2.permissionedDisputeGameV2Impl), "1500");
@@ -262,8 +262,12 @@ contract DeployImplementations_Test is Test, FeatureFlags {
         assertNotEq(address(output.opcmDeployer), address(0), "1000");
         assertNotEq(address(output.opcmGameTypeAdder), address(0), "1100");
 
-        assertNotEq(address(output.faultDisputeGameV2Impl), address(0), "V2 should be deployed when enabled");
-        assertNotEq(address(output.permissionedDisputeGameV2Impl), address(0), "V2 should be deployed when enabled");
+        assertNotEq(address(output.opcmV2), address(0), "800");
+        assertNotEq(address(output.opcmContainer), address(0), "900");
+        assertNotEq(address(output.opcmStandardValidator), address(0), "1000");
+
+        assertNotEq(address(output.faultDisputeGameImpl), address(0), "V2 should be deployed when enabled");
+        assertNotEq(address(output.permissionedDisputeGameImpl), address(0), "V2 should be deployed when enabled");
 
         // Verify V2 constructor parameters match fuzz inputs
         assertEq(output.faultDisputeGameV2Impl.maxGameDepth(), _faultGameV2MaxGameDepth, "FDGv2 maxGameDepth");
@@ -360,8 +364,12 @@ contract DeployImplementations_Test is Test, FeatureFlags {
         assertNotEq(address(output.opcmDeployer).code, empty, "2200");
         assertNotEq(address(output.opcmGameTypeAdder).code, empty, "2300");
 
-        assertNotEq(address(output.faultDisputeGameV2Impl).code, empty, "V2 FDG should have code when enabled");
-        assertNotEq(address(output.permissionedDisputeGameV2Impl).code, empty, "V2 PDG should have code when enabled");
+        assertNotEq(address(output.opcmV2).code, empty, "2000");
+        assertNotEq(address(output.opcmContainer).code, empty, "2100");
+        assertNotEq(address(output.opcmStandardValidator).code, empty, "2200");
+
+        assertNotEq(address(output.faultDisputeGameImpl).code, empty, "V2 FDG should have code when enabled");
+        assertNotEq(address(output.permissionedDisputeGameImpl).code, empty, "V2 PDG should have code when enabled");
         if (superGamesEnabled) {
             assertNotEq(address(output.superFaultDisputeGameImpl).code, empty, "Super DG should have code when enabled");
             assertNotEq(
