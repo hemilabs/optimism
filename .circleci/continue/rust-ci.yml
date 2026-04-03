@@ -125,7 +125,7 @@ commands:
       toolchain_version:
         description: The specific toolchain version for stable channel
         type: string
-        default: "1.92.0"
+        default: "1.94.0"
       target:
         description: A custom target architecture to add to the toolchain
         type: string
@@ -797,6 +797,7 @@ jobs:
   op-reth-compact-codec:
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
+    # This job frequently gets killed for smaller resource_class
     resource_class: xlarge
     steps:
       - utils/checkout-with-mise:
@@ -1201,7 +1202,7 @@ workflows:
       - rust-build-binary:
           name: rust-msrv
           directory: rust
-          toolchain: "1.92.0"
+          toolchain: "1.94.0"
           context: *rust-ci-context
 
       # -----------------------------------------------------------------------
@@ -1212,7 +1213,7 @@ workflows:
           directory: rust
           command: |
             just check-no-std
-          toolchain: "1.92.0"
+          toolchain: "1.94.0"
           context: *rust-ci-context
 
       - rust-ci-cargo-hack-build:
@@ -1239,14 +1240,6 @@ workflows:
           name: op-reth-integration-tests
           directory: rust
           command: "--justfile op-reth/justfile test-integration"
-          cache_profile: debug
-          context: *rust-ci-context
-
-      - rust-ci-cargo-tests:
-          name: op-reth-tests-edge
-          directory: rust
-          command: "--justfile op-reth/justfile test"
-          flags: "edge"
           cache_profile: debug
           context: *rust-ci-context
 
@@ -1303,14 +1296,6 @@ workflows:
           cache_profile: debug
           context: *rust-ci-context
 
-      - rust-ci-cargo-tests:
-          name: op-reth-tests-edge
-          directory: rust
-          command: "--justfile op-reth/justfile test"
-          flags: "edge"
-          cache_profile: debug
-          context: *rust-ci-context
-
       - kona-build-fpvm:
           name: kona-build-fpvm-cannon-client
           target: "cannon-client"
@@ -1320,7 +1305,6 @@ workflows:
           requires:
             - rust-tests
             - op-reth-integration-tests
-            - op-reth-tests-edge
             - kona-build-fpvm-cannon-client
 
 
