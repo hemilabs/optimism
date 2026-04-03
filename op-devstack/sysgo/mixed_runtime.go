@@ -347,8 +347,8 @@ func startMixedOpRethNode(
 		"--chain=" + chainConfigPath,
 		"--proofs-history.storage-path=" + proofHistoryDir,
 	}
-	err = exec.Command(execPath, initProofsArgs...).Run()
-	t.Require().NoError(err, "must init op-reth proof history")
+	initOut, initErr := exec.Command(execPath, initProofsArgs...).CombinedOutput()
+	t.Require().NoError(initErr, "must init op-reth proof history: %s", string(initOut))
 
 	args = append(
 		args,
