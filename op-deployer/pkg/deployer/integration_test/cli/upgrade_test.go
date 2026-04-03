@@ -59,6 +59,8 @@ func TestCLIUpgrade(t *testing.T) {
 			version:     "v5.0.0",
 			forkBlock:   9629972, // one block past the opcm deployment block
 		},
+		// v6.0.0-rc.2 test case removed: it deployed a v1 OPCM on Sepolia, and the
+		// embedded UpgradeOPChain.s.sol script no longer supports v1 OPCM upgrades.
 	}
 
 	for _, tc := range testCases {
@@ -86,12 +88,11 @@ func TestCLIUpgrade(t *testing.T) {
 					},
 				},
 			}
+			configData, err := json.MarshalIndent(testConfig, "", "  ")
+			require.NoError(t, err)
 
 			configFile := filepath.Join(workDir, "upgrade_config_"+tc.version+".json")
 			outputFile := filepath.Join(workDir, "upgrade_output_"+tc.version+".json")
-
-			configData, err := json.MarshalIndent(testConfig, "", "  ")
-			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(configFile, configData, 0o644))
 
 			// Run full cli command to write calldata to outfile
@@ -118,8 +119,10 @@ func TestCLIUpgrade(t *testing.T) {
 			require.Len(t, dump, 1)
 			require.Equal(t, l1ProxyAdminOwner.Hex(), dump[0].To.Hex())
 			dataHex := hex.EncodeToString(dump[0].Data)
-			require.True(t, strings.HasPrefix(dataHex, "ff2dd5a1"),
-				"calldata should have opcm.upgrade fcn selector ff2dd5a1, got: %s", dataHex[:8])
+
+			expectedSelector := "ff2dd5a1"
+			require.True(t, strings.HasPrefix(dataHex, expectedSelector),
+				"calldata should have opcm.upgrade fcn selector %s, got: %s", expectedSelector, dataHex[:8])
 		})
 	}
 }

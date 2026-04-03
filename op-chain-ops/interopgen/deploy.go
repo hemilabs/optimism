@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/manage"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -37,7 +38,7 @@ func Deploy(logger log.Logger, fa *foundry.ArtifactsFS, srcFS *foundry.SourceMap
 		if fmt.Sprintf("%d", l2Cfg.L2ChainID) != id {
 			return nil, nil, fmt.Errorf("chain L2 %s declared different L2 chain ID %d in config", id, l2Cfg.L2ChainID)
 		}
-		if !cfg.L1.ChainID.IsUint64() || cfg.L1.ChainID.Uint64() != l2Cfg.L1ChainID {
+		if !cfg.L1.ChainID.IsUint64() || bigs.Uint64Strict(cfg.L1.ChainID) != l2Cfg.L1ChainID {
 			return nil, nil, fmt.Errorf("chain L2 %s declared different L1 chain ID %d in config than global %d", id, l2Cfg.L1ChainID, cfg.L1.ChainID)
 		}
 	}
@@ -137,7 +138,7 @@ func CreateL1(logger log.Logger, fa *foundry.ArtifactsFS, srcFS *foundry.SourceM
 		PrevRandao:   cfg.L1GenesisBlockMixHash,
 		BlobHashes:   nil,
 	}
-	l1Host := script.NewHost(logger.New("role", "l1", "chain", cfg.ChainID), fa, srcFS, l1Context, script.WithCreate2Deployer())
+	l1Host := script.NewHost(logger.New("role", "l1", "chain", cfg.ChainID), fa, srcFS, l1Context, script.WithCreate2Deployer(), script.WithNoMaxCodeSize())
 	return l1Host
 }
 
@@ -242,7 +243,7 @@ func DeployL2ToL1(l1Host *script.Host, superCfg *SuperchainConfig, superDeployme
 		BasefeeScalar:                cfg.GasPriceOracleBaseFeeScalar,
 		BlobBaseFeeScalar:            cfg.GasPriceOracleBlobBaseFeeScalar,
 		L2ChainId:                    new(big.Int).SetUint64(cfg.L2ChainID),
-		Opcm:                         superDeployment.Opcm,
+		Opcm:                         superDeployment.OpcmV2,
 		SaltMixer:                    cfg.SaltMixer,
 		GasLimit:                     cfg.GasLimit,
 		DisputeGameType:              cfg.DisputeGameType,
@@ -254,6 +255,7 @@ func DeployL2ToL1(l1Host *script.Host, superCfg *SuperchainConfig, superDeployme
 		AllowCustomDisputeParameters: true,
 		OperatorFeeScalar:            cfg.GasPriceOracleOperatorFeeScalar,
 		OperatorFeeConstant:          cfg.GasPriceOracleOperatorFeeConstant,
+		SuperchainConfig:             superDeployment.SuperchainConfigProxy,
 		UseCustomGasToken:            cfg.UseCustomGasToken,
 	})
 	if err != nil {
@@ -271,34 +273,58 @@ func MigrateInterop(
 ) (*InteropDeployment, error) {
 	l2ChainIDs := maps.Keys(l2Deployments)
 	sort.Strings(l2ChainIDs)
-	chainConfigs := make([]manage.OPChainConfig, len(l2Deployments))
-	for i, l2ChainID := range l2ChainIDs {
-		l2Deployment := l2Deployments[l2ChainID]
-		chainConfigs[i] = manage.OPChainConfig{
-			SystemConfigProxy:  l2Deployment.SystemConfigProxy,
-			CannonPrestate:     l2Cfgs[l2ChainID].DisputeAbsolutePrestate,
-			CannonKonaPrestate: l2Cfgs[l2ChainID].DisputeKonaAbsolutePrestate,
-		}
-	}
 
-	// For now get the fault game parameters from the first chain
-	l2ChainID := l2ChainIDs[0]
 	// We don't have a super root at genesis. But stub the starting anchor root anyways to facilitate super DG testing.
 	startingAnchorRoot := common.Hash(opcm.PermissionedGameStartingAnchorRoot)
+
+	// Build chain system config addresses for V2 migrate input.
+	chainSystemConfigs := make([]common.Address, len(l2Deployments))
+	for i, l2ChainID := range l2ChainIDs {
+		chainSystemConfigs[i] = l2Deployments[l2ChainID].SystemConfigProxy
+	}
+
+	// ABI-encode the cannon prestates as game args (from the first chain config).
+	l2ChainID := l2ChainIDs[0]
+	cannonGameArgs := common.LeftPadBytes(l2Cfgs[l2ChainID].DisputeAbsolutePrestate.Bytes(), 32)
+	cannonKonaGameArgs := common.LeftPadBytes(l2Cfgs[l2ChainID].DisputeKonaAbsolutePrestate.Bytes(), 32)
+
+	const (
+		GameTypeCannon          = uint32(0)
+		GameTypeSuperCannon     = uint32(4)
+		GameTypeSuperCannonKona = uint32(9)
+	)
+
 	imi := manage.InteropMigrationInput{
-		Prank:                          superCfg.ProxyAdminOwner,
-		Opcm:                           superDeployment.Opcm,
-		UsePermissionlessGame:          true,
-		StartingAnchorRoot:             startingAnchorRoot,
-		StartingAnchorL2SequenceNumber: big.NewInt(int64(l1GenesisTimestamp)),
-		Proposer:                       l2Cfgs[l2ChainID].Proposer,
-		Challenger:                     l2Cfgs[l2ChainID].Challenger,
-		MaxGameDepth:                   l2Cfgs[l2ChainID].DisputeMaxGameDepth,
-		SplitDepth:                     l2Cfgs[l2ChainID].DisputeSplitDepth,
-		InitBond:                       big.NewInt(0),
-		ClockExtension:                 l2Cfgs[l2ChainID].DisputeClockExtension,
-		MaxClockDuration:               l2Cfgs[l2ChainID].DisputeMaxClockDuration,
-		EncodedChainConfigs:            chainConfigs,
+		Prank: superCfg.ProxyAdminOwner,
+		Opcm:  superDeployment.OpcmV2,
+		MigrateInputV2: &manage.MigrateInputV2{
+			ChainSystemConfigs: chainSystemConfigs,
+			DisputeGameConfigs: []manage.DisputeGameConfig{
+				{
+					Enabled:  true,
+					InitBond: big.NewInt(0),
+					GameType: GameTypeCannon,
+					GameArgs: cannonGameArgs,
+				},
+				{
+					Enabled:  true,
+					InitBond: big.NewInt(0),
+					GameType: GameTypeSuperCannon,
+					GameArgs: cannonGameArgs,
+				},
+				{
+					Enabled:  true,
+					InitBond: big.NewInt(0),
+					GameType: GameTypeSuperCannonKona,
+					GameArgs: cannonKonaGameArgs,
+				},
+			},
+			StartingAnchorRoot: manage.Proposal{
+				Root:             startingAnchorRoot,
+				L2SequenceNumber: big.NewInt(int64(l1GenesisTimestamp)),
+			},
+			StartingRespectedGameType: GameTypeSuperCannon,
+		},
 	}
 	output, err := manage.Migrate(l1Host, imi)
 	if err != nil {
@@ -371,7 +397,7 @@ func CompleteL1(l1Host *script.Host, cfg *L1Config) (*L1Output, error) {
 	l1Genesis, err := genesis.NewL1Genesis(&genesis.DeployConfig{
 		L2InitializationConfig: genesis.L2InitializationConfig{
 			L2CoreDeployConfig: genesis.L2CoreDeployConfig{
-				L1ChainID: cfg.ChainID.Uint64(),
+				L1ChainID: bigs.Uint64Strict(cfg.ChainID),
 			},
 			UpgradeScheduleDeployConfig: genesis.UpgradeScheduleDeployConfig{
 				L1CancunTimeOffset: new(hexutil.Uint64),
