@@ -126,9 +126,10 @@ func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (atTimest
 			s.log.Warn("failed to get optimistic source L1", "chain_id", chainID.String(), "err", err)
 			return atTimestampResponse{}, fmt.Errorf("%w: %w", ethereum.NotFound, err)
 		}
-		optimistic[chainID] = OutputWithSource{
-			Output:   optimisticOut,
-			SourceL1: optimisticL1,
+		optimistic[chainID] = eth.OutputWithRequiredL1{
+			Output:     optimisticOut,
+			OutputRoot: eth.OutputRoot(optimisticOut),
+			RequiredL1: optimisticL1,
 		}
 	}
 
