@@ -2733,6 +2733,9 @@ workflows:
             .* c-devnet-metrics-collect << pipeline.parameters.devnet-metrics-collect >> .circleci/continue/main.yml
             .* c-go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/main.yml
             rust/.* c-rust_files_changed true .circleci/continue/main.yml
+            (packages/contracts-bedrock|\.circleci|\.github|ops/check-changed)/.* c-contracts_changed true .circleci/continue/main.yml
+            ^(package\.json|mise\.toml)$ c-contracts_changed true .circleci/continue/main.yml
+            ^(?!docs/public-docs/).+ c-non_docs_changes true .circleci/continue/main.yml
 
             rust/.* rust_e2e_dispatch << pipeline.parameters.rust_e2e_dispatch >> .circleci/continue/rust-e2e.yml
             rust/.* default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/rust-e2e.yml
