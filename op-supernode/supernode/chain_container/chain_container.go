@@ -271,8 +271,20 @@ func (c *simpleChainContainer) Resume(ctx context.Context) error {
 	return nil
 }
 
-// SafeBlockAtTimestamp returns the highest SAFE L2 block with timestamp <= ts using the L2 client.
-func (c *simpleChainContainer) SafeBlockAtTimestamp(ctx context.Context, ts uint64) (eth.L2BlockRef, error) {
+func (c *simpleChainContainer) TimestampToBlockNumber(ctx context.Context, ts uint64) (uint64, error) {
+	if c.vncfg == nil {
+		return 0, fmt.Errorf("rollup config not available")
+	}
+	return c.vncfg.Rollup.TargetBlockNumber(ts)
+}
+
+func (c *simpleChainContainer) BlockNumberToTimestamp(ctx context.Context, blocknum uint64) (uint64, error) {
+	return c.blockNumberToTimestamp(blocknum)
+}
+
+// LocalSafeBlockAtTimestamp returns the highest L2 block with timestamp <= ts using the L2 client,
+// if the block at that timestamp is local safe.
+func (c *simpleChainContainer) LocalSafeBlockAtTimestamp(ctx context.Context, ts uint64) (eth.L2BlockRef, error) {
 	if c.engine == nil {
 		return eth.L2BlockRef{}, engine_controller.ErrNoEngineClient
 	}
@@ -393,4 +405,119 @@ func (c *simpleChainContainer) attachInProcRollupClient() error {
 	}
 	c.rollupClient = sources.NewRollupClient(client.NewBaseRPCClient(inproc))
 	return nil
+}
+
+// isCriticalRewindError returns true if the error is a critical configuration error
+// that should not be retried.
+func isCriticalRewindError(err error) bool {
+	return errors.Is(err, engine_controller.ErrNoEngineClient) ||
+		errors.Is(err, engine_controller.ErrNoRollupConfig) ||
+		errors.Is(err, engine_controller.ErrRewindComputeTargetsFailed) ||
+		errors.Is(err, engine_controller.ErrRewindTimestampToBlockConversion) ||
+		errors.Is(err, engine_controller.ErrRewindOverFinalizedHead)
+}
+
+// WARNING: this should only be called by the interop activity.
+// Other callers risk triggering chain rewinds outside the interop WAL model.
+// TODO(#19561): remove this footgun by moving reorg-triggering operations behind a
+// smaller interop-owned interface.
+func (c *simpleChainContainer) RewindEngine(ctx context.Context, timestamp uint64, invalidatedBlock eth.BlockRef) error {
+	if !c.resetting.CompareAndSwap(false, true) {
+		return fmt.Errorf("reset already in progress")
+	}
+	defer c.resetting.Store(false)
+
+	if c.vn == nil {
+		return fmt.Errorf("virtual node not initialized")
+	}
+	if c.engine == nil {
+		return fmt.Errorf("engine not initialized")
+	}
+
+	// Pause the container to stop it restarting the vn when we kill it
+	err := c.Pause(ctx)
+	if err != nil {
+		return err
+	}
+	// Always resume the container on return, even if we exit early due to context cancellation
+	// or an error mid-rewind. Without this, a cancelled ctx leaves pause=true permanently,
+	// causing the Start() loop to spin forever and block Supernode.Stop()'s wg.Wait().
+	defer c.Resume(context.Background()) //nolint:errcheck
+	c.log.Info("chain_container/RewindEngine: paused container")
+
+	// stop the vn
+	err = c.vn.Stop(ctx)
+	if err != nil {
+		return err
+	}
+	c.log.Info("chain_container/RewindEngine: stopped vn")
+
+retryLoop:
+	for {
+		err = c.engine.RewindToTimestamp(ctx, timestamp)
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			c.log.Error("chain_container/RewindEngine: timeout exceeded")
+			return err
+		case isCriticalRewindError(err):
+			c.log.Error("chain_container/RewindEngine: critical error", "err", err)
+			return err
+		case err == nil:
+			c.log.Info("chain_container/RewindEngine: executed engine rewind")
+			break retryLoop
+		default:
+			c.log.Error("chain_container/RewindEngine: temporary error", "err", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+	}
+
+	// Notify activities about the reset
+	if c.onReset != nil {
+		c.onReset(c.chainID, timestamp, invalidatedBlock)
+	}
+
+	// resume the chain container to trigger a new vn to be started
+	err = c.Resume(ctx)
+	if err != nil {
+		return err
+	}
+	c.log.Info("chain_container/RewindEngine: resumed container")
+
+	return nil
+}
+
+// PauseAndStopVN pauses the container restart loop and stops the running virtual node.
+// This must be called before a multi-chain rewind to prevent a peer chain's VN from
+// issuing forkchoice updates that race with the rewind operation.
+// RewindEngine's own Pause+Stop calls are idempotent when called after this.
+func (c *simpleChainContainer) PauseAndStopVN(ctx context.Context) error {
+	if err := c.Pause(ctx); err != nil {
+		return err
+	}
+	if c.vn == nil {
+		return nil
+	}
+	return c.vn.Stop(ctx)
+}
+
+// SetResetCallback sets a callback that is invoked when the chain resets.
+// This must only be called during initialization, before the chain container starts processing.
+// Calling this while InvalidateBlock may be running is unsafe.
+func (c *simpleChainContainer) SetResetCallback(cb ResetCallback) {
+	c.onReset = cb
+}
+
+// blockNumberToTimestamp converts a block number to its timestamp using rollup config.
+func (c *simpleChainContainer) blockNumberToTimestamp(blockNum uint64) (uint64, error) {
+	if c.vncfg == nil {
+		return 0, fmt.Errorf("rollup config not available")
+	}
+	if blockNum < c.vncfg.Rollup.Genesis.L2.Number {
+		return 0, fmt.Errorf("block number %d before genesis %d", blockNum, c.vncfg.Rollup.Genesis.L2.Number)
+	}
+	return c.vncfg.Rollup.TimestampForBlock(blockNum), nil
 }
