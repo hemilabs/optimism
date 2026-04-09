@@ -25,7 +25,6 @@ contract ReadImplementationAddresses is Script {
     struct Output {
         address delayedWETH;
         address optimismPortal;
-        address optimismPortalInterop;
         address ethLockbox;
         address systemConfig;
         address anchorStateRegistry;
@@ -75,7 +74,6 @@ contract ReadImplementationAddresses is Script {
         output_.delayedWETH = impls.delayedWETHImpl;
         output_.ethLockbox = impls.ethLockboxImpl;
         output_.anchorStateRegistry = impls.anchorStateRegistryImpl;
-        output_.optimismPortalInterop = impls.optimismPortalInteropImpl;
         output_.faultDisputeGame = impls.faultDisputeGameImpl;
         output_.permissionedDisputeGame = impls.permissionedDisputeGameImpl;
         output_.superFaultDisputeGame = impls.superFaultDisputeGameImpl;

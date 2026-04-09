@@ -76,7 +76,6 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		OpcmStandardValidatorImpl:        dio.OpcmStandardValidator,
 		DelayedWethImpl:                  dio.DelayedWETHImpl,
 		OptimismPortalImpl:               dio.OptimismPortalImpl,
-		OptimismPortalInteropImpl:        dio.OptimismPortalInteropImpl,
 		EthLockboxImpl:                   dio.ETHLockboxImpl,
 		PreimageOracleImpl:               dio.PreimageOracleSingleton,
 		MipsImpl:                         dio.MipsSingleton,

@@ -24,7 +24,6 @@ import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.
 import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { IOptimismPortal2 as IOptimismPortal } from "interfaces/L1/IOptimismPortal2.sol";
-import { IOptimismPortalInterop } from "interfaces/L1/IOptimismPortalInterop.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.sol";
@@ -76,7 +75,6 @@ contract DeployImplementations is Script {
         IOPContractsManagerContainer opcmContainer;
         IDelayedWETH delayedWETHImpl;
         IOptimismPortal optimismPortalImpl;
-        IOptimismPortalInterop optimismPortalInteropImpl;
         IETHLockbox ethLockboxImpl;
         IPreimageOracle preimageOracleSingleton;
         IMIPS64 mipsSingleton;
@@ -118,7 +116,6 @@ contract DeployImplementations is Script {
         deployL1StandardBridgeImpl(output_);
         deployOptimismMintableERC20FactoryImpl(output_);
         deployOptimismPortalImpl(_input, output_);
-        deployOptimismPortalInteropImpl(_input, output_);
         deployETHLockboxImpl(output_);
         deployDelayedWETHImpl(_input, output_);
         deployPreimageOracleSingleton(_input, output_);
@@ -166,7 +163,6 @@ contract DeployImplementations is Script {
             protocolVersionsImpl: address(_output.protocolVersionsImpl),
             l1ERC721BridgeImpl: address(_output.l1ERC721BridgeImpl),
             optimismPortalImpl: address(_output.optimismPortalImpl),
-            optimismPortalInteropImpl: address(_output.optimismPortalInteropImpl),
             ethLockboxImpl: address(_output.ethLockboxImpl),
             systemConfigImpl: address(_output.systemConfigImpl),
             optimismMintableERC20FactoryImpl: address(_output.optimismMintableERC20FactoryImpl),
@@ -365,22 +361,6 @@ contract DeployImplementations is Script {
         );
         vm.label(address(impl), "OptimismPortalImpl");
         _output.optimismPortalImpl = impl;
-    }
-
-    /// TODO(#19709) remove this file and migrate fully to the OptimismPortal2
-    function deployOptimismPortalInteropImpl(Input memory _input, Output memory _output) private {
-        uint256 proofMaturityDelaySeconds = _input.proofMaturityDelaySeconds;
-        IOptimismPortalInterop impl = IOptimismPortalInterop(
-            DeployUtils.createDeterministic({
-                _name: "OptimismPortalInterop",
-                _args: DeployUtils.encodeConstructor(
-                    abi.encodeCall(IOptimismPortalInterop.__constructor__, (proofMaturityDelaySeconds))
-                ),
-                _salt: _salt
-            })
-        );
-        vm.label(address(impl), "OptimismPortalInteropImpl");
-        _output.optimismPortalInteropImpl = impl;
     }
 
     function deployDelayedWETHImpl(Input memory _input, Output memory _output) private {
@@ -598,7 +578,6 @@ contract DeployImplementations is Script {
         IOPContractsManagerStandardValidator.Implementations memory opcmImplementations;
         opcmImplementations.l1ERC721BridgeImpl = _implementations.l1ERC721BridgeImpl;
         opcmImplementations.optimismPortalImpl = _implementations.optimismPortalImpl;
-        opcmImplementations.optimismPortalInteropImpl = _implementations.optimismPortalInteropImpl;
         opcmImplementations.ethLockboxImpl = _implementations.ethLockboxImpl;
         opcmImplementations.systemConfigImpl = _implementations.systemConfigImpl;
         opcmImplementations.optimismMintableERC20FactoryImpl = _implementations.optimismMintableERC20FactoryImpl;
