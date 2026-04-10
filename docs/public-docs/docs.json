@@ -2722,6 +2722,12 @@
             "pages": [
               "rust/op-alloy/glossary"
             ]
+          },
+          {
+            "group": "op-revm",
+            "pages": [
+              "rust/op-revm/index"
+            ]
           }
         ]
       }
