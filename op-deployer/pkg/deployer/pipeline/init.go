@@ -64,7 +64,6 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 		st.SuperchainRoles = superRoles
 		if st.ImplementationsDeployment == nil {
 			st.ImplementationsDeployment = &addresses.ImplementationsContracts{
-				OpcmImpl:   opcmAddr,
 				OpcmV2Impl: opcmAddr,
 			}
 		}
@@ -145,10 +144,9 @@ func immutableErr(field string, was, is any) error {
 	return fmt.Errorf("%s is immutable: was %v, is %v", field, was, is)
 }
 
-func PopulateSuperchainState(host *script.Host, opcmAddr common.Address) (*addresses.SuperchainContracts, *addresses.SuperchainRoles, error) {
-	readScript, err := opcm.NewReadSuperchainDeploymentScript(host)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error generating read superchain deployment script: %w", err)
+func PopulateSuperchainState(env *Env, opcmAddr common.Address, superchainConfigProxy common.Address) (*addresses.SuperchainContracts, *addresses.SuperchainRoles, error) {
+	input := opcm.ReadSuperchainDeploymentInput{
+		SuperchainConfigProxy: superchainConfigProxy,
 	}
 
 	out, err := readScript.Run(opcm.ReadSuperchainDeploymentInput{
@@ -162,13 +160,10 @@ func PopulateSuperchainState(host *script.Host, opcmAddr common.Address) (*addre
 		SuperchainProxyAdminImpl: out.SuperchainProxyAdmin,
 		SuperchainConfigProxy:    out.SuperchainConfigProxy,
 		SuperchainConfigImpl:     out.SuperchainConfigImpl,
-		ProtocolVersionsProxy:    out.ProtocolVersionsProxy,
-		ProtocolVersionsImpl:     out.ProtocolVersionsImpl,
 	}
 	roles := &addresses.SuperchainRoles{
 		SuperchainProxyAdminOwner: out.SuperchainProxyAdminOwner,
 		SuperchainGuardian:        out.Guardian,
-		ProtocolVersionsOwner:     out.ProtocolVersionsOwner,
 	}
 	return deployment, roles, nil
 }

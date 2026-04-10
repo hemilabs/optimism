@@ -6,21 +6,15 @@ import (
 )
 
 type ReadSuperchainDeploymentInput struct {
-	OPCMAddress common.Address `abi:"opcmAddress"`
+	SuperchainConfigProxy common.Address
 }
 
 type ReadSuperchainDeploymentOutput struct {
-	ProtocolVersionsImpl  common.Address
-	ProtocolVersionsProxy common.Address
-	SuperchainConfigImpl  common.Address
-	SuperchainConfigProxy common.Address
-	SuperchainProxyAdmin  common.Address
-
-	Guardian                   common.Address
-	ProtocolVersionsOwner      common.Address
-	SuperchainProxyAdminOwner  common.Address
-	RecommendedProtocolVersion [32]byte
-	RequiredProtocolVersion    [32]byte
+	SuperchainConfigImpl      common.Address `abi:"superchainConfigImpl"`
+	SuperchainConfigProxy     common.Address `abi:"superchainConfigProxy"`
+	SuperchainProxyAdmin      common.Address `abi:"superchainProxyAdmin"`
+	Guardian                  common.Address `abi:"guardian"`
+	SuperchainProxyAdminOwner common.Address `abi:"superchainProxyAdminOwner"`
 }
 
 type ReadSuperchainDeploymentScript script.DeployScriptWithOutput[ReadSuperchainDeploymentInput, ReadSuperchainDeploymentOutput]
