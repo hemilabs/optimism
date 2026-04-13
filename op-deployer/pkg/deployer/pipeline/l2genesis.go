@@ -5,6 +5,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
+	"github.com/ethereum-optimism/optimism/op-core/devfeatures"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
@@ -196,6 +197,26 @@ func shouldGenerateL2Genesis(thisChainState *state.ChainState) bool {
 func wdNetworkToBig(wd genesis.WithdrawalNetwork) *big.Int {
 	n := wd.ToUint8()
 	return big.NewInt(int64(n))
+}
+
+// buildDevFeatureBitmap reads the devFeatureBitmap from global overrides and returns an error if the interop feature
+// bit does not match the UseInterop intent flag. This ensures that interop feature is explicitly enabled by both the intent and the boolean flag.
+func buildDevFeatureBitmap(intent *state.Intent) (common.Hash, error) {
+	var devFeatureBitmap common.Hash
+	switch v := intent.GlobalDeployOverrides["devFeatureBitmap"].(type) {
+	case common.Hash:
+		devFeatureBitmap = v
+	case string:
+		devFeatureBitmap = common.HexToHash(v)
+	}
+
+	interopBitEnabled := devfeatures.IsDevFeatureEnabled(devFeatureBitmap, devfeatures.OptimismPortalInteropFlag)
+
+	if intent.UseInterop != interopBitEnabled {
+		return common.Hash{}, fmt.Errorf("interop feature in devFeatureBitmap does not match the UseInterop intent flag")
+	}
+
+	return devFeatureBitmap, nil
 }
 
 func defaultOverrides() l2GenesisOverrides {

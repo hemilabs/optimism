@@ -18,7 +18,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis/beacondeposit"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
+	"github.com/ethereum-optimism/optimism/op-core/devfeatures"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/manage"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
@@ -193,7 +193,7 @@ func DeploySuperchainToL1(l1Host *script.Host, opcmScripts *opcm.Scripts, superC
 		ProofMaturityDelaySeconds:       superCfg.Implementations.FaultProof.ProofMaturityDelaySeconds,
 		DisputeGameFinalityDelaySeconds: superCfg.Implementations.FaultProof.DisputeGameFinalityDelaySeconds,
 		MipsVersion:                     superCfg.Implementations.FaultProof.MipsVersion,
-		DevFeatureBitmap:                deployer.OptimismPortalInteropDevFlag,
+		DevFeatureBitmap:                devfeatures.OptimismPortalInteropFlag,
 		FaultGameV2MaxGameDepth:         big.NewInt(73),
 		FaultGameV2SplitDepth:           big.NewInt(30),
 		FaultGameV2ClockExtension:       big.NewInt(10800),
@@ -377,6 +377,17 @@ func GenesisL2(l2Host *script.Host, cfg *L2Config, deployment *L2Deployment, mul
 	}
 
 	return nil
+}
+
+// devFeatureBitmapForL2Genesis returns the dev feature bitmap for the L2 genesis based on the multichain deployment set.
+// If the multichain deployment set is true, the dev feature bitmap will be the OptimismPortalInteropDevFlag.
+func devFeatureBitmapForL2Genesis(multichainDepSet bool) common.Hash {
+	// TODO(#19102): add support for L2CM
+	var bitmap common.Hash
+	if multichainDepSet {
+		bitmap = devfeatures.EnableDevFeature(bitmap, devfeatures.OptimismPortalInteropFlag)
+	}
+	return bitmap
 }
 
 func CompleteL1(l1Host *script.Host, cfg *L1Config) (*L1Output, error) {
