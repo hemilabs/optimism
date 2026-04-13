@@ -28,7 +28,7 @@ pub enum DecompressionError {
 }
 
 /// Batch Reader provides a function that iteratively consumes batches from the reader.
-/// The `L1Inclusion` block is also provided at creation time.
+/// The L1 origin timestamp is provided at creation time and used for hardfork activation checks.
 /// Warning: the batch reader can read every batch-type.
 /// The caller of the batch-reader should filter the results.
 #[derive(Debug)]
@@ -43,6 +43,8 @@ pub struct BatchReader {
     pub max_rlp_bytes_per_channel: usize,
     /// Whether brotli decompression was used.
     pub brotli_used: bool,
+    /// The L1 origin block timestamp, used for hardfork activation checks.
+    pub origin_timestamp: u64,
 }
 
 impl BatchReader {
@@ -55,9 +57,9 @@ impl BatchReader {
     /// Brotli Compression Channel Version.
     pub const CHANNEL_VERSION_BROTLI: u8 = 1;
 
-    /// Creates a new [`BatchReader`] from the given data and max decompressed RLP bytes per
-    /// channel.
-    pub fn new<T>(data: T, max_rlp_bytes_per_channel: usize) -> Self
+    /// Creates a new [`BatchReader`] from the given data, max decompressed RLP bytes per
+    /// channel, and the L1 origin block timestamp (used for hardfork activation checks).
+    pub fn new<T>(data: T, max_rlp_bytes_per_channel: usize, origin_timestamp: u64) -> Self
     where
         T: Into<Vec<u8>>,
     {
@@ -67,6 +69,7 @@ impl BatchReader {
             cursor: 0,
             max_rlp_bytes_per_channel,
             brotli_used: false,
+            origin_timestamp,
         }
     }
 
@@ -114,8 +117,8 @@ impl BatchReader {
             return None;
         };
 
-        // Confirm that brotli decompression was performed *after* the Fjord hardfork.
-        if self.brotli_used && !cfg.is_fjord_active(batch.timestamp()) {
+        // Accept brotli only after Fjord activation (per L1 origin timestamp).
+        if self.brotli_used && !cfg.is_fjord_active(self.origin_timestamp) {
             return None;
         }
 
@@ -144,7 +147,7 @@ mod test {
     fn test_batch_reader() {
         let raw = new_compressed_batch_data();
         let decompressed_len = decompress_to_vec_zlib(&raw).unwrap().len();
-        let mut reader = BatchReader::new(raw, MAX_RLP_BYTES_PER_CHANNEL_BEDROCK as usize);
+        let mut reader = BatchReader::new(raw, MAX_RLP_BYTES_PER_CHANNEL_BEDROCK as usize, 0);
         reader.next_batch(&RollupConfig::default()).unwrap();
         assert_eq!(reader.cursor, decompressed_len);
     }
@@ -153,7 +156,7 @@ mod test {
     fn test_batch_reader_fjord() {
         let raw = new_compressed_batch_data();
         let decompressed_len = decompress_to_vec_zlib(&raw).unwrap().len();
-        let mut reader = BatchReader::new(raw, MAX_RLP_BYTES_PER_CHANNEL_FJORD as usize);
+        let mut reader = BatchReader::new(raw, MAX_RLP_BYTES_PER_CHANNEL_FJORD as usize, 0);
         reader
             .next_batch(&RollupConfig {
                 hardforks: HardForkConfig { fjord_time: Some(0), ..Default::default() },
@@ -161,5 +164,65 @@ mod test {
             })
             .unwrap();
         assert_eq!(reader.cursor, decompressed_len);
+    }
+
+    /// Builds zlib-compressed channel data containing `n` copies of the same
+    /// batch by duplicating the decompressed RLP content from the test fixture.
+    fn new_multi_batch_compressed_data(n: usize) -> (Bytes, usize) {
+        let raw = new_compressed_batch_data();
+        let single = decompress_to_vec_zlib(&raw).unwrap();
+
+        let mut multi = Vec::with_capacity(single.len() * n);
+        for _ in 0..n {
+            multi.extend_from_slice(&single);
+        }
+        let decompressed_len = multi.len();
+        (compress_to_vec_zlib(&multi, CompressionLevel::BestSpeed.into()).into(), decompressed_len)
+    }
+
+    #[test]
+    fn test_zlib_truncation_instead_of_rejection() {
+        let raw = new_compressed_batch_data();
+        let decompressed_len = decompress_to_vec_zlib(&raw).unwrap().len();
+        assert!(decompressed_len > 1, "test data must decompress to >1 byte");
+
+        // Set limit below decompressed size — should truncate, not error.
+        let limit = decompressed_len / 2;
+        let mut reader = BatchReader::new(raw, limit, 0);
+        assert!(reader.decompress().is_ok());
+        assert_eq!(reader.decompressed.len(), limit);
+    }
+
+    #[test]
+    fn test_zlib_truncation_yields_decodable_batches() {
+        let n = 3;
+        let (compressed, full_len) = new_multi_batch_compressed_data(n);
+        let single_batch_len = full_len / n;
+
+        // Full decompression should yield all n batches.
+        let mut reader = BatchReader::new(compressed.clone(), full_len, 0);
+        let mut count = 0;
+        while reader.next_batch(&RollupConfig::default()).is_some() {
+            count += 1;
+        }
+        assert_eq!(count, n, "should decode {n} batches from full channel");
+
+        // Truncate to just under the last batch — should yield n-1 batches.
+        let limit = full_len - 1;
+        let mut reader = BatchReader::new(compressed, limit, 0);
+        let mut count = 0;
+        while reader.next_batch(&RollupConfig::default()).is_some() {
+            count += 1;
+        }
+        assert_eq!(
+            count,
+            n - 1,
+            "truncated channel should yield {exp} batches (cursor at {cursor}, \
+             single batch is {single_batch_len} bytes, limit {limit})",
+            exp = n - 1,
+            cursor = reader.cursor,
+        );
+        // First n-1 batches should have been fully consumed.
+        assert_eq!(reader.cursor, single_batch_len * (n - 1));
     }
 }
