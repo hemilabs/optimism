@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/hashicorp/go-multierror"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -39,7 +38,7 @@ var (
 
 // UpdateSystemConfigWithL1Receipts filters all L1 receipts to find config updates and applies the config updates to the given sysCfg
 // Updates are applied individually, and any malformed or invalid updates are ignored.
-// Any errors encountered during the update process are returned as a multierror.
+// Any errors encountered during the update process are returned as a joined error.
 func UpdateSystemConfigWithL1Receipts(sysCfg *eth.SystemConfig, receipts []*types.Receipt, cfg *rollup.Config, l1Time uint64) error {
 	var result error
 	for i, rec := range receipts {
@@ -56,7 +55,7 @@ func UpdateSystemConfigWithL1Receipts(sysCfg *eth.SystemConfig, receipts []*type
 					*sysCfg = updated
 				} else {
 					// or append the error to the result
-					result = multierror.Append(result, fmt.Errorf("malformatted L1 system sysCfg log in receipt %d, log %d: %w", i, j, err))
+					result = errors.Join(result, fmt.Errorf("malformatted L1 system sysCfg log in receipt %d, log %d: %w", i, j, err))
 				}
 			}
 		}
