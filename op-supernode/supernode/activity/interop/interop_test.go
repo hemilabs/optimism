@@ -167,6 +167,12 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestInteropActivationTimestampFlagEnvVar(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(t, InteropActivationTimestampFlag.GetEnvVars(), "OP_SUPERNODE_INTEROP_ACTIVATION_TIMESTAMP")
+}
+
 // =============================================================================
 // TestStartStop
 // =============================================================================

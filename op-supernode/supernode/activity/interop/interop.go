@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-supernode/flags"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity"
@@ -28,9 +29,10 @@ var (
 
 // InteropActivationTimestampFlag is the CLI flag for the interop activation timestamp.
 var InteropActivationTimestampFlag = &cli.Uint64Flag{
-	Name:  "interop.activation-timestamp",
-	Usage: "The timestamp at which interop should start",
-	Value: 0,
+	Name:    "interop.activation-timestamp",
+	Usage:   "Override the interop activation timestamp derived from rollup configs",
+	EnvVars: opservice.PrefixEnvVar(flags.EnvVarPrefix, "INTEROP_ACTIVATION_TIMESTAMP"),
+	Value:   0,
 }
 
 func init() {
