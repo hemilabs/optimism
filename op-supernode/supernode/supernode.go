@@ -87,6 +87,30 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		heartbeat.New(log.New("activity", "heartbeat"), 10*time.Second),
 		superroot.New(log.New("activity", "superroot"), s.chains),
 	}
+
+	interopActivationTimestamp, err := resolveInteropActivationTimestamp(cfg.InteropActivationTimestamp, vnCfgs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve interop activation timestamp: %w", err)
+	}
+
+	log.Info("initializing interop activity", "enabled", interopActivationTimestamp != nil)
+	// Initialize interop activity if the activation timestamp is known (non-nil).
+	// If it's nil, don't start interop. If it's non-nil (including 0), do start it.
+	if interopActivationTimestamp != nil {
+		interopActivity := interop.New(log.New("activity", "interop"), *interopActivationTimestamp, s.chains, cfg.DataDir, s.l1Client)
+		s.activities = append(s.activities, interopActivity)
+		for _, chain := range s.chains {
+			chain.RegisterVerifier(interopActivity)
+		}
+	}
+
+	// Set up reset callbacks on all chain containers
+	// When a chain resets, notify all activities
+	for _, chain := range s.chains {
+		chain.SetResetCallback(s.onChainReset)
+	}
+
+	// Set up http server
 	addr := net.JoinHostPort(cfg.RPCConfig.ListenAddr, strconv.Itoa(cfg.RPCConfig.ListenPort))
 	s.httpServer = httputil.NewHTTPServer(addr, s.rpcRouter)
 
@@ -95,6 +119,50 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		s.metrics = resources.NewMetricsService(log, cfg.MetricsConfig.ListenAddr, cfg.MetricsConfig.ListenPort, s.metricsRouter)
 	}
 	return s, nil
+}
+
+func resolveInteropActivationTimestamp(override *uint64, vnCfgs map[eth.ChainID]*opnodecfg.Config) (*uint64, error) {
+	if override != nil {
+		return override, nil
+	}
+
+	var resolved *uint64
+	var resolvedChain eth.ChainID
+	var missingChain *eth.ChainID
+
+	for chainID, vnCfg := range vnCfgs {
+		if vnCfg == nil {
+			continue
+		}
+
+		if vnCfg.Rollup.InteropTime == nil {
+			if resolved != nil {
+				return nil, fmt.Errorf("chain %s has no interop activation timestamp, but chain %s is configured for timestamp %d", chainID, resolvedChain, *resolved)
+			}
+			if missingChain == nil {
+				missingChain = new(eth.ChainID)
+				*missingChain = chainID
+			}
+			continue
+		}
+
+		if missingChain != nil {
+			return nil, fmt.Errorf("chain %s is configured for interop activation timestamp %d, but chain %s has no interop activation timestamp", chainID, *vnCfg.Rollup.InteropTime, *missingChain)
+		}
+
+		if resolved == nil {
+			ts := *vnCfg.Rollup.InteropTime
+			resolved = &ts
+			resolvedChain = chainID
+			continue
+		}
+
+		if *resolved != *vnCfg.Rollup.InteropTime {
+			return nil, fmt.Errorf("mismatched interop activation timestamps: chain %s=%d, chain %s=%d", resolvedChain, *resolved, chainID, *vnCfg.Rollup.InteropTime)
+		}
+	}
+
+	return resolved, nil
 }
 
 func (s *Supernode) Start(ctx context.Context) error {
