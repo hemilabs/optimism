@@ -8,7 +8,7 @@ use reth_node_core::version::version_metadata;
 use reth_optimism_chainspec::OpChainSpec;
 use reth_optimism_primitives::OpPrimitives;
 use reth_optimism_trie::{
-    InitializationJob, OpProofsStorage, OpProofsStore, db::MdbxProofsStorage,
+    InitializationJob, OpProofsProviderRO, OpProofsStore, db::MdbxProofsStorage,
 };
 use reth_provider::{BlockNumReader, DBProvider, DatabaseProviderFactory};
 use std::{path::PathBuf, sync::Arc};
@@ -55,7 +55,9 @@ impl<C: ChainSpecParser<ChainSpec = OpChainSpec>> InitCommand<C> {
         .into();
 
         // Check if already initialized
-        if let Some((block_number, block_hash)) = storage.get_earliest_block_number()? {
+        if let Some((block_number, block_hash)) =
+            storage.provider_ro()?.get_earliest_block_number()?
+        {
             info!(
                 target: "reth::cli",
                 block_number = block_number,
