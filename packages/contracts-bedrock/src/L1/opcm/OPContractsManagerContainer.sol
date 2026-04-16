@@ -39,6 +39,7 @@ contract OPContractsManagerContainer {
         address permissionedDisputeGameV2Impl;
         address superFaultDisputeGameImpl;
         address superPermissionedDisputeGameImpl;
+        address zkDisputeGameImpl;
         address storageSetterImpl;
     }
 

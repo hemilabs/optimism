@@ -282,6 +282,11 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 			InitBond: big.NewInt(0),
 			GameType: embedded.GameTypeSuperCannonKona,
 		},
+		{
+			Enabled:  false,
+			InitBond: big.NewInt(0),
+			GameType: embedded.GameTypeZKDisputeGame,
+		},
 	}
 
 	// Sort by game type (required by OPCM)
