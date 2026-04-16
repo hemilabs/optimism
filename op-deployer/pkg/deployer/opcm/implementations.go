@@ -28,12 +28,6 @@ type DeployImplementationsInput struct {
 }
 
 type DeployImplementationsOutput struct {
-	Opcm                             common.Address `json:"opcmAddress"`
-	OpcmContractsContainer           common.Address `json:"opcmContractsContainerAddress"`
-	OpcmGameTypeAdder                common.Address `json:"opcmGameTypeAdderAddress"`
-	OpcmDeployer                     common.Address `json:"opcmDeployerAddress"`
-	OpcmUpgrader                     common.Address `json:"opcmUpgraderAddress"`
-	OpcmInteropMigrator              common.Address `json:"opcmInteropMigratorAddress"`
 	OpcmStandardValidator            common.Address `json:"opcmStandardValidatorAddress"`
 	OpcmUtils                        common.Address `json:"opcmUtilsAddress"`
 	OpcmV2                           common.Address `json:"opcmV2Address"`

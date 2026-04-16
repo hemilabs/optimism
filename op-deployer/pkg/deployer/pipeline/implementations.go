@@ -68,10 +68,6 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 	}
 
 	st.ImplementationsDeployment = &addresses.ImplementationsContracts{
-		OpcmGameTypeAdderImpl:            dio.OpcmGameTypeAdder,
-		OpcmDeployerImpl:                 dio.OpcmDeployer,
-		OpcmUpgraderImpl:                 dio.OpcmUpgrader,
-		OpcmInteropMigratorImpl:          dio.OpcmInteropMigrator,
 		OpcmStandardValidatorImpl:        dio.OpcmStandardValidator,
 		DelayedWethImpl:                  dio.DelayedWETHImpl,
 		OptimismPortalImpl:               dio.OptimismPortalImpl,
