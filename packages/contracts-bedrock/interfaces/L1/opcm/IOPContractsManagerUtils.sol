@@ -4,6 +4,11 @@ pragma solidity ^0.8.0;
 import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
+import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
+import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
+import { IZKVerifier } from "interfaces/dispute/zk/IZKVerifier.sol";
+import { Claim, Duration, GameType } from "src/dispute/lib/Types.sol";
 
 interface IOPContractsManagerUtils {
     struct ProxyDeployArgs {
@@ -16,6 +21,35 @@ interface IOPContractsManagerUtils {
     struct ExtraInstruction {
         string key;
         bytes data;
+    }
+
+    /// @notice Configuration struct for the FaultDisputeGame.
+    struct FaultDisputeGameConfig {
+        Claim absolutePrestate;
+    }
+
+    /// @notice Configuration struct for the PermissionedDisputeGame.
+    struct PermissionedDisputeGameConfig {
+        Claim absolutePrestate;
+        address proposer;
+        address challenger;
+    }
+
+    /// @notice Configuration struct for the ZKDisputeGame.
+    struct ZKDisputeGameConfig {
+        Claim absolutePrestate;
+        IZKVerifier verifier;
+        Duration maxChallengeDuration;
+        Duration maxProveDuration;
+        uint256 challengerBond;
+    }
+
+    /// @notice Generic dispute game configuration data.
+    struct DisputeGameConfig {
+        bool enabled;
+        uint256 initBond;
+        GameType gameType;
+        bytes gameArgs;
     }
 
     event ProxyCreation(string name, address proxy);

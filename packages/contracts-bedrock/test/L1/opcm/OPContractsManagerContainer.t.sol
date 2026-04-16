@@ -43,6 +43,7 @@ contract OPContractsManagerContainer_TestInit is Test {
             permissionedDisputeGameV2Impl: makeAddr("permissionedDisputeGameV2Impl"),
             superFaultDisputeGameImpl: makeAddr("superFaultDisputeGameImpl"),
             superPermissionedDisputeGameImpl: makeAddr("superPermissionedDisputeGameImpl"),
+            zkDisputeGameImpl: makeAddr("zkDisputeGameImpl"),
             storageSetterImpl: makeAddr("storageSetterImpl")
         });
     }

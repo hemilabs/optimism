@@ -293,6 +293,11 @@
           },
           {
             "internalType": "address",
+            "name": "zkDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
             "name": "storageSetterImpl",
             "type": "address"
           }

@@ -58,6 +58,7 @@ interface IOPSuccinctFaultDisputeGame is IDisputeGame, ISemver {
     function wasRespectedGameTypeWhenCreated() external view returns (bool);
     function bondDistributionMode() external view returns (BondDistributionMode);
 
+    function __constructor__() external;
     function initialize() external payable;
     function l2SequenceNumber() external pure returns (uint256 l2SequenceNumber_);
     function parentIndex() external pure returns (uint32 parentIndex_);

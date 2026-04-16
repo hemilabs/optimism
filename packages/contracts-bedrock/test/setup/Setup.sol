@@ -217,6 +217,54 @@ abstract contract Setup is FeatureFlags {
         }
     }
 
+    /// @dev Mocks getProxyImplementation for DelayedWETH and ETHLockbox proxies when running
+    ///      with an unoptimized Foundry profile. These proxies are not re-pointed during OPCM
+    ///      upgrades, so their CREATE2 implementation addresses diverge from mainnet when
+    ///      bytecode differs (unoptimized vs optimized). No-op for optimized profiles.
+    function mockUnoptimizedProxyImplementations(
+        IDisputeGameFactory _dgf,
+        IProxyAdmin _proxyAdmin,
+        address _ethLockbox,
+        address _delayedWETHImpl,
+        address _ethLockboxImpl
+    )
+        internal
+    {
+        // In fork tests, existing DWETH/ETHLockbox proxies keep their old implementations since the
+        // upgrade reuses them. In unoptimized profiles, CREATE2 addresses differ so impls won't match.
+        // In both cases we mock getProxyImplementation and version() to satisfy the validator checks.
+        if (!Config.isUnoptimized() && !isL1ForkTest()) return;
+        console.log("Setup: mocking unoptimized proxy implementations");
+
+        string memory delayedWETHVersion = ISemver(_delayedWETHImpl).version();
+        GameType[4] memory gameTypes =
+            [GameTypes.CANNON, GameTypes.PERMISSIONED_CANNON, GameTypes.CANNON_KONA, GameTypes.ZK_DISPUTE_GAME];
+        for (uint256 i = 0; i < gameTypes.length; i++) {
+            IDelayedWETH delayedWETHProxy = DisputeGames.getGameImplDelayedWeth(_dgf, gameTypes[i]);
+            if (address(delayedWETHProxy) != address(0)) {
+                vm.mockCall(
+                    address(delayedWETHProxy), abi.encodeCall(ISemver.version, ()), abi.encode(delayedWETHVersion)
+                );
+                vm.mockCall(
+                    address(_proxyAdmin),
+                    abi.encodeCall(IProxyAdmin.getProxyImplementation, (address(delayedWETHProxy))),
+                    abi.encode(_delayedWETHImpl)
+                );
+            }
+        }
+
+        if (_ethLockbox != address(0)) {
+            vm.mockCall(
+                _ethLockbox, abi.encodeCall(ISemver.version, ()), abi.encode(ISemver(_ethLockboxImpl).version())
+            );
+            vm.mockCall(
+                address(_proxyAdmin),
+                abi.encodeCall(IProxyAdmin.getProxyImplementation, (_ethLockbox)),
+                abi.encode(_ethLockboxImpl)
+            );
+        }
+    }
+
     /// @dev Skips tests when running against a forked production network.
     function skipIfForkTest(string memory message) public {
         if (isForkTest()) {
