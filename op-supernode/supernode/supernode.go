@@ -334,7 +334,12 @@ func (s *Supernode) initL1Client(ctx context.Context, cfg *config.CLIConfig) err
 	s.log.Info("initializing shared L1 client", "l1_addr", cfg.L1NodeAddr)
 
 	// Create L1 RPC client with basic configuration
-	l1RPC, err := client.NewRPC(ctx, s.log, cfg.L1NodeAddr, client.WithDialAttempts(10))
+	// Enable HTTP polling for L1 heads to support HTTP-only L1 connections (e.g., in tests)
+	s.log.Info("configuring shared L1 HTTP poll interval", "interval", cfg.L1HTTPPollInterval)
+	l1RPC, err := client.NewRPC(ctx, s.log, cfg.L1NodeAddr,
+		client.WithDialAttempts(10),
+		client.WithHttpPollInterval(cfg.L1HTTPPollInterval),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to dial L1 address (%s): %w", cfg.L1NodeAddr, err)
 	}
