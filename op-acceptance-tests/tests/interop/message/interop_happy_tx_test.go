@@ -19,7 +19,7 @@ import (
 func TestInteropHappyTx(gt *testing.T) {
 	gt.Skip("Skipping Interop Acceptance Test")
 	t := devtest.ParallelT(gt)
-	sys := presets.NewSimpleInterop(t)
+	sys := presets.NewTwoL2SupernodeInterop(t, 0, presets.WithInteropFilter())
 
 	// two EOAs for triggering the init and exec interop txs
 	alice := sys.FunderA.NewFundedEOA(eth.OneHundredthEther)
