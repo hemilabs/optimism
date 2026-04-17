@@ -158,7 +158,10 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
 
     /// @notice Tests that the script succeeds when no changes are introduced.
     function test_run_succeeds() public {
-        // Coverage changes bytecode and causes failures, skip.
+        // Coverage instrumentation would break the bytecode comparison because the artifact
+        // on disk is not instrumented. The optimizer setting does not matter: both the
+        // deployed code and the artifact come from the same local compile, so they move
+        // together under any Foundry profile.
         skipIfCoverage();
 
         // Run the script.
@@ -221,8 +224,11 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
     ///         variables of implementation contracts. Fuzzing is too slow here, randomness is good
     ///         enough.
     function test_run_implementationDifferentInsideImmutable_succeeds() public {
-        // Coverage changes bytecode and causes failures, skip.
+        // See test_run_succeeds for why this is coverage-only, not unoptimized-wide.
         skipIfCoverage();
+
+        // Skip security value checks since this test deliberately corrupts immutable values.
+        harness.setSkipSecurityValueChecks(true);
 
         // Grab the list of implementations.
         VerifyOPCM.OpcmContractRef[] memory refs = harness.getOpcmContractRefs(opcm, "implementations", false);
@@ -291,8 +297,11 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
     ///         implementation contracts that are not inside immutable references. Fuzzing is too
     ///         slow here, randomness is good enough.
     function test_run_implementationDifferentOutsideImmutable_reverts() public {
-        // Coverage changes bytecode and causes failures, skip.
+        // See test_run_succeeds for why this is coverage-only, not unoptimized-wide.
         skipIfCoverage();
+
+        // Skip security value checks since corrupted bytecode may break contract queries.
+        harness.setSkipSecurityValueChecks(true);
 
         // Grab the list of implementations.
         VerifyOPCM.OpcmContractRef[] memory refs = harness.getOpcmContractRefs(opcm, "implementations", false);

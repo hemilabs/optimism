@@ -212,6 +212,18 @@ abstract contract Setup is FeatureFlags {
         }
     }
 
+    /// @dev Skips tests only under coverage mode, where Foundry injects instrumentation
+    ///      opcodes that change deployed bytecode relative to the compiled artifact.
+    ///      Prefer this over skipIfUnoptimized() for tests that compare locally-compiled
+    ///      bytecode to locally-compiled artifacts: both sides move together across
+    ///      optimized/unoptimized profiles, but coverage instrumentation breaks the
+    ///      comparison because the artifact on disk is not instrumented.
+    function skipIfCoverage() public {
+        if (vm.isContext(VmSafe.ForgeContext.Coverage)) {
+            vm.skip(true);
+        }
+    }
+
     /// @dev Mocks getProxyImplementation for DelayedWETH and ETHLockbox proxies when running
     ///      with an unoptimized Foundry profile. These proxies are not re-pointed during OPCM
     ///      upgrades, so their CREATE2 implementation addresses diverge from mainnet when
