@@ -106,8 +106,11 @@ library Predeploys {
     /// @notice Address of the LiquidityController predeploy.
     address internal constant LIQUIDITY_CONTROLLER = 0x420000000000000000000000000000000000002a;
 
-    /// @notice Address of the FeeSplitter predeploy.
-    address internal constant FEE_SPLITTER = 0x420000000000000000000000000000000000002B;
+    /// @notice Address of the ConditionalDeployer predeploy.
+    address internal constant CONDITIONAL_DEPLOYER = 0x420000000000000000000000000000000000002C;
+
+    /// @notice Address of the L2DevFeatureFlags predeploy.
+    address internal constant L2_DEV_FEATURE_FLAGS = 0x420000000000000000000000000000000000002d;
 
     /// @notice Returns the name of the predeploy at the given address.
     function getName(address _addr) internal pure returns (string memory out_) {
@@ -140,7 +143,8 @@ library Predeploys {
         if (_addr == ETH_LIQUIDITY) return "ETHLiquidity";
         if (_addr == LIQUIDITY_CONTROLLER) return "LiquidityController";
         if (_addr == NATIVE_ASSET_LIQUIDITY) return "NativeAssetLiquidity";
-        if (_addr == FEE_SPLITTER) return "FeeSplitter";
+        if (_addr == CONDITIONAL_DEPLOYER) return "ConditionalDeployer";
+        if (_addr == L2_DEV_FEATURE_FLAGS) return "L2DevFeatureFlags";
         revert("Predeploys: unnamed predeploy");
     }
 
@@ -166,9 +170,16 @@ library Predeploys {
             || _addr == L2_ERC721_BRIDGE || _addr == L1_BLOCK_ATTRIBUTES || _addr == L2_TO_L1_MESSAGE_PASSER
             || _addr == OPTIMISM_MINTABLE_ERC721_FACTORY || _addr == PROXY_ADMIN || _addr == BASE_FEE_VAULT
             || _addr == L1_FEE_VAULT || _addr == OPERATOR_FEE_VAULT || _addr == SCHEMA_REGISTRY || _addr == EAS
-            || _addr == GOVERNANCE_TOKEN || _addr == FEE_SPLITTER
-            || (_fork >= uint256(Fork.INTEROP) && _enableCrossL2Inbox && _addr == CROSS_L2_INBOX)
-            || (_fork >= uint256(Fork.INTEROP) && _addr == L2_TO_L2_CROSS_DOMAIN_MESSENGER)
+            || _addr == GOVERNANCE_TOKEN
+            || (_fork >= uint256(Fork.INTEROP) && _isInteropDevFeatureEnabled && _useInterop && _addr == CROSS_L2_INBOX)
+            || (
+                _fork >= uint256(Fork.INTEROP) && _isInteropDevFeatureEnabled && _useInterop
+                    && _addr == L2_TO_L2_CROSS_DOMAIN_MESSENGER
+            )
+            || (
+                _fork >= uint256(Fork.INTEROP) && _isInteropDevFeatureEnabled && _useInterop
+                    && _addr == SUPERCHAIN_ETH_BRIDGE
+            ) || (_fork >= uint256(Fork.INTEROP) && _isInteropDevFeatureEnabled && _useInterop && _addr == ETH_LIQUIDITY)
             || (_isCustomGasToken && _addr == LIQUIDITY_CONTROLLER)
             || (_isCustomGasToken && _addr == NATIVE_ASSET_LIQUIDITY);
     }
@@ -186,5 +197,50 @@ library Predeploys {
         return address(
             uint160(uint256(uint160(_addr)) & 0xffff | uint256(uint160(0xc0D3C0d3C0d3C0D3c0d3C0d3c0D3C0d3c0d30000)))
         );
+    }
+
+    /// @notice Returns true if the predeploy is upgradeable. In this context, upgradeable means that the predeploy
+    ///         is in the predeploy namespace and it is proxied.
+    /// @param _proxy The address of the predeploy.
+    /// @return isUpgradeable_ True if the predeploy is upgradeable, false otherwise.
+    function isUpgradeable(address _proxy) internal pure returns (bool isUpgradeable_) {
+        isUpgradeable_ = isPredeployNamespace(_proxy) && !notProxied(_proxy);
+    }
+
+    /// @notice Returns all proxied predeploys that should be upgraded by L2CM.
+    ///         This means that for each of these predeploys, isUpgradeable(predeploy) should return true if running on
+    ///         a network that supports it.
+    /// @dev IMPORTANT: This is the SOURCE OF TRUTH for upgrade coverage. All proxied predeploys from
+    ///      Predeploys library should be listed here.
+    ///      Excludes: WETH, GOVERNANCE_TOKEN (not proxied), legacy predeploys (not upgraded).
+    function getUpgradeablePredeploys() internal pure returns (address[] memory predeploys_) {
+        predeploys_ = new address[](23);
+        // Core predeploys
+        predeploys_[0] = Predeploys.L2_CROSS_DOMAIN_MESSENGER;
+        predeploys_[1] = Predeploys.GAS_PRICE_ORACLE;
+        predeploys_[2] = Predeploys.L2_STANDARD_BRIDGE;
+        predeploys_[3] = Predeploys.SEQUENCER_FEE_WALLET;
+        predeploys_[4] = Predeploys.OPTIMISM_MINTABLE_ERC20_FACTORY;
+        predeploys_[5] = Predeploys.L2_ERC721_BRIDGE;
+        predeploys_[6] = Predeploys.L1_BLOCK_ATTRIBUTES;
+        predeploys_[7] = Predeploys.L2_TO_L1_MESSAGE_PASSER;
+        predeploys_[8] = Predeploys.OPTIMISM_MINTABLE_ERC721_FACTORY;
+        predeploys_[9] = Predeploys.PROXY_ADMIN;
+        predeploys_[10] = Predeploys.BASE_FEE_VAULT;
+        predeploys_[11] = Predeploys.L1_FEE_VAULT;
+        predeploys_[12] = Predeploys.OPERATOR_FEE_VAULT;
+        predeploys_[13] = Predeploys.SCHEMA_REGISTRY;
+        predeploys_[14] = Predeploys.EAS;
+        predeploys_[15] = Predeploys.CONDITIONAL_DEPLOYER;
+        // Interop predeploys
+        predeploys_[16] = Predeploys.CROSS_L2_INBOX;
+        predeploys_[17] = Predeploys.L2_TO_L2_CROSS_DOMAIN_MESSENGER;
+        predeploys_[18] = Predeploys.SUPERCHAIN_ETH_BRIDGE;
+        predeploys_[19] = Predeploys.ETH_LIQUIDITY;
+        // CGT predeploys (conditionally deployed, but still must be included in the list)
+        predeploys_[20] = Predeploys.NATIVE_ASSET_LIQUIDITY;
+        predeploys_[21] = Predeploys.LIQUIDITY_CONTROLLER;
+        // Dev feature flags bitmap
+        predeploys_[22] = Predeploys.L2_DEV_FEATURE_FLAGS;
     }
 }

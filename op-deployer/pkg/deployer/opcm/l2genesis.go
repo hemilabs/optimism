@@ -31,9 +31,6 @@ type L2GenesisInput struct {
 	DeployCrossL2Inbox                       bool
 	EnableGovernance                         bool
 	FundDevAccounts                          bool
-	UseRevenueShare                          bool
-	ChainFeesRecipient                       common.Address
-	L1FeesDepositor                          common.Address
 	UseCustomGasToken                        bool
 	GasPayingTokenName                       string
 	GasPayingTokenSymbol                     string
