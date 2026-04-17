@@ -14,6 +14,7 @@ import (
 )
 
 var modexpPrecompile = common.HexToAddress("0x0000000000000000000000000000000000000005")
+var p256VerifyPrecompile = common.HexToAddress("0x0000000000000000000000000000000000000100")
 
 // buildModExpInput constructs input data for the MODEXP precompile (address 0x05).
 // Format: <Bsize (32 bytes)> <Esize (32 bytes)> <Msize (32 bytes)> <B> <E> <M>
@@ -71,4 +72,185 @@ func TestEIP7823UpperBoundModExp(gt *testing.T) {
 	}, rpc.BlockNumber(postForkBlockNum))
 	t.Require().NoError(err)
 	t.Require().Equal([]byte{3}, result, "2^3 mod 5 should equal 3")
+}
+
+func TestEIP7883ModExpGasCostIncrease(gt *testing.T) {
+	t := devtest.ParallelT(gt)
+	sysgo.SkipOnOpGeth(t, "osaka is not supported in op-geth")
+
+	karstOffset := uint64(3)
+	sys := presets.NewMinimal(t, presets.WithDeployerOptions(sysgo.WithKarstAtOffset(&karstOffset)))
+
+	activationBlock := sys.L2Chain.AwaitActivation(t, forks.Karst)
+	t.Require().Greater(activationBlock.Number, uint64(0), "karst must not activate at genesis")
+	preForkBlockNum := activationBlock.Number - 1
+	postForkBlockNum := activationBlock.Number + 1
+	sys.L2EL.WaitForBlockNumber(postForkBlockNum)
+
+	l2Client := sys.L2EL.EthClient()
+
+	// Call modexp with empty calldata. The precompile pads missing bytes with
+	// zeros, giving Bsize=0, Esize=0, Msize=0. This hits exactly the gas floor:
+	//   EIP-2565 (pre-Karst):  max(200, floor(0*0/3)) = 200 gas
+	//   EIP-7883 (post-Karst): max(500, floor(0*0))   = 500 gas
+	// Empty calldata also avoids EIP-7623 calldata cost inflation, so intrinsic
+	// gas is just 21,000 and we can precisely control execution gas via Gas limit.
+
+	// Pre-fork: 21,000 + 300 execution gas is enough for 200-gas floor.
+	_, err := l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		To:  &modexpPrecompile,
+		Gas: 21_300,
+	}, rpc.BlockNumber(preForkBlockNum))
+	t.Require().NoError(err, "pre-fork: modexp should succeed with 300 execution gas (floor is 200)")
+
+	// Post-fork: 21,000 + 300 execution gas is NOT enough for 500-gas floor.
+	_, err = l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		To:  &modexpPrecompile,
+		Gas: 21_300,
+	}, rpc.BlockNumber(postForkBlockNum))
+	t.Require().Error(err, "post-fork: modexp should fail with 300 execution gas (floor is 500)")
+
+	// Post-fork: 21,000 + 600 execution gas is enough for 500-gas floor.
+	_, err = l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		To:  &modexpPrecompile,
+		Gas: 21_600,
+	}, rpc.BlockNumber(postForkBlockNum))
+	t.Require().NoError(err, "post-fork: modexp should succeed with 600 execution gas (floor is 500)")
+}
+
+func TestEIP7825TxGasLimitCap(gt *testing.T) {
+	t := devtest.ParallelT(gt)
+	sysgo.SkipOnOpGeth(t, "osaka is not supported in op-geth")
+
+	testCases := map[string]struct {
+		opt       sysgo.DeployerOption
+		expectErr bool
+	}{
+		"pre-karst": {
+			opt: sysgo.WithJovianAtGenesis,
+		},
+		"post-karst": {
+			opt:       sysgo.WithKarstAtGenesis,
+			expectErr: true,
+		},
+	}
+
+	// EIP-7825 caps transaction gas at 2^24 = 16,777,216.
+	// This is a tx validity rule enforced at the txpool/block level, not by the
+	// EVM, so eth_call and eth_simulateV1 don't enforce it. We must send a real
+	// transaction and verify the RPC rejects it.
+	for name, testCase := range testCases {
+		t.Run(name, func(t devtest.T) {
+			t.Parallel()
+			sys := presets.NewMinimal(t, presets.WithDeployerOptions(testCase.opt))
+
+			eoa := sys.FunderL2.NewFundedEOA(eth.OneEther)
+
+			planWithGasLimit := func(gas uint64) txplan.Option {
+				return txplan.Combine(
+					eoa.Plan(),
+					txplan.WithGasLimit(gas),
+					txplan.WithTo(&common.Address{}),
+				)
+			}
+
+			_, err := txplan.NewPlannedTx(planWithGasLimit(params.MaxTxGas)).Success.Eval(t.Ctx())
+			t.Require().NoError(err, "tx with gas at 2^24 should succeed")
+
+			tx := txplan.NewPlannedTx(planWithGasLimit(params.MaxTxGas + 1))
+			if testCase.expectErr {
+				_, err := tx.Included.Eval(t.Ctx())
+				t.Require().Error(err, "tx with gas above 2^24 should be rejected")
+			} else {
+				_, err := tx.Success.Eval(t.Ctx())
+				t.Require().NoError(err, "tx with gas above 2^24 should succeed")
+			}
+		})
+	}
+}
+
+func TestEIP7951P256VerifyGasCostIncrease(gt *testing.T) {
+	t := devtest.ParallelT(gt)
+	sysgo.SkipOnOpGeth(t, "osaka is not supported in op-geth")
+
+	karstOffset := uint64(3)
+	sys := presets.NewMinimal(t, presets.WithDeployerOptions(sysgo.WithKarstAtOffset(&karstOffset)))
+
+	activationBlock := sys.L2Chain.AwaitActivation(t, forks.Karst)
+	t.Require().Greater(activationBlock.Number, uint64(0), "karst must not activate at genesis")
+	preForkBlockNum := activationBlock.Number - 1
+	postForkBlockNum := activationBlock.Number + 1
+	sys.L2EL.WaitForBlockNumber(postForkBlockNum)
+
+	l2Client := sys.L2EL.EthClient()
+
+	// Call P256VERIFY with empty calldata. The precompile charges its full gas
+	// cost regardless of input length, then returns empty (input != 160 bytes).
+	// Empty calldata avoids EIP-7623 calldata cost inflation, so intrinsic gas
+	// is just 21,000 and we can precisely control execution gas via gas limit.
+	//   RIP-7212 (pre-Karst):  P256VERIFY costs 3,450 gas
+	//   EIP-7951 (post-Karst): P256VERIFY costs 6,900 gas
+
+	// Pre-fork: 21,000 + 3,500 execution gas is enough for 3,450-gas precompile.
+	_, err := l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		To:  &p256VerifyPrecompile,
+		Gas: 24_500,
+	}, rpc.BlockNumber(preForkBlockNum))
+	t.Require().NoError(err, "pre-fork: P256VERIFY should succeed with 3,500 execution gas (cost is 3,450)")
+
+	// Post-fork: 21,000 + 3,500 execution gas is NOT enough for 6,900-gas precompile.
+	_, err = l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		To:  &p256VerifyPrecompile,
+		Gas: 24_500,
+	}, rpc.BlockNumber(postForkBlockNum))
+	t.Require().Error(err, "post-fork: P256VERIFY should fail with 3,500 execution gas (cost is 6,900)")
+
+	// Post-fork: 21,000 + 7,000 execution gas is enough for 6,900-gas precompile.
+	_, err = l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		To:  &p256VerifyPrecompile,
+		Gas: 28_000,
+	}, rpc.BlockNumber(postForkBlockNum))
+	t.Require().NoError(err, "post-fork: P256VERIFY should succeed with 7,000 execution gas (cost is 6,900)")
+}
+
+func TestEIP7939CLZ(gt *testing.T) {
+	t := devtest.ParallelT(gt)
+	sysgo.SkipOnOpGeth(t, "osaka is not supported in op-geth")
+
+	karstOffset := uint64(3)
+	sys := presets.NewMinimal(t, presets.WithDeployerOptions(sysgo.WithKarstAtOffset(&karstOffset)))
+
+	activationBlock := sys.L2Chain.AwaitActivation(t, forks.Karst)
+	t.Require().Greater(activationBlock.Number, uint64(0), "karst must not activate at genesis")
+	preForkBlockNum := activationBlock.Number - 1
+	postForkBlockNum := activationBlock.Number + 1
+	sys.L2EL.WaitForBlockNumber(postForkBlockNum)
+
+	l2Client := sys.L2EL.EthClient()
+
+	// EVM init code that computes CLZ(1) and returns the 32-byte result.
+	// CLZ(1) = 255 because 1 has 255 leading zero bits in a uint256.
+	clzCode := []byte{
+		byte(vm.PUSH1), 1, // stack: [1]
+		byte(vm.CLZ),      // stack: [255] (1 has 255 leading zeros)
+		byte(vm.PUSH1), 0, // stack: [0, 255]
+		byte(vm.MSTORE),    // mem[0:32] = 255
+		byte(vm.PUSH1), 32, // stack: [32]
+		byte(vm.PUSH1), 0, // stack: [0, 32]
+		byte(vm.RETURN), // return mem[0:32]
+	}
+
+	// Pre-fork: CLZ opcode (0x1e) is not yet valid, so execution should fail.
+	_, err := l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		Data: clzCode,
+	}, rpc.BlockNumber(preForkBlockNum))
+	t.Require().Error(err, "pre-fork: CLZ opcode should not be available")
+
+	// Post-fork: CLZ opcode is valid, execution should succeed.
+	result, err := l2Client.Call(t.Ctx(), ethereum.CallMsg{
+		Data: clzCode,
+	}, rpc.BlockNumber(postForkBlockNum))
+	t.Require().NoError(err, "post-fork: CLZ opcode should be available")
+	expected := common.LeftPadBytes([]byte{0xff}, 32) // 255 as uint256
+	t.Require().Equal(expected, result, "CLZ(1) should equal 255")
 }
