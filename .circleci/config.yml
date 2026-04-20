@@ -3,7 +3,12 @@ version: 2.1
 parameters:
   default_docker_image:
     type: string
-    default: cimg/base:2024.01
+    default: cimg/base:2026.03
+  # Pinned ci-base-clang image (cimg/base + clang/llvm-dev/libclang-dev) for Rust jobs.
+  # Provenance is verified by .github/workflows/verify-ci-base-clang-attestation.yml.
+  rust_base_image:
+    type: string
+    default: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-base-clang@sha256:852cb2dcd64eb5c039abf857a2217f341351eb7e4ef1a989ba9eefb86f158105
   base_image:
     type: string
     default: default
@@ -2698,31 +2703,16 @@ workflows:
           base-revision: develop
           config-path: .circleci/continue/main.yml
           mapping: |
-            .* default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/main.yml
-            .* base_image << pipeline.parameters.base_image >> .circleci/continue/main.yml
-            .* main_dispatch << pipeline.parameters.main_dispatch >> .circleci/continue/main.yml
-            .* fault_proofs_dispatch << pipeline.parameters.fault_proofs_dispatch >> .circleci/continue/main.yml
-            .* reproducibility_dispatch << pipeline.parameters.reproducibility_dispatch >> .circleci/continue/main.yml
-            .* kontrol_dispatch << pipeline.parameters.kontrol_dispatch >> .circleci/continue/main.yml
-            .* cannon_full_test_dispatch << pipeline.parameters.cannon_full_test_dispatch >> .circleci/continue/main.yml
-            .* sdk_dispatch << pipeline.parameters.sdk_dispatch >> .circleci/continue/main.yml
-            .* docker_publish_dispatch << pipeline.parameters.docker_publish_dispatch >> .circleci/continue/main.yml
-            .* publish_contract_artifacts_dispatch << pipeline.parameters.publish_contract_artifacts_dispatch >> .circleci/continue/main.yml
-            .* stale_check_dispatch << pipeline.parameters.stale_check_dispatch >> .circleci/continue/main.yml
-            .* contracts_coverage_dispatch << pipeline.parameters.contracts_coverage_dispatch >> .circleci/continue/main.yml
-            .* heavy_fuzz_dispatch << pipeline.parameters.heavy_fuzz_dispatch >> .circleci/continue/main.yml
-            .* acceptance_tests_dispatch << pipeline.parameters.acceptance_tests_dispatch >> .circleci/continue/main.yml
-            .* sync_test_op_node_dispatch << pipeline.parameters.sync_test_op_node_dispatch >> .circleci/continue/main.yml
-            .* ai_contracts_test_dispatch << pipeline.parameters.ai_contracts_test_dispatch >> .circleci/continue/main.yml
-            .* github-event-type << pipeline.parameters.github-event-type >> .circleci/continue/main.yml
-            .* github-event-action << pipeline.parameters.github-event-action >> .circleci/continue/main.yml
-            .* github-event-base64 << pipeline.parameters.github-event-base64 >> .circleci/continue/main.yml
-            .* devnet-metrics-collect << pipeline.parameters.devnet-metrics-collect >> .circleci/continue/main.yml
-            .* flake-shake-dispatch << pipeline.parameters.flake-shake-dispatch >> .circleci/continue/main.yml
-            .* flake-shake-iterations << pipeline.parameters.flake-shake-iterations >> .circleci/continue/main.yml
-            .* flake-shake-workers << pipeline.parameters.flake-shake-workers >> .circleci/continue/main.yml
-            .* go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/main.yml
-
+            .* c-default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/main.yml
+            .* c-rust_base_image << pipeline.parameters.rust_base_image >> .circleci/continue/main.yml
+            .* c-base_image << pipeline.parameters.base_image >> .circleci/continue/main.yml
+            .* c-main_dispatch << pipeline.parameters.main_dispatch >> .circleci/continue/main.yml
+            .* c-fault_proofs_dispatch << pipeline.parameters.fault_proofs_dispatch >> .circleci/continue/main.yml
+            .* c-reproducibility_dispatch << pipeline.parameters.reproducibility_dispatch >> .circleci/continue/main.yml
+            .* c-kontrol_dispatch << pipeline.parameters.kontrol_dispatch >> .circleci/continue/main.yml
+            .* c-cannon_full_test_dispatch << pipeline.parameters.cannon_full_test_dispatch >> .circleci/continue/main.yml
+            .* c-sdk_dispatch << pipeline.parameters.sdk_dispatch >> .circleci/continue/main.yml
+            .* c-publish_contract_artifacts_dispatch << pipeline.parameters.publish_contract_artifacts_dispatch >> .circleci/continue/main.yml
             .* c-stale_check_dispatch << pipeline.parameters.stale_check_dispatch >> .circleci/continue/main.yml
             .* c-contracts_coverage_dispatch << pipeline.parameters.contracts_coverage_dispatch >> .circleci/continue/main.yml
             .* c-heavy_fuzz_dispatch << pipeline.parameters.heavy_fuzz_dispatch >> .circleci/continue/main.yml
@@ -2737,9 +2727,26 @@ workflows:
             (packages/contracts-bedrock|\.circleci|\.github|ops/check-changed)/.* c-contracts_changed true .circleci/continue/main.yml
             ^(package\.json|mise\.toml)$ c-contracts_changed true .circleci/continue/main.yml
 
-            rust/.* rust_e2e_dispatch << pipeline.parameters.rust_e2e_dispatch >> .circleci/continue/rust-e2e.yml
-            rust/.* default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/rust-e2e.yml
-            rust/.* go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/rust-e2e.yml
+            # Docs CI — trigger on docs/public-docs/ changes
+            .* c-default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/docs-ci.yml
+            docs/public-docs/.* c-docs_changes_detected true .circleci/continue/docs-ci.yml
+
+            # Rust CI — always include config, gate jobs via c-rust_changes_detected
+            .* c-default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/rust-ci.yml
+            .* c-rust_base_image << pipeline.parameters.rust_base_image >> .circleci/continue/rust-ci.yml
+            .* c-base_image << pipeline.parameters.base_image >> .circleci/continue/rust-ci.yml
+            .* c-go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/rust-ci.yml
+            .* c-rust_ci_dispatch << pipeline.parameters.rust_ci_dispatch >> .circleci/continue/rust-ci.yml
+            (rust|\.circleci)/.* c-rust_changes_detected true .circleci/continue/rust-ci.yml
+            ^(?!docs/public-docs/).+ c-non_docs_changes true .circleci/continue/rust-ci.yml
+
+            # Rust E2E — always include config, gate jobs via c-rust_changes_detected
+            .* c-default_docker_image << pipeline.parameters.default_docker_image >> .circleci/continue/rust-e2e.yml
+            .* c-rust_base_image << pipeline.parameters.rust_base_image >> .circleci/continue/rust-e2e.yml
+            .* c-go-cache-version << pipeline.parameters.go-cache-version >> .circleci/continue/rust-e2e.yml
+            .* c-rust_e2e_dispatch << pipeline.parameters.rust_e2e_dispatch >> .circleci/continue/rust-e2e.yml
+            (rust|op-e2e|\.circleci)/.* c-rust_changes_detected true .circleci/continue/rust-e2e.yml
+            ^(?!docs/public-docs/).+ c-non_docs_changes true .circleci/continue/rust-e2e.yml
 
   setup-tag:
     when:
