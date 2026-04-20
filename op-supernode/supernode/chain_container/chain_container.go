@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,11 +31,11 @@ type ChainContainer interface {
 	Pause(ctx context.Context) error
 	Resume(ctx context.Context) error
 
-	SafeBlockAtTimestamp(ctx context.Context, ts uint64) (eth.L2BlockRef, error)
-	SafeHeadAtL1(ctx context.Context, l1BlockNum uint64) (l1 eth.BlockID, l2 eth.BlockID, err error)
-	// L1AtSafeHead returns the earliest L1 block at which the given L2 block became safe.
-	L1AtSafeHead(ctx context.Context, l2 eth.BlockID) (eth.BlockID, error)
-	CurrentL1(ctx context.Context) (eth.BlockRef, error)
+	ID() eth.ChainID
+	LocalSafeBlockAtTimestamp(ctx context.Context, ts uint64) (eth.L2BlockRef, error)
+	// TimestampToBlockNumber maps an L2 unix timestamp to the L2 block number (rollup derivation).
+	TimestampToBlockNumber(ctx context.Context, ts uint64) (uint64, error)
+	SyncStatus(ctx context.Context) (*eth.SyncStatus, error)
 	VerifiedAt(ctx context.Context, ts uint64) (l2, l1 eth.BlockID, err error)
 	OptimisticAt(ctx context.Context, ts uint64) (l2, l1 eth.BlockID, err error)
 	OutputRootAtL2BlockNumber(ctx context.Context, l2BlockNum uint64) (eth.Bytes32, error)
@@ -104,6 +105,14 @@ type simpleChainContainer struct {
 	appVersion         string
 	virtualNodeFactory virtualNodeFactory    // Factory function to create virtual node (for testing)
 	rollupClient       *sources.RollupClient // In-proc rollup RPC client bound to rpcHandler
+
+	// verifiersMu guards writes and reads of the verifiers slice. Concurrent
+	// readers (VerifiedAt, VerifierCurrentL1s) can race with the test-only
+	// ReplaceVerifier path used by RestartInteropActivity, which swaps a
+	// verifier while the chain container is still running.
+	verifiersMu sync.RWMutex
+	verifiers   []activity.VerificationActivity
+	onReset     ResetCallback // Called when chain resets to notify activities
 }
 
 // Interface conformance assertions
@@ -153,6 +162,45 @@ func NewChainContainer(
 		}
 	}
 	return c
+}
+
+func (c *simpleChainContainer) ID() eth.ChainID {
+	return c.chainID
+}
+
+// RegisterVerifier adds a verification activity to this chain container.
+// This allows late binding when activities and chains have circular dependencies.
+func (c *simpleChainContainer) RegisterVerifier(v activity.VerificationActivity) {
+	c.verifiersMu.Lock()
+	defer c.verifiersMu.Unlock()
+	c.verifiers = append(c.verifiers, v)
+}
+
+// ReplaceVerifier swaps a previously-registered verifier for a new one by
+// pointer identity. Returns true if a replacement occurred. Intended for
+// integration-test orchestration that restarts a single activity while the
+// chain container keeps running. Not part of the ChainContainer interface
+// because production code has no reason to replace verifiers.
+func (c *simpleChainContainer) ReplaceVerifier(old, new activity.VerificationActivity) bool {
+	c.verifiersMu.Lock()
+	defer c.verifiersMu.Unlock()
+	for i, v := range c.verifiers {
+		if v == old {
+			c.verifiers[i] = new
+			return true
+		}
+	}
+	return false
+}
+
+func (c *simpleChainContainer) VerifierCurrentL1s() []eth.BlockID {
+	c.verifiersMu.RLock()
+	defer c.verifiersMu.RUnlock()
+	result := make([]eth.BlockID, len(c.verifiers))
+	for i, v := range c.verifiers {
+		result[i] = v.CurrentL1()
+	}
+	return result
 }
 
 // defaultVirtualNodeFactory is the default factory that creates a real VirtualNode
@@ -343,8 +391,21 @@ func (c *simpleChainContainer) VerifiedAt(ctx context.Context, ts uint64) (l2, l
 		return eth.BlockID{}, eth.BlockID{}, err
 	}
 
-	// if there were Verification Activities, we would check if the data could be *verified* at this L1, or would use its L1 block number
-	// but there are currently no verification activities, so we just return the l2 and l1 blocks
+	c.verifiersMu.RLock()
+	verifiers := append([]activity.VerificationActivity(nil), c.verifiers...)
+	c.verifiersMu.RUnlock()
+	for _, verifier := range verifiers {
+		verified, err := verifier.VerifiedAtTimestamp(ts)
+		if err != nil {
+			c.log.Error("error checking if data could be verified at this L1", "error", err)
+			return eth.BlockID{}, eth.BlockID{}, err
+		}
+		if !verified {
+			c.log.Error("verifier does not have data at this timestamp. cannot supply block at this timestamp as verified", "verifier", verifier.Name())
+			return eth.BlockID{}, eth.BlockID{}, fmt.Errorf("verifier %s does not have data at this timestamp: %w", verifier.Name(), ethereum.NotFound)
+		}
+	}
+
 	return l2Block.ID(), l1Block, nil
 }
 

@@ -27,24 +27,39 @@ import (
 )
 
 type Supernode struct {
-	log          gethlog.Logger
-	version      string
-	requestStop  context.CancelCauseFunc
-	stopped      bool
-	cfg          *config.CLIConfig
-	chains       map[eth.ChainID]cc.ChainContainer
-	activities   []activity.Activity
-	rootRPC      *oprpc.Handler
-	wg           sync.WaitGroup
-	l1Client     *sources.L1Client
-	beaconClient *sources.L1BeaconClient
-	httpServer   *httputil.HTTPServer
-	rpcRouter    *resources.Router
+	log         gethlog.Logger
+	version     string
+	requestStop context.CancelCauseFunc
+	stopped     bool
+	cfg         *config.CLIConfig
+	chains      map[eth.ChainID]cc.ChainContainer
+	// activitiesMu guards reads and writes of the activities slice. Concurrent
+	// readers (onChainReset, InteropActivity, Stop) can race with the
+	// test-only RestartInteropActivity path that swaps the interop activity
+	// while other activities and chain containers are still running.
+	activitiesMu    sync.RWMutex
+	activities      []activity.Activity
+	rootRPC         *oprpc.Handler
+	wg              sync.WaitGroup
+	lifecycleCancel context.CancelFunc // canceled in Stop() to unblock goroutines from Start()
+	l1Client        *sources.L1Client
+	beaconClient    *sources.L1BeaconClient
+	httpServer      *httputil.HTTPServer
+	rpcRouter       *resources.Router
 	// Metrics router/server for per-chain metrics
 	metrics       *resources.MetricsService
 	metricsRouter *resources.MetricsRouter
 	// cached address when available
 	rpcAddr string
+
+	// Cached parameters needed to reconstruct the interop activity in
+	// RestartInteropActivity (test-only). See supernode_test_access.go.
+	interopActivationTs    *uint64
+	interopMsgExpiryWindow uint64
+	// lifecycleCtx is the parent context for all activity goroutines, captured
+	// from Start(). RestartInteropActivity uses it to re-launch the interop
+	// activity without disturbing other activities.
+	lifecycleCtx context.Context
 }
 
 func New(ctx context.Context, log gethlog.Logger, version string, requestStop context.CancelCauseFunc, cfg *config.CLIConfig, vnCfgs map[eth.ChainID]*opnodecfg.Config) (*Supernode, error) {
@@ -93,6 +108,10 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		return nil, fmt.Errorf("resolve interop activation timestamp: %w", err)
 	}
 
+	if err := checkLogBackfillRequiresInteropActivation(cfg.InteropLogBackfillDepth, interopActivationTimestamp); err != nil {
+		return nil, err
+	}
+
 	log.Info("initializing interop activity", "enabled", interopActivationTimestamp != nil)
 	// Initialize interop activity if the activation timestamp is known (non-nil).
 	// If it's nil, don't start interop. If it's non-nil (including 0), do start it.
@@ -105,11 +124,13 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 				break
 			}
 		}
-		interopActivity := interop.New(log.New("activity", "interop"), *interopActivationTimestamp, msgExpiryWindow, s.chains, cfg.DataDir, s.l1Client)
+		interopActivity := interop.New(log.New("activity", "interop"), *interopActivationTimestamp, msgExpiryWindow, s.chains, cfg.DataDir, s.l1Client, cfg.InteropLogBackfillDepth)
 		s.activities = append(s.activities, interopActivity)
 		for _, chain := range s.chains {
 			chain.RegisterVerifier(interopActivity)
 		}
+		s.interopActivationTs = interopActivationTimestamp
+		s.interopMsgExpiryWindow = msgExpiryWindow
 	}
 
 	// Set up reset callbacks on all chain containers
@@ -127,6 +148,21 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		s.metrics = resources.NewMetricsService(log, cfg.MetricsConfig.ListenAddr, cfg.MetricsConfig.ListenPort, s.metricsRouter)
 	}
 	return s, nil
+}
+
+// checkLogBackfillRequiresInteropActivation enforces that interop log
+// backfill can only run when an activation timestamp is known. Runs after
+// resolveInteropActivationTimestamp so a rollup-derived activation counts
+// as a valid source, not only the CLI override. config.Check() can't see
+// rollup configs and therefore can't do this check itself.
+func checkLogBackfillRequiresInteropActivation(depth time.Duration, resolved *uint64) error {
+	if depth <= 0 {
+		return nil
+	}
+	if resolved != nil {
+		return nil
+	}
+	return fmt.Errorf("interop.log-backfill-depth=%s requires an interop activation timestamp (set --interop.activation-timestamp or configure rollup InteropTime on every chain)", depth)
 }
 
 func resolveInteropActivationTimestamp(override *uint64, vnCfgs map[eth.ChainID]*opnodecfg.Config) (*uint64, error) {
@@ -175,6 +211,16 @@ func resolveInteropActivationTimestamp(override *uint64, vnCfgs map[eth.ChainID]
 
 func (s *Supernode) Start(ctx context.Context) error {
 	s.log.Info("supernode starting", "version", s.version)
+
+	// Create a lifecycle context that is canceled in Stop(). This ensures that
+	// goroutines spawned below will exit even if Stop() wins the race and runs
+	// before the goroutine has been scheduled. Without this, an activity's
+	// Start(ctx) could block forever if its Stop() was already called (and
+	// found cancel == nil) before Start() had a chance to initialize.
+	var lifecycleCtx context.Context
+	lifecycleCtx, s.lifecycleCancel = context.WithCancel(ctx)
+	s.lifecycleCtx = lifecycleCtx
+
 	if s.httpServer != nil {
 		s.wg.Add(1)
 		go func() {
@@ -264,8 +310,11 @@ func (s *Supernode) Stop(ctx context.Context) error {
 		}
 	}
 
-	// Stop runnable activities
-	for _, a := range s.activities {
+	s.activitiesMu.RLock()
+	activities := append([]activity.Activity(nil), s.activities...)
+	s.activitiesMu.RUnlock()
+	for _, a := range activities {
+		activityName := a.Name()
 		if run, ok := a.(activity.RunnableActivity); ok {
 			if err := run.Stop(ctx); err != nil {
 				s.log.Error("error stopping runnable activity", "error", err)
@@ -286,6 +335,22 @@ func (s *Supernode) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// onChainReset is called when a chain container resets due to an invalidated block.
+// It notifies all activities about the reset so they can clean up cached state.
+func (s *Supernode) onChainReset(chainID eth.ChainID, timestamp uint64, invalidatedBlock eth.BlockRef) {
+	s.log.Info("chain reset detected, notifying activities",
+		"chainID", chainID,
+		"timestamp", timestamp,
+		"invalidatedBlock", invalidatedBlock,
+	)
+	s.activitiesMu.RLock()
+	activities := append([]activity.Activity(nil), s.activities...)
+	s.activitiesMu.RUnlock()
+	for _, a := range activities {
+		a.Reset(chainID, timestamp, invalidatedBlock)
+	}
 }
 
 func (s *Supernode) Stopped() bool { return s.stopped }
