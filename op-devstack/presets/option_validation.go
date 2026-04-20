@@ -27,6 +27,7 @@ const (
 	optionKindAfterBuild
 	optionKindProofValidation
 	optionKindMessageExpiryWindow
+	optionKindInteropLogBackfill
 	optionKindInteropFilter
 )
 
@@ -46,6 +47,7 @@ const allOptionKinds = optionKindDeployer |
 	optionKindAfterBuild |
 	optionKindProofValidation |
 	optionKindMessageExpiryWindow |
+	optionKindInteropLogBackfill |
 	optionKindInteropFilter
 
 var optionKindLabels = []struct {
@@ -68,6 +70,7 @@ var optionKindLabels = []struct {
 	{kind: optionKindAfterBuild, label: "after-build hooks"},
 	{kind: optionKindProofValidation, label: "proof-validation hooks"},
 	{kind: optionKindMessageExpiryWindow, label: "message expiry window"},
+	{kind: optionKindInteropLogBackfill, label: "interop log backfill depth"},
 	{kind: optionKindInteropFilter, label: "interop filter"},
 }
 
@@ -165,6 +168,7 @@ const twoL2SupernodePresetSupportedOptionKinds = optionKindDeployer |
 const twoL2SupernodeInteropPresetSupportedOptionKinds = optionKindDeployer |
 	optionKindTimeTravel |
 	optionKindL1EL |
+	optionKindInteropLogBackfill |
 	optionKindInteropFilter
 
 const singleChainWithFlashblocksPresetSupportedOptionKinds = optionKindDeployer |

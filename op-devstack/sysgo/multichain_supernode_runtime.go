@@ -288,6 +288,7 @@ func newTwoL2SupernodeRuntimeWithConfig(t devtest.T, enableInterop bool, delaySe
 		l2BEL,
 		depSet,
 		interopActivationTimestamp,
+		cfg.InteropLogBackfillDepth,
 		jwtSecret,
 	)
 
@@ -457,6 +458,7 @@ func startTwoL2SharedSupernode(
 	l2BEL L2ELNode,
 	depSet *depset.StaticConfigDependencySet,
 	interopActivationTimestamp *uint64,
+	interopLogBackfillDepth time.Duration,
 	jwtSecret [32]byte,
 ) (*SuperNode, *SuperNodeProxy, *SuperNodeProxy) {
 	require := t.Require()
@@ -523,6 +525,7 @@ func startTwoL2SharedSupernode(
 		L1BeaconAddr:               l1CL.beaconHTTPAddr,
 		RPCConfig:                  oprpc.CLIConfig{ListenAddr: "127.0.0.1", ListenPort: 0, EnableAdmin: true},
 		InteropActivationTimestamp: interopActivationTimestamp,
+		InteropLogBackfillDepth:    interopLogBackfillDepth,
 	}
 
 	supernode := &SuperNode{
