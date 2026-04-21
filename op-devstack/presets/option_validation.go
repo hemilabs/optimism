@@ -160,12 +160,14 @@ const supernodeProofsPresetSupportedOptionKinds = optionKindDeployer |
 	optionKindBatcher |
 	optionKindChallengerCannonKona |
 	optionKindL1EL |
+	optionKindTimeTravel |
 	optionKindMessageExpiryWindow
 
 const twoL2SupernodePresetSupportedOptionKinds = optionKindDeployer |
 	optionKindL1EL
 
 const twoL2SupernodeInteropPresetSupportedOptionKinds = optionKindDeployer |
+	optionKindBatcher |
 	optionKindTimeTravel |
 	optionKindL1EL |
 	optionKindInteropLogBackfill |
