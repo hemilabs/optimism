@@ -39,6 +39,12 @@ type mockVirtualNode struct {
 	safeHeadL1  eth.BlockID
 	safeHeadL2  eth.BlockID
 	safeHeadErr error
+
+	// syncStatusOverride lets tests return a fully-formed eth.SyncStatus
+	// (e.g. populated LocalSafeL2.Time / LocalFinalizedL2 / FinalizedL1)
+	// instead of the synthesised default built from safeHeadL1/safeHeadL2.
+	// When nil, the default synthesis below is used.
+	syncStatusOverride func() (*eth.SyncStatus, error)
 }
 
 func newMockVirtualNode() *mockVirtualNode {
@@ -101,12 +107,84 @@ func (m *mockVirtualNode) LastL1(ctx context.Context) (eth.BlockID, error) {
 	return m.safeHeadL1, m.safeHeadErr
 }
 
-// CurrentL1 implements virtual_node.VirtualNode CurrentL1
-func (m *mockVirtualNode) CurrentL1(ctx context.Context) (eth.BlockRef, error) {
-	return eth.BlockRef{Hash: m.safeHeadL1.Hash, Number: m.safeHeadL1.Number}, m.safeHeadErr
+// SyncStatus implements virtual_node.VirtualNode SyncStatus
+func (m *mockVirtualNode) SyncStatus(ctx context.Context) (*eth.SyncStatus, error) {
+	if m.syncStatusOverride != nil {
+		return m.syncStatusOverride()
+	}
+	if m.safeHeadErr != nil {
+		return nil, m.safeHeadErr
+	}
+	return &eth.SyncStatus{
+		FinalizedL1: eth.L1BlockRef{},
+		CurrentL1:   eth.L1BlockRef{Hash: m.safeHeadL1.Hash, Number: m.safeHeadL1.Number},
+		LocalSafeL2: eth.L2BlockRef{Hash: m.safeHeadL2.Hash, Number: m.safeHeadL2.Number},
+	}, nil
 }
 
 // SafeDB is not required by VirtualNode in these tests
+
+// mockEngineController is a mock implementation of engine_controller.EngineController
+type mockEngineController struct {
+	rewindToTimestampCalled  int
+	rewindTimestamp          uint64
+	rewindErr                error
+	rewindFunc               func(ctx context.Context, timestamp uint64) error // optional custom behavior
+	l2BlockRefByNumberResult eth.L2BlockRef
+	l2BlockRefByNumberErr    error
+}
+
+func (m *mockEngineController) BlockAtTimestamp(ctx context.Context, ts uint64, label eth.BlockLabel) (eth.L2BlockRef, error) {
+	return eth.L2BlockRef{}, nil
+}
+
+func (m *mockEngineController) L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error) {
+	return m.l2BlockRefByNumberResult, m.l2BlockRefByNumberErr
+}
+
+func (m *mockEngineController) OutputV0AtBlockNumber(ctx context.Context, num uint64) (*eth.OutputV0, error) {
+	return nil, nil
+}
+
+func (m *mockEngineController) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {
+	return nil, nil, nil
+}
+
+func (m *mockEngineController) Close() error {
+	return nil
+}
+
+var _ engine_controller.EngineController = (*mockEngineController)(nil)
+
+// mockVerificationActivity is a mock implementation of activity.VerificationActivity
+type mockVerificationActivity struct {
+	name                      string
+	currentL1Result           eth.BlockID
+	verifiedAtTimestampResult bool
+	verifiedAtTimestampErr    error
+}
+
+func (m *mockVerificationActivity) Name() string {
+	return m.name
+}
+
+func (m *mockVerificationActivity) CurrentL1() eth.BlockID {
+	return m.currentL1Result
+}
+
+func (m *mockVerificationActivity) VerifiedAtTimestamp(ts uint64) (bool, error) {
+	return m.verifiedAtTimestampResult, m.verifiedAtTimestampErr
+}
+
+func (m *mockVerificationActivity) LatestVerifiedL2Block(chainID eth.ChainID) (eth.BlockID, uint64) {
+	return eth.BlockID{}, 0
+}
+func (m *mockVerificationActivity) Reset(chainID eth.ChainID, timestamp uint64, invalidatedBlock eth.BlockRef) {
+}
+func (m *mockVerificationActivity) VerifiedBlockAtL1(chainID eth.ChainID, l1BlockRef eth.L1BlockRef) (eth.BlockID, uint64) {
+	return eth.BlockID{}, 0
+}
+func (m *mockVerificationActivity) IsActiveAt(ts uint64) bool { return true }
 
 // Test helpers
 func createTestVNConfig() *opnodecfg.Config {
