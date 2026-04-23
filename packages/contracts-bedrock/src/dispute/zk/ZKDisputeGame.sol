@@ -13,10 +13,6 @@ import {
     Timestamp,
     Proposal
 } from "src/dispute/lib/Types.sol";
-<<<<<<<< HEAD:packages/contracts-bedrock/src/dispute/zk/OPSuccinctFaultDisputeGame.sol
-import { AggregationOutputs, OP_SUCCINCT_FAULT_DISPUTE_GAME_TYPE } from "src/dispute/lib/Types.sol";
-========
->>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/src/dispute/zk/ZKDisputeGame.sol
 import {
     AlreadyInitialized,
     BondTransferFailed,
@@ -46,22 +42,12 @@ import { IZKVerifier } from "interfaces/dispute/zk/IZKVerifier.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 
-<<<<<<<< HEAD:packages/contracts-bedrock/src/dispute/zk/OPSuccinctFaultDisputeGame.sol
-// Contracts
-import { AccessManager } from "src/dispute/zk/AccessManager.sol";
-
-/// @title OPSuccinctFaultDisputeGame
-/// @notice An implementation of the `IFaultDisputeGame` interface.
-/// @dev Derived from https://github.com/succinctlabs/op-succinct (at commit c13844a9bbc330cca69eef2538d8f8ec123e1653)
-contract OPSuccinctFaultDisputeGame is Clone, ISemver, IDisputeGame {
-========
 /// @title ZKDisputeGame
 /// @notice A ZK proof-based dispute game using the MCP (Modular Clone Proxy) pattern
 ///         with Clone-With-Immutable-Args (CWIA). Spec-compliant, permissionless
 ///         design that uses a generic IZKVerifier and DelayedWETH for bond custody.
 /// @dev Derived from https://github.com/succinctlabs/op-succinct (at commit c13844a9bbc330cca69eef2538d8f8ec123e1653)
 contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
->>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/src/dispute/zk/ZKDisputeGame.sol
     ////////////////////////////////////////////////////////////////
     //                         Enums                              //
     ////////////////////////////////////////////////////////////////
@@ -113,13 +99,8 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
     ////////////////////////////////////////////////////////////////
 
     /// @notice Semantic version.
-<<<<<<<< HEAD:packages/contracts-bedrock/src/dispute/zk/OPSuccinctFaultDisputeGame.sol
-    /// @custom:semver 0.0.0
-    string public constant version = "0.0.0";
-========
-    /// @custom:semver 1.0.0
-    string public constant version = "1.0.0";
->>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/src/dispute/zk/ZKDisputeGame.sol
+    /// @custom:semver 1.1.0
+    string public constant version = "1.1.0";
 
     /// @notice The starting timestamp of the game.
     Timestamp public createdAt;
@@ -148,41 +129,6 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
     /// @notice The bond distribution mode of the game.
     BondDistributionMode public bondDistributionMode;
 
-<<<<<<<< HEAD:packages/contracts-bedrock/src/dispute/zk/OPSuccinctFaultDisputeGame.sol
-    /// @param _maxChallengeDuration The maximum duration allowed for a challenger to challenge a game.
-    /// @param _maxProveDuration The maximum duration allowed for a proposer to prove against a challenge.
-    /// @param _disputeGameFactory The factory that creates the dispute games.
-    /// @param _sp1Verifier The address of the SP1 verifier that verifies the proof for the aggregation program.
-    /// @param _rollupConfigHash The rollup config hash for the L2 network.
-    /// @param _aggregationVkey The vkey for the aggregation program.
-    /// @param _rangeVkeyCommitment The commitment to the range vkey.
-    /// @param _challengerBond The bond amount that must be submitted by the challenger.
-    /// @param _anchorStateRegistry The anchor state registry for the L2 network.
-    constructor(
-        Duration _maxChallengeDuration,
-        Duration _maxProveDuration,
-        IDisputeGameFactory _disputeGameFactory,
-        ISP1Verifier _sp1Verifier,
-        bytes32 _rollupConfigHash,
-        bytes32 _aggregationVkey,
-        bytes32 _rangeVkeyCommitment,
-        uint256 _challengerBond,
-        IAnchorStateRegistry _anchorStateRegistry,
-        AccessManager _accessManager
-    ) {
-        // Set up initial game state.
-        GAME_TYPE = GameType.wrap(OP_SUCCINCT_FAULT_DISPUTE_GAME_TYPE);
-        MAX_CHALLENGE_DURATION = _maxChallengeDuration;
-        MAX_PROVE_DURATION = _maxProveDuration;
-        DISPUTE_GAME_FACTORY = _disputeGameFactory;
-        SP1_VERIFIER = _sp1Verifier;
-        ROLLUP_CONFIG_HASH = _rollupConfigHash;
-        AGGREGATION_VKEY = _aggregationVkey;
-        RANGE_VKEY_COMMITMENT = _rangeVkeyCommitment;
-        CHALLENGER_BOND = _challengerBond;
-        ANCHOR_STATE_REGISTRY = _anchorStateRegistry;
-        ACCESS_MANAGER = _accessManager;
-========
     /// @notice A boolean for whether or not the game type was respected when the game was created.
     bool public wasRespectedGameTypeWhenCreated;
 
@@ -200,7 +146,6 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
     /// @return creator_ The creator of the dispute game.
     function gameCreator() public pure returns (address creator_) {
         creator_ = _getArgAddress(0x00);
->>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/src/dispute/zk/ZKDisputeGame.sol
     }
 
     /// @notice Getter for the root claim.
@@ -359,26 +304,21 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
         // The first game is initialized with a parent index of uint32.max
         if (parentIndex() != type(uint32).max) {
             // For subsequent games, get the parent game's information
-            (,, IDisputeGame proxy) = disputeGameFactory.gameAtIndex(parentIndex());
+            (,, IDisputeGame parent) = disputeGameFactory.gameAtIndex(parentIndex());
 
             // Verify parent game is not blacklisted or retired.
-            if (anchorStateRegistry().isGameBlacklisted(proxy) || anchorStateRegistry().isGameRetired(proxy)) {
+            if (anchorStateRegistry().isGameBlacklisted(parent) || anchorStateRegistry().isGameRetired(parent)) {
                 revert InvalidParentGame();
             }
 
             // INVARIANT: The parent game must be of the same game type.
-            if (IDisputeGame(payable(address(proxy))).gameType().raw() != gameType().raw()) {
+            if (IDisputeGame(payable(address(parent))).gameType().raw() != gameType().raw()) {
                 revert UnexpectedGameType();
             }
 
             startingProposal = Proposal({
-<<<<<<<< HEAD:packages/contracts-bedrock/src/dispute/zk/OPSuccinctFaultDisputeGame.sol
-                l2SequenceNumber: OPSuccinctFaultDisputeGame(address(proxy)).l2SequenceNumber(),
-                root: Hash.wrap(OPSuccinctFaultDisputeGame(address(proxy)).rootClaim().raw())
-========
-                l2SequenceNumber: IDisputeGame(payable(address(proxy))).l2SequenceNumber(),
-                root: Hash.wrap(IDisputeGame(payable(address(proxy))).rootClaim().raw())
->>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/src/dispute/zk/ZKDisputeGame.sol
+                l2SequenceNumber: IDisputeGame(payable(address(parent))).l2SequenceNumber(),
+                root: Hash.wrap(IDisputeGame(payable(address(parent))).rootClaim().raw())
             });
 
             // INVARIANT: The parent game's sequence number must be strictly above the anchor state.
@@ -386,7 +326,7 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
             if (startingProposal.l2SequenceNumber <= anchorL2SeqNum) revert InvalidParentGame();
 
             // INVARIANT: The parent game must be a valid game.
-            if (proxy.status() == GameStatus.CHALLENGER_WINS) revert InvalidParentGame();
+            if (parent.status() == GameStatus.CHALLENGER_WINS) revert InvalidParentGame();
         } else {
             // When there is no parent game, the starting output root is the anchor state for the game type.
             (startingProposal.root, startingProposal.l2SequenceNumber) = anchorStateRegistry().getAnchorRoot();
@@ -395,6 +335,9 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
         // Do not allow the game to be initialized if the root claim corresponds to a block at or before the
         // configured starting block number.
         if (l2SequenceNumber() <= startingProposal.l2SequenceNumber) {
+            revert UnexpectedRootClaim(rootClaim());
+        }
+        if (l2SequenceNumber() > type(uint64).max) {
             revert UnexpectedRootClaim(rootClaim());
         }
 
@@ -493,6 +436,10 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
     }
 
     /// @notice Returns the status of the parent game.
+    /// @dev A parentIndex of uint32.max is the sentinel value representing the absence of a parent game
+    ///      Treating the anchor as DEFENDER_WINS is safe because the anchor
+    ///      state is only ever updated from a previously resolved DEFENDER_WINS game, so its root
+    ///      is already trusted. Any other parentIndex fetches the actual parent from the factory.
     function getParentGameStatus() private view returns (GameStatus) {
         if (parentIndex() != type(uint32).max) {
             (,, IDisputeGame parentGame) = disputeGameFactory.gameAtIndex(parentIndex());
@@ -510,17 +457,22 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
     ///         `CHALLENGER_WINS` when the proposer's claim has been challenged, but the proposer has not proven
     ///         its claim within the `MAX_PROVE_DURATION`.
     function resolve() external returns (GameStatus) {
-        // INVARIANT: Resolution cannot occur unless the game has already been resolved.
+        // INVARIANT: Resolution cannot occur if the game has already been resolved.
         if (status != GameStatus.IN_PROGRESS) revert ClaimAlreadyResolved();
 
         // INVARIANT: Cannot resolve a game if the parent game has not been resolved.
+        // Note: Parent blacklisting or retirement is NOT propagated automatically to descendants.
+        // resolve() only checks the parent's GameStatus. If a parent is blacklisted after a child is created,
+        // the child must be manually blacklisted by the guardian to enter REFUND mode.
         GameStatus parentGameStatus = getParentGameStatus();
         if (parentGameStatus == GameStatus.IN_PROGRESS) revert ParentGameNotResolved();
 
         // INVARIANT: If the parent game's claim is invalid, then the current game's claim is invalid.
         if (parentGameStatus == GameStatus.CHALLENGER_WINS) {
             // Parent game is invalid so this game is invalid too. Therefore the challenger wins and gets all bonds.
-            // If the game has not been challenged then there will not be any challenger address and the bond is burned.
+            // Note: If unchallenged, the bond is credited to normalModeCredit[address(0)] and effectively
+            // burned inside DelayedWETH where the owner can recover it via hold()/recover(). Proposers
+            // should wait for sufficient parent finality before extending to avoid this loss.
             status = GameStatus.CHALLENGER_WINS;
             normalModeCredit[claimData.challenger] = totalBonds;
         } else {
@@ -654,8 +606,10 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
             revert GameNotResolved();
         }
 
+        IDisputeGame self = IDisputeGame(address(this));
+
         // Game must be finalized according to the AnchorStateRegistry.
-        bool finalized = anchorStateRegistry().isGameFinalized(IDisputeGame(address(this)));
+        bool finalized = anchorStateRegistry().isGameFinalized(self);
         if (!finalized) {
             revert GameNotFinalized();
         }
@@ -663,10 +617,10 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
         // Try to update the anchor game first. Won't always succeed because delays can lead
         // to situations in which this game might not be eligible to be a new anchor game.
         // nosemgrep: sol-safety-trycatch-eip150
-        try anchorStateRegistry().setAnchorState(IDisputeGame(address(this))) { } catch { }
+        try anchorStateRegistry().setAnchorState(self) { } catch { }
 
         // Check if the game is a proper game, which will determine the bond distribution mode.
-        bool properGame = anchorStateRegistry().isGameProper(IDisputeGame(address(this)));
+        bool properGame = anchorStateRegistry().isGameProper(self);
 
         // If the game is a proper game, the bonds should be distributed normally. Otherwise, go
         // into refund mode and distribute bonds back to their original depositors.
@@ -690,64 +644,6 @@ contract ZKDisputeGame is Clone, ISemver, IDisputeGame {
         gameOver_ = claimData.deadline.raw() < uint64(block.timestamp) || claimData.prover != address(0);
     }
 
-<<<<<<<< HEAD:packages/contracts-bedrock/src/dispute/zk/OPSuccinctFaultDisputeGame.sol
-    /// @notice Getter for the game type.
-    /// @dev The reference impl should be entirely different depending on the type (fault, validity)
-    ///      i.e. The game type should indicate the security model.
-    /// @return gameType_ The type of proof system being used.
-    function gameType() public view returns (GameType gameType_) {
-        gameType_ = GAME_TYPE;
-    }
-
-    /// @notice Getter for the creator of the dispute game.
-    /// @dev `clones-with-immutable-args` argument #1
-    /// @return creator_ The creator of the dispute game.
-    function gameCreator() public pure returns (address creator_) {
-        creator_ = _getArgAddress(0x00);
-    }
-
-    /// @notice Getter for the root claim.
-    /// @dev `clones-with-immutable-args` argument #2
-    /// @return rootClaim_ The root claim of the DisputeGame.
-    function rootClaim() public pure returns (Claim rootClaim_) {
-        rootClaim_ = Claim.wrap(_getArgBytes32(0x14));
-    }
-
-    /// @notice Getter for the parent hash of the L1 block when the dispute game was created.
-    /// @dev `clones-with-immutable-args` argument #3
-    /// @return l1Head_ The parent hash of the L1 block when the dispute game was created.
-    function l1Head() public pure returns (Hash l1Head_) {
-        l1Head_ = Hash.wrap(_getArgBytes32(0x34));
-    }
-
-    /// @notice Getter for the extra data.
-    /// @dev `clones-with-immutable-args` argument #4
-    /// @return extraData_ Any extra data supplied to the dispute game contract by the creator.
-    function extraData() public pure returns (bytes memory extraData_) {
-        // The extra data starts at the second word within the cwia calldata and
-        // is 36 bytes long. 32 bytes are for the l2SequenceNumber, 4 bytes are for the parentIndex.
-        extraData_ = _getArgBytes(0x54, 0x24);
-    }
-
-    /// @notice A compliant implementation of this interface should return the components of the
-    ///         game UUID's preimage provided in the cwia payload. The preimage of the UUID is
-    ///         constructed as `keccak256(gameType . rootClaim . extraData)` where `.` denotes
-    ///         concatenation.
-    /// @return gameType_ The type of proof system being used.
-    /// @return rootClaim_ The root claim of the DisputeGame.
-    /// @return extraData_ Any extra data supplied to the dispute game contract by the creator.
-    function gameData() external view returns (GameType gameType_, Claim rootClaim_, bytes memory extraData_) {
-        gameType_ = gameType();
-        rootClaim_ = rootClaim();
-        extraData_ = extraData();
-    }
-
-    ////////////////////////////////////////////////////////////////
-    //                       MISC EXTERNAL                        //
-    ////////////////////////////////////////////////////////////////
-
-========
->>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/src/dispute/zk/ZKDisputeGame.sol
     /// @notice Returns the credit balance of a given recipient.
     /// @param _recipient The recipient of the credit.
     /// @return credit_ The credit balance of the recipient.
