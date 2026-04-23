@@ -27,19 +27,25 @@ import (
 )
 
 type Supernode struct {
-	log          gethlog.Logger
-	version      string
-	requestStop  context.CancelCauseFunc
-	stopped      bool
-	cfg          *config.CLIConfig
-	chains       map[eth.ChainID]cc.ChainContainer
-	activities   []activity.Activity
-	rootRPC      *oprpc.Handler
-	wg           sync.WaitGroup
-	l1Client     *sources.L1Client
-	beaconClient *sources.L1BeaconClient
-	httpServer   *httputil.HTTPServer
-	rpcRouter    *resources.Router
+	log         gethlog.Logger
+	version     string
+	requestStop context.CancelCauseFunc
+	stopped     bool
+	cfg         *config.CLIConfig
+	chains      map[eth.ChainID]cc.ChainContainer
+	// activitiesMu guards reads and writes of the activities slice. Concurrent
+	// readers (onChainReset, InteropActivity, Stop) can race with the
+	// test-only RestartInteropActivity path that swaps the interop activity
+	// while other activities and chain containers are still running.
+	activitiesMu    sync.RWMutex
+	activities      []activity.Activity
+	rootRPC         *oprpc.Handler
+	wg              sync.WaitGroup
+	lifecycleCancel context.CancelFunc // canceled in Stop() to unblock goroutines from Start()
+	l1Client        *sources.L1Client
+	beaconClient    *sources.L1BeaconClient
+	httpServer      *httputil.HTTPServer
+	rpcRouter       *resources.Router
 	// Metrics router/server for per-chain metrics
 	metrics       *resources.MetricsService
 	metricsRouter *resources.MetricsRouter
@@ -82,9 +88,11 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		}
 		s.chains[chainID] = cc.NewChainContainer(chainID, vnCfgs[chainID], log, *cfg, initOverrides, nil, s.rpcRouter.SetHandler, s.metricsRouter.SetHandler)
 	}
-	// Initialize activities
+
+	// Initialize fixed activities
 	s.activities = []activity.Activity{
 		heartbeat.New(log.New("activity", "heartbeat"), 10*time.Second),
+		supernodeactivity.New(log.New("activity", "supernode"), s.chains),
 		superroot.New(log.New("activity", "superroot"), s.chains),
 	}
 	addr := net.JoinHostPort(cfg.RPCConfig.ListenAddr, strconv.Itoa(cfg.RPCConfig.ListenPort))
