@@ -25,6 +25,12 @@ import (
 
 const virtualNodeVersion = "0.1.0"
 
+// ErrHistoryUnavailable is the permanent counterpart of ethereum.NotFound:
+// SafeDB on this node cannot and will not contain the requested history
+// (e.g. snap/CL-sync bootstrap gap). Interop halts on this rather than
+// retrying; recovery requires operator intervention.
+var ErrHistoryUnavailable = errors.New("safedb history unavailable on this node")
+
 type ChainContainer interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
@@ -370,14 +376,21 @@ func (c *simpleChainContainer) L1AtSafeHead(ctx context.Context, l2 eth.BlockID)
 	if c.vn == nil {
 		return eth.BlockID{}, fmt.Errorf("virtual node not initialized")
 	}
-	return c.vn.L1AtSafeHead(ctx, l2)
-}
-
-// CurrentL1 returns the most recent processed L1 block reference based on the derivation pipeline sync status.
-func (c *simpleChainContainer) CurrentL1(ctx context.Context) (eth.BlockRef, error) {
-	if c.vn == nil {
-		if c.log != nil {
-			c.log.Warn("CurrentL1: virtual node not initialized")
+	status, err := c.SyncStatus(ctx)
+	if err != nil {
+		return eth.BlockID{}, err
+	}
+	currentL1 := status.CurrentL1
+	c.log.Debug("safeDBAtL2", "l2", l2, "currentL1", currentL1, "err", err)
+	l1, err := c.vn.L1AtSafeHead(ctx, l2)
+	if err != nil {
+		// Permanent history gap -> ErrHistoryUnavailable (interop halts).
+		// Transient lag -> ethereum.NotFound (callers back off and retry).
+		if errors.Is(err, virtual_node.ErrL1AtSafeHeadUnavailable) {
+			return eth.BlockID{}, fmt.Errorf("L1 at safe head unavailable for L2 %s: %w", l2, ErrHistoryUnavailable)
+		}
+		if errors.Is(err, virtual_node.ErrL1AtSafeHeadNotFound) {
+			return eth.BlockID{}, fmt.Errorf("L1 at safe head not available for L2 %s: %w", l2, ethereum.NotFound)
 		}
 		return eth.BlockRef{}, nil
 	}
