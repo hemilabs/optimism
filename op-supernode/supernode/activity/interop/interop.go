@@ -2,7 +2,6 @@ package interop
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -76,52 +75,6 @@ const (
 	DecisionRewind
 )
 
-// Decision is serialized as a self-describing string in the WAL so that the
-// on-disk format survives enum re-ordering or the insertion of new variants.
-func (d Decision) String() string {
-	switch d {
-	case DecisionWait:
-		return "wait"
-	case DecisionAdvance:
-		return "advance"
-	case DecisionInvalidate:
-		return "invalidate"
-	case DecisionRewind:
-		return "rewind"
-	default:
-		return fmt.Sprintf("unknown(%d)", int(d))
-	}
-}
-
-func (d Decision) MarshalJSON() ([]byte, error) {
-	switch d {
-	case DecisionWait, DecisionAdvance, DecisionInvalidate, DecisionRewind:
-		return json.Marshal(d.String())
-	default:
-		return nil, fmt.Errorf("marshal decision: unknown value %d", int(d))
-	}
-}
-
-func (d *Decision) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		return fmt.Errorf("unmarshal decision: expected string: %w", err)
-	}
-	switch s {
-	case "wait":
-		*d = DecisionWait
-	case "advance":
-		*d = DecisionAdvance
-	case "invalidate":
-		*d = DecisionInvalidate
-	case "rewind":
-		*d = DecisionRewind
-	default:
-		return fmt.Errorf("unmarshal decision: unknown value %q", s)
-	}
-	return nil
-}
-
 // StepOutput combines a decision with the verification result (if any).
 type StepOutput struct {
 	Decision Decision
@@ -131,7 +84,7 @@ type StepOutput struct {
 // Interop is a VerificationActivity that can also run background work as a RunnableActivity.
 type Interop struct {
 	log                 log.Logger
-	chains              map[eth.ChainID]cc.InteropChain
+	chains              map[eth.ChainID]cc.ChainContainer
 	activationTimestamp uint64 // immutable protocol activation timestamp
 
 	// runtimeActivationTimestamp is the effective activation timestamp used
@@ -155,12 +108,12 @@ type Interop struct {
 
 	currentL1 eth.BlockID
 
-	verifyFn func(ts uint64, blocksAtTimestamp map[eth.ChainID]eth.BlockID, view *frontierVerificationView) (Result, error)
+	verifyFn func(ts uint64, blocksAtTimestamp map[eth.ChainID]eth.BlockID) (Result, error)
 
 	// cycleVerifyFn handles same-timestamp cycle verification.
 	// It is called after verifyFn in progressInterop, and its results are merged.
 	// Set to verifyCycleMessages by default in New().
-	cycleVerifyFn func(ts uint64, blocksAtTimestamp map[eth.ChainID]eth.BlockID, view *frontierVerificationView) (Result, error)
+	cycleVerifyFn func(ts uint64, blocksAtTimestamp map[eth.ChainID]eth.BlockID) (Result, error)
 
 	// pauseAtTimestamp is used for integration test control only.
 	// When non-zero, progressInterop will return early without processing
@@ -174,9 +127,8 @@ type Interop struct {
 	// because logBackfillDepth <= 0). Read by integration tests to gate on backfill finishing.
 	backfillCompleted atomic.Bool
 
-	// l1Checker must be non-nil whenever observeRound runs. Production sets it
-	// via New; tests inject noopL1Checker.
-	l1Checker l1ConsistencyChecker
+	l1Checker    *byNumberConsistencyChecker
+	frontierView *frontierVerificationView
 
 	logBackfillDepth time.Duration
 }
@@ -190,7 +142,7 @@ func New(
 	log log.Logger,
 	activationTimestamp uint64,
 	messageExpiryWindow uint64,
-	chains map[eth.ChainID]cc.InteropChain,
+	chains map[eth.ChainID]cc.ChainContainer,
 	dataDir string,
 	l1Source l1ByNumberSource,
 	logBackfillDepth time.Duration,
@@ -235,7 +187,7 @@ func New(
 	// (can be overridden by tests)
 	i.verifyFn = i.verifyInteropMessages
 	i.cycleVerifyFn = i.verifyCycleMessages
-	i.l1Checker = newL1ConsistencyChecker(l1Source)
+	i.l1Checker = newByNumberConsistencyChecker(l1Source)
 	return i
 }
 
@@ -443,18 +395,21 @@ func (i *Interop) observeRound() (RoundObservation, error) {
 	obs.L1Heads = ready.l1Heads
 
 	// Check that all frontier L1 heads AND the accepted L1 head are on the same canonical fork.
-	heads := make([]eth.BlockID, 0, len(obs.L1Heads)+1)
-	if obs.LastVerified != nil {
-		heads = append(heads, obs.LastVerified.L1Inclusion)
+	obs.L1Consistent = true
+	if i.l1Checker != nil {
+		heads := make([]eth.BlockID, 0, len(obs.L1Heads)+1)
+		if obs.LastVerified != nil {
+			heads = append(heads, obs.LastVerified.L1Inclusion)
+		}
+		for _, l1 := range obs.L1Heads {
+			heads = append(heads, l1)
+		}
+		same, err := i.l1Checker.SameL1Chain(i.ctx, heads)
+		if err != nil {
+			return obs, fmt.Errorf("L1 consistency check: %w", err)
+		}
+		obs.L1Consistent = same
 	}
-	for _, l1 := range obs.L1Heads {
-		heads = append(heads, l1)
-	}
-	same, err := i.l1Checker.SameL1Chain(i.ctx, heads)
-	if err != nil {
-		return obs, fmt.Errorf("L1 consistency check: %w", err)
-	}
-	obs.L1Consistent = same
 
 	return obs, nil
 }
@@ -465,13 +420,17 @@ func (i *Interop) verify(ts uint64, blocksAtTS map[eth.ChainID]eth.BlockID) (Res
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve frontier verification view: %w", err)
 	}
+	i.frontierView = view
+	defer func() {
+		i.frontierView = nil
+	}()
 
-	result, err := i.verifyFn(ts, blocksAtTS, view)
+	result, err := i.verifyFn(ts, blocksAtTS)
 	if err != nil {
 		return Result{}, err
 	}
 
-	cycleResult, err := i.cycleVerifyFn(ts, blocksAtTS, view)
+	cycleResult, err := i.cycleVerifyFn(ts, blocksAtTS)
 	if err != nil {
 		return Result{}, fmt.Errorf("cycle verification failed: %w", err)
 	}
