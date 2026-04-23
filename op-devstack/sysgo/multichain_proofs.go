@@ -120,6 +120,28 @@ func attachSupernodeSuperProofs(t devtest.T, runtime *MultiChainRuntime, cfg Pre
 	return runtime
 }
 
+// attachSupernodeSuperProofsViaUpgrade adds permissionless super games via
+// opcm.upgrade, then wires the interop challenger and super proposer.
+func attachSupernodeSuperProofsViaUpgrade(t devtest.T, runtime *MultiChainRuntime, cfg PresetConfig) *MultiChainRuntime {
+	chains := orderedRuntimeChains(runtime)
+	t.Require().NotEmpty(chains, "supernode superproofs runtime must contain at least one chain")
+	t.Require().NotNil(runtime.Supernode, "supernode superproofs runtime must provide a supernode")
+
+	proofChain := chains[0]
+	cls := make([]L2CLNode, 0, len(chains))
+	for _, chain := range chains {
+		t.Require().NotNil(chain, "runtime chain entry must not be nil")
+		cls = append(cls, chain.CL)
+	}
+
+	superrootTime := awaitSuperrootTime(t, cls...)
+	superRoot := getSupernodeSuperRoot(t, runtime.Supernode, superrootTime)
+	upgradeToSuperRoots(t, runtime.Keys, runtime.Migration, runtime.L1Network.ChainID(), runtime.L1EL, superRoot, superrootTime, proofChain.Network.ChainID())
+
+	attachSuperChallengerAndProposer(t, runtime, cfg, gameTypes.SuperCannonGameType)
+	return runtime
+}
+
 // attachSuperChallengerAndProposer wires an interop challenger and a super
 // proposer for proposerGameType into a supernode-backed runtime.
 func attachSuperChallengerAndProposer(
@@ -187,13 +209,14 @@ func NewTwoL2SupernodeProofsRuntimeWithConfig(t devtest.T, interopAtGenesis bool
 	return attachSupernodeSuperProofs(t, runtime, cfg)
 }
 
+// NewSingleChainSupernodeProofsRuntimeWithConfig deploys a single chain with
+// SuperPermissionedCannon at genesis, then uses opcm.upgrade to add the
+// permissionless super games and set the real starting anchor root.
 func NewSingleChainSupernodeProofsRuntimeWithConfig(t devtest.T, interopAtGenesis bool, cfg PresetConfig) *MultiChainRuntime {
-	cfg = withSuperProofsDeployerFeature(cfg)
+	cfg = withSuperRootGamesAtGenesisDeployerFeatures(cfg)
 	runtime := newSingleChainSupernodeRuntimeWithConfig(t, interopAtGenesis, cfg)
-	chain := runtime.Chains["l2a"]
-	chain.Proposer = startMinimalProposer(t, runtime.Keys, chain.Network, runtime.L1EL, chain.CL, cfg.ProposerOptions...)
 	attachTestSequencerToRuntime(t, runtime, "dev")
-	return attachSupernodeSuperProofs(t, runtime, cfg)
+	return attachSupernodeSuperProofsViaUpgrade(t, runtime, cfg)
 }
 
 func startSuperProposer(
