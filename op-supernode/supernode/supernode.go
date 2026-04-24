@@ -32,7 +32,7 @@ type Supernode struct {
 	requestStop context.CancelCauseFunc
 	stopped     bool
 	cfg         *config.CLIConfig
-	chains      map[eth.ChainID]cc.ChainContainer
+	chains      map[eth.ChainID]cc.InteropChain
 	// activitiesMu guards reads and writes of the activities slice. Concurrent
 	// readers (onChainReset, InteropActivity, Stop) can race with the
 	// test-only RestartInteropActivity path that swaps the interop activity
@@ -63,7 +63,7 @@ type Supernode struct {
 }
 
 func New(ctx context.Context, log gethlog.Logger, version string, requestStop context.CancelCauseFunc, cfg *config.CLIConfig, vnCfgs map[eth.ChainID]*opnodecfg.Config) (*Supernode, error) {
-	s := &Supernode{log: log, version: version, requestStop: requestStop, cfg: cfg, chains: make(map[eth.ChainID]cc.ChainContainer)}
+	s := &Supernode{log: log, version: version, requestStop: requestStop, cfg: cfg, chains: make(map[eth.ChainID]cc.InteropChain)}
 
 	// Initialize L1 client
 	if err := s.initL1Client(ctx, cfg); err != nil {
@@ -98,11 +98,18 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 		s.chains[chainID] = cc.NewChainContainer(chainID, vnCfgs[chainID], log, *cfg, initOverrides, nil, s.rpcRouter.SetHandler, s.metricsRouter.SetHandler)
 	}
 
+	// Narrow the chain map to ChainContainer for activities that must not invoke
+	// reorg-triggering operations. Only interop gets the wider InteropChain view.
+	narrowChains := make(map[eth.ChainID]cc.ChainContainer, len(s.chains))
+	for id, c := range s.chains {
+		narrowChains[id] = c
+	}
+
 	// Initialize fixed activities
 	s.activities = []activity.Activity{
 		heartbeat.New(log.New("activity", "heartbeat"), 10*time.Second),
-		supernodeactivity.New(log.New("activity", "supernode"), s.chains),
-		superroot.New(log.New("activity", "superroot"), s.chains),
+		supernodeactivity.New(log.New("activity", "supernode"), narrowChains),
+		superroot.New(log.New("activity", "superroot"), narrowChains),
 	}
 
 	interopActivationTimestamp, err := resolveInteropActivationTimestamp(cfg.InteropActivationTimestamp, vnCfgs)
@@ -270,7 +277,7 @@ func (s *Supernode) Start(ctx context.Context) error {
 	}
 	for chainID, chain := range s.chains {
 		s.wg.Add(1)
-		go func(chainID eth.ChainID, chain cc.ChainContainer) {
+		go func(chainID eth.ChainID, chain cc.InteropChain) {
 			defer s.wg.Done()
 			if err := chain.Start(ctx); err != nil {
 				s.log.Error("error starting chain", "chain_id", chainID.String(), "error", err)
