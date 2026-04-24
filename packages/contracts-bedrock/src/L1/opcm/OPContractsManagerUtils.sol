@@ -308,7 +308,11 @@ contract OPContractsManagerUtils {
         // Upgrade to StorageSetter.
         _proxyAdmin.upgrade(payable(_target), address(implementations().storageSetterImpl));
 
-        // Otherwise, we need to reset the initialized slot and call the initializer.
+        // We need to reset the initialized slot and call the initializer.
+        // NOTE: This reset path still assumes `_offset` is a byte offset within a single
+        // storage slot, the generic one-byte clear can clobber OZ v5 `_initializing` if `_slot`
+        // matches the namespaced Initializable slot, and the hardcoded ERC-7201 slot only covers
+        // the default OZ v5 `_initializableStorageSlot()` layout.
         // Reset the initialized slot by zeroing the single byte at `_offset` (from the right).
         bytes32 current = IStorageSetter(_target).getBytes32(_slot);
         uint256 mask = ~(uint256(0xff) << (uint256(_offset) * 8));
