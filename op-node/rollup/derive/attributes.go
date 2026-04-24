@@ -153,6 +153,20 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		upgradeTxs = append(upgradeTxs, jovian...)
 	}
 
+	// Starting with Karst, upgrade transactions are loaded from a NUT bundle and
+	// additional gas is allocated to the upgrade block so that upgrade transactions
+	// don't need to fit within the system tx gas limit.
+	var upgradeGas uint64
+	if ba.rollupCfg.IsL2CMActivationBlock(nextL2Time) {
+		nutTxs, nutGas, err := UpgradeTransactions(forks.Karst)
+		if err != nil {
+			return nil, NewCriticalError(fmt.Errorf("failed to build karst network upgrade txs: %w", err))
+		}
+		upgradeTxs = append(upgradeTxs, nutTxs...)
+		upgradeGas += nutGas
+	}
+
+	// TODO(#19239): migrate Interop to NUT bundle and add its gas to upgradeGas.
 	if ba.rollupCfg.IsInteropActivationBlock(nextL2Time) {
 		interop, err := InteropNetworkUpgradeTransactions()
 		if err != nil {
