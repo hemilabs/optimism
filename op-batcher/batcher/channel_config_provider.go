@@ -81,8 +81,11 @@ func (dec *DynamicEthChannelConfig) ChannelConfig(isPectra, isThrottling bool) C
 	numBlobsPerTx := dec.blobConfig.TargetNumFrames
 
 	// Compute the total absolute cost of submitting either a single calldata tx or a single blob tx.
-	calldataCost, blobCost := computeSingleCalldataTxCost(tokensPerCalldataTx, baseFee, tipCap, isPectra),
-		computeSingleBlobTxCost(numBlobsPerTx, baseFee, tipCap, blobBaseFee)
+	calldataCost, blobCost, oracleBlobCost := computeSingleCalldataTxCost(tokensPerCalldataTx, baseFee, tipCap),
+		computeSingleBlobTxCost(numBlobsPerTx, baseFee, tipCap, blobBaseFee),
+		computeSingleBlobTxCost(numBlobsPerTx, baseFee, blobTipCap, blobBaseFee)
+
+	oracleBlobSavings := oracleBlobCost.Cmp(blobCost) < 0
 
 	// Now we compare the absolute cost per tx divided by the number of bytes per tx:
 	blobDataBytesPerTx := big.NewInt(eth.MaxBlobDataSize * int64(numBlobsPerTx))
