@@ -148,28 +148,8 @@ contract DeployOPChain_Test is DeployOPChain_TestBase {
     function test_run_succeeds() public {
         DeployOPChain.Output memory doo = deployOPChain.run(deployOPChainInput);
         // Basic non-zero and code checks are covered inside run->checkOutput.
-        // Additonal targeted assertions added below.
-
-        IPermissionedDisputeGame pdg = getPermissionedDisputeGame(doo);
-        assertEq(pdg.splitDepth(), disputeSplitDepth, "PDG splitDepth");
-        assertEq(pdg.maxGameDepth(), disputeMaxGameDepth, "PDG maxGameDepth");
-        assertEq(Duration.unwrap(pdg.clockExtension()), Duration.unwrap(disputeClockExtension), "PDG clockExtension");
-        assertEq(
-            Duration.unwrap(pdg.maxClockDuration()), Duration.unwrap(disputeMaxClockDuration), "PDG maxClockDuration"
-        );
-
-        // For v2 contracts, some immutable args are passed in at game creation time from DGF.gameArgs
-        assertEq(address(pdg.proposer()), address(0), "PDG proposer");
-        assertEq(address(pdg.challenger()), address(0), "PDG challenger");
-        assertEq(Claim.unwrap(pdg.absolutePrestate()), bytes32(0), "PDG absolutePrestate");
-
-        // Custom gas token feature should reflect input
-        assertEq(doo.systemConfigProxy.isCustomGasToken(), useCustomGasToken, "SystemConfig isCustomGasToken");
-        assertEq(
-            doo.systemConfigProxy.isFeatureEnabled(Features.CUSTOM_GAS_TOKEN),
-            useCustomGasToken,
-            "SystemConfig CUSTOM_GAS_TOKEN feature"
-        );
+        // Additional targeted assertions added below.
+        _checkDeploymentAssertions(doo);
     }
 
     function testFuzz_run_memory_succeeds(bytes32 _seed) public {

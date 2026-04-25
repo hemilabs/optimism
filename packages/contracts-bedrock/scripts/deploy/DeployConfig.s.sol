@@ -255,7 +255,7 @@ contract DeployConfig is Script {
         useAltDA = _useAltDA;
     }
 
-    /// @notice Allow the `useInterop` config to be overriden in testing environments
+    /// @notice Allow the `useInterop` config to be overridden in testing environments
     function setUseInterop(bool _useInterop) public {
         useInterop = _useInterop;
     }
