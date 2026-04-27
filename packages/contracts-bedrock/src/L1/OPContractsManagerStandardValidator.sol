@@ -43,8 +43,8 @@ import { IBigStepper } from "interfaces/dispute/IBigStepper.sol";
 /// before and after an upgrade.
 contract OPContractsManagerStandardValidator is ISemver {
     /// @notice The semantic version of the OPContractsManagerStandardValidator contract.
-    /// @custom:semver 2.9.0
-    string public constant version = "2.9.0";
+    /// @custom:semver 2.9.1
+    string public constant version = "2.9.1";
 
     /// @notice The SuperchainConfig contract.
     ISuperchainConfig public superchainConfig;
@@ -1004,8 +1004,7 @@ contract OPContractsManagerStandardValidator is ISemver {
         return _assertValidZKGameArgs(_errors, _sysCfg, _l2ChainID, _admin, _overrides, errorPrefix);
     }
 
-    // @notice Internal function to read all information from a dispute game while supporting both v1 and v2 dispute
-    /// games.
+    /// @notice Internal function to read all information from a dispute game.
     function _decodeDisputeGameImpl(
         IPermissionedDisputeGame _game,
         bytes memory _gameArgsBytes,
