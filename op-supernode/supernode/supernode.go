@@ -47,8 +47,9 @@ type Supernode struct {
 	httpServer      *httputil.HTTPServer
 	rpcRouter       *resources.Router
 	// Metrics router/server for per-chain metrics
-	metrics       *resources.MetricsService
-	metricsRouter *resources.MetricsRouter
+	metrics          *resources.MetricsService
+	metricsFanIn     *resources.MetricsFanIn
+	supernodeMetrics *resources.SupernodeMetrics
 	// cached address when available
 	rpcAddr string
 
@@ -83,7 +84,9 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 	s.rootRPC = oprpc.NewHandler(version, oprpc.WithLogger(log))
 	s.rpcRouter.SetRootHandler(s.rootRPC)
 	// Build metrics router; attach per-chain registries later
-	s.metricsRouter = resources.NewMetricsRouter(log)
+	s.metricsFanIn = resources.NewMetricsFanIn(len(cfg.Chains))
+	s.supernodeMetrics = resources.NewSupernodeMetrics()
+	s.metricsFanIn.AddGatherer(s.supernodeMetrics.Registry())
 	for _, id := range cfg.Chains {
 		chainID := eth.ChainIDFromUInt64(id)
 		initOverrides := &rollupNode.InitializationOverrides{
@@ -95,7 +98,8 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 			log.Error("missing virtual node config for chain", "chain", id)
 			continue
 		}
-		s.chains[chainID] = cc.NewChainContainer(chainID, vnCfgs[chainID], log, *cfg, initOverrides, nil, s.rpcRouter.SetHandler, s.metricsRouter.SetHandler)
+		container := cc.NewChainContainer(chainID, vnCfgs[chainID], log, *cfg, initOverrides, nil, s.rpcRouter.SetHandler, s.metricsFanIn.SetMetricsRegistry, s.supernodeMetrics)
+		s.chains[chainID] = container
 	}
 
 	// Narrow the chain map to ChainContainer for activities that must not invoke
@@ -133,7 +137,7 @@ func New(ctx context.Context, log gethlog.Logger, version string, requestStop co
 				break
 			}
 		}
-		interopActivity := interop.New(log.New("activity", "interop"), *interopActivationTimestamp, msgExpiryWindow, s.chains, cfg.DataDir, s.l1Client, cfg.InteropLogBackfillDepth)
+		interopActivity := interop.New(log.New("activity", "interop"), *interopActivationTimestamp, msgExpiryWindow, s.chains, cfg.DataDir, s.l1Client, cfg.InteropLogBackfillDepth, s.supernodeMetrics)
 		s.activities = append(s.activities, interopActivity)
 		for _, chain := range s.chains {
 			chain.RegisterVerifier(interopActivity)

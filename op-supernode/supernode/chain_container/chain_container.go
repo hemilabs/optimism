@@ -18,6 +18,10 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supernode/config"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container/engine_controller"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container/virtual_node"
+	"github.com/ethereum-optimism/optimism/op-supernode/supernode/resources"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	gethlog "github.com/ethereum/go-ethereum/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -116,6 +120,7 @@ type simpleChainContainer struct {
 	appVersion         string
 	virtualNodeFactory virtualNodeFactory    // Factory function to create virtual node (for testing)
 	rollupClient       *sources.RollupClient // In-proc rollup RPC client bound to rpcHandler
+	metrics            *resources.SupernodeMetrics
 
 	// verifiersMu guards writes and reads of the verifiers slice. Concurrent
 	// readers (VerifiedAt, VerifierCurrentL1s) can race with the test-only
@@ -140,7 +145,11 @@ func NewChainContainer(
 	rpcHandler *oprpc.Handler,
 	setHandler func(chainID string, h http.Handler),
 	addMetricsRegistry func(key string, g prometheus.Gatherer),
+	metrics *resources.SupernodeMetrics,
 ) InteropChain {
+	if metrics == nil {
+		metrics = resources.NewSupernodeMetrics()
+	}
 	c := &simpleChainContainer{
 		vncfg:              vncfg,
 		cfg:                cfg,
@@ -153,6 +162,7 @@ func NewChainContainer(
 		setMetricsHandler:  setMetricsHandler,
 		appVersion:         virtualNodeVersion,
 		virtualNodeFactory: defaultVirtualNodeFactory,
+		metrics:            metrics,
 	}
 	vncfg.SafeDBPath = c.subPath("safe_db")
 	vncfg.RPC = cfg.RPCConfig
@@ -288,6 +298,7 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 			break
 		}
 
+		c.metrics.VNRestarts.WithLabelValues(c.chainID.String()).Inc()
 	}
 	c.log.Info("chain container exiting")
 	return nil
