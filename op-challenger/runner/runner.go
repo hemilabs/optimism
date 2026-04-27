@@ -17,6 +17,7 @@ import (
 
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
@@ -57,10 +58,13 @@ type RunConfig struct {
 }
 
 type Runner struct {
-	log        log.Logger
-	cfg        *config.Config
-	runConfigs []RunConfig
-	m          Metricer
+	log                  log.Logger
+	cfg                  *config.Config
+	runConfigs           []RunConfig
+	m                    Metricer
+	vmTimeout            time.Duration
+	ageGameInputs        bool
+	traceProviderCreator TraceProviderCreator
 
 	running    atomic.Bool
 	ctx        context.Context
@@ -69,12 +73,15 @@ type Runner struct {
 	metricsSrv *httputil.HTTPServer
 }
 
-func NewRunner(logger log.Logger, cfg *config.Config, runConfigs []RunConfig) *Runner {
+func NewRunner(logger log.Logger, cfg *config.Config, runConfigs []RunConfig, vmTimeout time.Duration, ageGameInputs bool) *Runner {
 	return &Runner{
-		log:        logger,
-		cfg:        cfg,
-		runConfigs: runConfigs,
-		m:          NewMetrics(runConfigs),
+		log:                  logger,
+		cfg:                  cfg,
+		runConfigs:           runConfigs,
+		m:                    NewMetrics(runConfigs),
+		vmTimeout:            vmTimeout,
+		ageGameInputs:        ageGameInputs,
+		traceProviderCreator: createTraceProvider,
 	}
 }
 
@@ -113,23 +120,24 @@ func (r *Runner) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to dial l1 client: %w", err)
 	}
 	caller := batching.NewMultiCaller(l1Client, batching.DefaultBatchSize)
+	l1EthClient := ethclient.NewClient(l1Client)
 
 	for _, runConfig := range r.runConfigs {
 		r.wg.Add(1)
-		go r.loop(ctx, runConfig, rollupClient, supervisorClient, caller)
+		go r.loop(ctx, runConfig, rollupClient, superNodeClient, l1EthClient, caller)
 	}
 
 	r.log.Info("Runners started", "num", len(r.runConfigs))
 	return nil
 }
 
-func (r *Runner) loop(ctx context.Context, runConfig RunConfig, rollupClient *sources.RollupClient, supervisorClient *sources.SupervisorClient, caller *batching.MultiCaller) {
+func (r *Runner) loop(ctx context.Context, runConfig RunConfig, rollupClient *sources.RollupClient, superNodeClient *sources.SuperNodeClient, l1EthClient *ethclient.Client, caller *batching.MultiCaller) {
 	defer r.wg.Done()
 	t := time.NewTicker(1 * time.Minute)
 	defer t.Stop()
 	for {
 		baseLog := r.log.New("run_id", generateRunID())
-		r.runAndRecordOnce(ctx, baseLog, runConfig, rollupClient, supervisorClient, caller)
+		r.runAndRecordOnce(ctx, baseLog, runConfig, rollupClient, superNodeClient, l1EthClient, caller)
 		select {
 		case <-t.C:
 		case <-ctx.Done():
@@ -138,7 +146,7 @@ func (r *Runner) loop(ctx context.Context, runConfig RunConfig, rollupClient *so
 	}
 }
 
-func (r *Runner) runAndRecordOnce(ctx context.Context, rlog log.Logger, runConfig RunConfig, rollupClient *sources.RollupClient, supervisorClient *sources.SupervisorClient, caller *batching.MultiCaller) {
+func (r *Runner) runAndRecordOnce(ctx context.Context, rlog log.Logger, runConfig RunConfig, rollupClient *sources.RollupClient, superNodeClient *sources.SuperNodeClient, l1EthClient *ethclient.Client, caller *batching.MultiCaller) {
 	recordError := func(err error, configName string, m Metricer, log log.Logger) {
 		if errors.Is(err, ErrUnexpectedStatusCode) {
 			log.Error("Incorrect status code", "type", runConfig.Name, "err", err)
@@ -176,7 +184,7 @@ func (r *Runner) runAndRecordOnce(ctx context.Context, rlog log.Logger, runConfi
 		prestateSource = &HashPrestateFetcher{prestateHash: runConfig.Prestate}
 	}
 
-	localInputs, err := createGameInputs(ctx, rlog, rollupClient, supervisorClient, runConfig.Name, runConfig.GameType)
+	localInputs, err := createGameInputs(ctx, rlog, rollupClient, superNodeClient, l1EthClient, runConfig.Name, runConfig.GameType, r.ageGameInputs)
 	if err != nil {
 		recordError(err, runConfig.Name, r.m, rlog)
 		return
