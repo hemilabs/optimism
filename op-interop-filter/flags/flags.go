@@ -2,6 +2,8 @@ package flags
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/urfave/cli/v2"
 
@@ -30,11 +32,17 @@ var (
 		EnvVars: prefixEnvVars("DATA_DIR"),
 		Value:   "",
 	}
-	BackfillDurationFlag = &cli.StringFlag{
+	BackfillDurationFlag = &cli.DurationFlag{
 		Name:    "backfill-duration",
 		Usage:   "Duration to backfill on startup (e.g., 24h, 30m, 1h30m)",
 		EnvVars: prefixEnvVars("BACKFILL_DURATION"),
-		Value:   "24h",
+		Value:   24 * time.Hour,
+	}
+	MessageExpiryWindowFlag = &cli.DurationFlag{
+		Name:    "message-expiry-window",
+		Usage:   "Message expiry window duration (e.g., 168h for 7 days). Messages older than this are considered expired.",
+		EnvVars: prefixEnvVars("MESSAGE_EXPIRY_WINDOW"),
+		Value:   168 * time.Hour, // 7 days default, matching op-supervisor
 	}
 	JWTSecretFlag = &cli.StringFlag{
 		Name: "rpc.jwt-secret",
@@ -44,6 +52,47 @@ var (
 		EnvVars:   prefixEnvVars("RPC_JWT_SECRET"),
 		Value:     "",
 		TakesFile: true,
+	}
+	AdminRPCAddrFlag = &cli.StringFlag{
+		Name:    "admin.rpc.addr",
+		Usage:   "Address to bind admin RPC server. If empty, admin RPC is disabled.",
+		EnvVars: prefixEnvVars("ADMIN_RPC_ADDR"),
+		Value:   "",
+	}
+	AdminRPCPortFlag = &cli.IntFlag{
+		Name:    "admin.rpc.port",
+		Usage:   "Port to bind admin RPC server.",
+		EnvVars: prefixEnvVars("ADMIN_RPC_PORT"),
+		Value:   8546,
+	}
+	RPCAddrFlag = &cli.StringFlag{
+		Name:    "rpc.addr",
+		Usage:   "RPC listening address",
+		EnvVars: prefixEnvVars("RPC_ADDR"),
+		Value:   "0.0.0.0",
+	}
+	RPCPortFlag = &cli.IntFlag{
+		Name:    "rpc.port",
+		Usage:   "RPC listening port",
+		EnvVars: prefixEnvVars("RPC_PORT"),
+		Value:   8545,
+	}
+	PollIntervalFlag = &cli.DurationFlag{
+		Name:    "poll-interval",
+		Usage:   "Interval for polling new blocks from L2 RPCs (e.g., 2s, 500ms)",
+		EnvVars: prefixEnvVars("POLL_INTERVAL"),
+		Value:   2 * time.Second,
+	}
+	ValidationIntervalFlag = &cli.DurationFlag{
+		Name:    "validation-interval",
+		Usage:   "Interval for cross-chain validation loop (e.g., 500ms, 1s)",
+		EnvVars: prefixEnvVars("VALIDATION_INTERVAL"),
+		Value:   500 * time.Millisecond,
+	}
+	DangerouslyEnablePassthroughFlag = &cli.BoolFlag{
+		Name:    "dangerously-enable-passthrough",
+		Usage:   "Allow all transactions through without interop filtering. DANGEROUS: disables all executing message validation.",
+		EnvVars: prefixEnvVars("DANGEROUSLY_ENABLE_PASSTHROUGH"),
 	}
 )
 

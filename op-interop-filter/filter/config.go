@@ -43,9 +43,36 @@ func (c *Config) Check() error {
 }
 
 func NewConfig(ctx *cli.Context, version string) (*Config, error) {
-	backfillDuration, err := time.ParseDuration(ctx.String(flags.BackfillDurationFlag.Name))
+	backfillDuration := ctx.Duration(flags.BackfillDurationFlag.Name)
+	if backfillDuration <= 0 {
+		return nil, fmt.Errorf("backfill-duration must be positive, got %s", backfillDuration)
+	}
+	if uint64(backfillDuration.Seconds()) > uint64(time.Now().Unix()) {
+		return nil, fmt.Errorf("backfill-duration (%s) exceeds current timestamp", backfillDuration)
+	}
+
+	messageExpiryWindow := ctx.Duration(flags.MessageExpiryWindowFlag.Name)
+	if messageExpiryWindow <= 0 {
+		return nil, fmt.Errorf("message-expiry-window must be positive, got %s", messageExpiryWindow)
+	}
+
+	pollInterval := ctx.Duration(flags.PollIntervalFlag.Name)
+	if pollInterval <= 0 {
+		return nil, fmt.Errorf("poll-interval must be positive, got %s", pollInterval)
+	}
+
+	validationInterval := ctx.Duration(flags.ValidationIntervalFlag.Name)
+	if validationInterval <= 0 {
+		return nil, fmt.Errorf("validation-interval must be positive, got %s", validationInterval)
+	}
+
+	// Load rollup configs from --networks and --rollup-configs
+	rollupConfigs, err := loadRollupConfigs(
+		ctx.StringSlice(flags.NetworksFlag.Name),
+		ctx.StringSlice(flags.RollupConfigsFlag.Name),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("invalid backfill-duration: %w", err)
+		return nil, fmt.Errorf("failed to load rollup configs: %w", err)
 	}
 
 	return &Config{
