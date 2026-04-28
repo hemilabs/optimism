@@ -53,8 +53,51 @@ func (b *Backend) FailsafeEnabled() bool {
 func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Hash,
 	minSafety types.SafetyLevel, execDescriptor types.ExecutingDescriptor) error {
 
-	b.metrics.RecordCheckAccessList(false)
-	return types.ErrUninitialized
+	if b.passthrough {
+		b.metrics.RecordCheckAccessList(true)
+		return nil
+	}
+
+	if b.FailsafeEnabled() {
+		b.metrics.RecordCheckAccessList(false)
+		return types.ErrFailsafeEnabled
+	}
+
+	if !b.Ready() {
+		b.metrics.RecordCheckAccessList(false)
+		b.log.Debug("Backend not ready; rejecting access list check")
+		return types.ErrUninitialized
+	}
+
+	if !supportedSafetyLevel(minSafety) {
+		b.metrics.RecordCheckAccessList(false)
+		return fmt.Errorf("unsupported safety level %s: only %s and %s are supported",
+			minSafety, types.LocalUnsafe, types.CrossUnsafe)
+	}
+
+	if _, ok := b.chains[execDescriptor.ChainID]; !ok {
+		b.metrics.RecordCheckAccessList(false)
+		return fmt.Errorf("executing chain %s: %w", execDescriptor.ChainID, types.ErrUnknownChain)
+	}
+
+	remaining := inboxEntries
+	for len(remaining) > 0 {
+		var access types.Access
+		var err error
+		remaining, access, err = types.ParseAccess(remaining)
+		if err != nil {
+			b.metrics.RecordCheckAccessList(false)
+			return fmt.Errorf("failed to parse access entry: %w", err)
+		}
+
+		if err := b.crossValidator.ValidateAccessEntry(access, minSafety, execDescriptor); err != nil {
+			b.metrics.RecordCheckAccessList(false)
+			return err
+		}
+	}
+
+	b.metrics.RecordCheckAccessList(true)
+	return nil
 }
 
 // GetBlockHashByNumber returns the latest block hash or the block hash at a specific height for the given chain.
