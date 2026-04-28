@@ -55,6 +55,8 @@ interface IOPContractsManagerUtils {
     event ProxyCreation(string name, address proxy);
 
     error OPContractsManagerUtils_DowngradeNotAllowed(address _contract);
+    error OPContractsManagerUtils_ExtraTagInProd(address _contract);
+    error OPContractsManagerUtils_OZv5InitializableUnsupported();
     error OPContractsManagerUtils_ConfigLoadFailed(string _name);
     error OPContractsManagerUtils_ProxyMustLoad(string _name);
     error ReservedBitsSet();

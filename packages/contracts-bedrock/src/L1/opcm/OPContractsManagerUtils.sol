@@ -33,6 +33,10 @@ contract OPContractsManagerUtils {
         bytes data;
     }
 
+    /// @notice ERC-7201 Initializable slot used by OpenZeppelin Contracts v5.
+    bytes32 internal constant OZ_V5_INITIALIZABLE_SLOT =
+        0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
+
     /// @notice Emitted when a proxy is created by this contract.
     /// @param name  The name of the proxy.
     /// @param proxy The address of the proxy.
@@ -41,6 +45,13 @@ contract OPContractsManagerUtils {
     /// @notice Thrown when user attempts to downgrade a contract.
     /// @param _contract The address of the contract that was attempted to be downgraded.
     error OPContractsManagerUtils_DowngradeNotAllowed(address _contract);
+
+    /// @notice Thrown when user attempts to deploy a contract with extra version tags in production.
+    /// @param _contract The address of the contract with extra version tags.
+    error OPContractsManagerUtils_ExtraTagInProd(address _contract);
+
+    /// @notice Thrown when an upgrade attempts to reset an OpenZeppelin Contracts v5 Initializable contract.
+    error OPContractsManagerUtils_OZv5InitializableUnsupported();
 
     /// @notice Thrown when a config load fails.
     /// @param _name The name of the config that failed to load.
@@ -308,11 +319,16 @@ contract OPContractsManagerUtils {
         // Upgrade to StorageSetter.
         _proxyAdmin.upgrade(payable(_target), address(implementations().storageSetterImpl));
 
-        // We need to reset the initialized slot and call the initializer.
-        // NOTE: This reset path still assumes `_offset` is a byte offset within a single
-        // storage slot, the generic one-byte clear can clobber OZ v5 `_initializing` if `_slot`
-        // matches the namespaced Initializable slot, and the hardcoded ERC-7201 slot only covers
-        // the default OZ v5 `_initializableStorageSlot()` layout.
+        // OpenZeppelin Contracts v5 Initializable uses an ERC-7201 namespaced slot instead of
+        // the v4 one-byte `_initialized` field. OPCM does not support the v5 layout, so abort
+        // when the caller points at that slot or the target already has state there.
+        if (
+            _slot == OZ_V5_INITIALIZABLE_SLOT
+                || IStorageSetter(_target).getBytes32(OZ_V5_INITIALIZABLE_SLOT) != bytes32(0)
+        ) {
+            revert OPContractsManagerUtils_OZv5InitializableUnsupported();
+        }
+
         // Reset the initialized slot by zeroing the single byte at `_offset` (from the right).
         bytes32 current = IStorageSetter(_target).getBytes32(_slot);
         uint256 mask = ~(uint256(0xff) << (uint256(_offset) * 8));

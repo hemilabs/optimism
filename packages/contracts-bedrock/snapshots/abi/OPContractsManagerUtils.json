@@ -613,6 +613,22 @@
   {
     "inputs": [
       {
+        "internalType": "address",
+        "name": "_contract",
+        "type": "address"
+      }
+    ],
+    "name": "OPContractsManagerUtils_ExtraTagInProd",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerUtils_OZv5InitializableUnsupported",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "string",
         "name": "_name",
         "type": "string"

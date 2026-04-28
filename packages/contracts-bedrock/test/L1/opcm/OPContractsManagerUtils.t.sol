@@ -585,6 +585,165 @@ contract OPContractsManagerUtils_Upgrade_Test is OPContractsManagerUtils_TestIni
         // Verify the implementation was set.
         assertEq(proxyAdmin.getProxyImplementation(payable(address(proxy))), address(implV1));
     }
+
+    /// @notice Tests that upgrade reverts with prerelease tag in production environment.
+    function test_upgrade_prereleaseInProd_reverts() public {
+        // Remove testing environment marker to simulate production.
+        vm.etch(Constants.TESTING_ENVIRONMENT_ADDRESS, hex"");
+
+        // Simulate mainnet.
+        vm.chainId(1);
+
+        OPContractsManagerUtils_ImplV2Beta_Harness implBeta = new OPContractsManagerUtils_ImplV2Beta_Harness();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_ExtraTagInProd.selector, address(implBeta)
+            )
+        );
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implBeta),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2Beta_Harness.initialize, ()),
+            TEST_SLOT,
+            TEST_OFFSET
+        );
+    }
+
+    /// @notice Tests that upgrade reverts with build metadata tag in production environment.
+    function test_upgrade_buildMetadataInProd_reverts() public {
+        // Remove testing environment marker to simulate production.
+        vm.etch(Constants.TESTING_ENVIRONMENT_ADDRESS, hex"");
+
+        // Simulate mainnet.
+        vm.chainId(1);
+
+        OPContractsManagerUtils_ImplV2Interop_Harness implInterop = new OPContractsManagerUtils_ImplV2Interop_Harness();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IOPContractsManagerUtils.OPContractsManagerUtils_ExtraTagInProd.selector, address(implInterop)
+            )
+        );
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implInterop),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2Interop_Harness.initialize, ()),
+            TEST_SLOT,
+            TEST_OFFSET
+        );
+    }
+
+    /// @notice Tests that upgrade with extra tags succeeds when dev features are enabled.
+    function test_upgrade_extraTagWithDevFeatures_succeeds() public {
+        // Mock devFeatureBitmap to return non-zero (dev features enabled).
+        vm.mockCall(
+            address(container),
+            abi.encodeCall(IOPContractsManagerContainer.devFeatureBitmap, ()),
+            abi.encode(bytes32(uint256(1)))
+        );
+
+        OPContractsManagerUtils_ImplV2Beta_Harness implBeta = new OPContractsManagerUtils_ImplV2Beta_Harness();
+
+        // Should succeed because dev features are enabled.
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implBeta),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2Beta_Harness.initialize, ()),
+            TEST_SLOT,
+            TEST_OFFSET
+        );
+
+        assertEq(proxyAdmin.getProxyImplementation(payable(address(proxy))), address(implBeta));
+    }
+
+    /// @notice ERC-7201 Initializable slot used by OZ v5.
+    bytes32 internal constant OZ_V5_INITIALIZABLE_SLOT =
+        bytes32(uint256(0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00));
+
+    /// @notice Tests that v4 contracts are unaffected by the v5 unsupported check. For v4
+    ///         contracts the ERC-7201 slot is all zeros, so the check is a no-op.
+    function test_upgrade_v4ContractStillWorks_succeeds() public {
+        // Set v1 as current implementation.
+        vm.prank(address(utils));
+        proxyAdmin.upgrade(payable(address(proxy)), address(implV1));
+
+        // Verify the ERC-7201 slot is zero (v4 contract).
+        assertEq(vm.load(address(proxy), OZ_V5_INITIALIZABLE_SLOT), bytes32(0));
+
+        // Upgrade to v2 should succeed and the ERC-7201 slot should remain zero.
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implV2),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2_Harness.initialize, ()),
+            TEST_SLOT,
+            TEST_OFFSET
+        );
+
+        assertEq(proxyAdmin.getProxyImplementation(payable(address(proxy))), address(implV2));
+        assertEq(vm.load(address(proxy), OZ_V5_INITIALIZABLE_SLOT), bytes32(0));
+    }
+
+    /// @notice Tests that an upgrade reverts if the caller passes the OZ v5 ERC-7201 slot.
+    function test_upgrade_v5SlotInput_reverts() public {
+        // Set v1 as current implementation.
+        vm.prank(address(utils));
+        proxyAdmin.upgrade(payable(address(proxy)), address(implV1));
+
+        vm.expectRevert(IOPContractsManagerUtils.OPContractsManagerUtils_OZv5InitializableUnsupported.selector);
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implV2),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2_Harness.initialize, ()),
+            OZ_V5_INITIALIZABLE_SLOT,
+            TEST_OFFSET
+        );
+    }
+
+    /// @notice Tests that an upgrade reverts if the target has OZ v5 Initializable state.
+    function test_upgrade_v5SlotSet_reverts() public {
+        // Set v1 as current implementation.
+        vm.prank(address(utils));
+        proxyAdmin.upgrade(payable(address(proxy)), address(implV1));
+
+        // Simulate a v5 contract with _initialized = 1 at the ERC-7201 slot.
+        vm.store(address(proxy), OZ_V5_INITIALIZABLE_SLOT, bytes32(uint256(1)));
+
+        vm.expectRevert(IOPContractsManagerUtils.OPContractsManagerUtils_OZv5InitializableUnsupported.selector);
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implV2),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2_Harness.initialize, ()),
+            TEST_SLOT,
+            TEST_OFFSET
+        );
+    }
+
+    /// @notice Tests that disabled OZ v5 Initializable state is still unsupported.
+    function test_upgrade_v5SlotMaxInitialized_reverts() public {
+        // Set v1 as current implementation.
+        vm.prank(address(utils));
+        proxyAdmin.upgrade(payable(address(proxy)), address(implV1));
+
+        // Simulate a v5 contract with _initialized = type(uint64).max from _disableInitializers().
+        vm.store(address(proxy), OZ_V5_INITIALIZABLE_SLOT, bytes32(uint256(type(uint64).max)));
+
+        vm.expectRevert(IOPContractsManagerUtils.OPContractsManagerUtils_OZv5InitializableUnsupported.selector);
+        utils.upgrade(
+            proxyAdmin,
+            address(proxy),
+            address(implV2),
+            abi.encodeCall(OPContractsManagerUtils_ImplV2_Harness.initialize, ()),
+            TEST_SLOT,
+            TEST_OFFSET
+        );
+    }
 }
 
 /// @title OPContractsManagerUtils_Blueprints_Test
