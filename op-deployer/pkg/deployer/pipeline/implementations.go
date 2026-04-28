@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
-	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
+	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 )
 
 func DeployImplementations(env *Env, intent *state.Intent, st *state.State) error {
@@ -81,8 +81,9 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		OptimismMintableErc20FactoryImpl: dio.OptimismMintableERC20FactoryImpl,
 		DisputeGameFactoryImpl:           dio.DisputeGameFactoryImpl,
 		AnchorStateRegistryImpl:          dio.AnchorStateRegistryImpl,
-		FaultDisputeGameV2Impl:           dio.FaultDisputeGameV2Impl,
-		PermissionedDisputeGameV2Impl:    dio.PermissionedDisputeGameV2Impl,
+		FaultDisputeGameImpl:             dio.FaultDisputeGameImpl,
+		PermissionedDisputeGameImpl:      dio.PermissionedDisputeGameImpl,
+		ZkDisputeGameImpl:                dio.ZkDisputeGameImpl,
 		StorageSetterImpl:                dio.StorageSetterImpl,
 	}
 

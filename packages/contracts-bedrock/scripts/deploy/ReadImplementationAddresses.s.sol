@@ -39,6 +39,7 @@ contract ReadImplementationAddresses is Script {
         address permissionedDisputeGameV2;
         address superFaultDisputeGame;
         address superPermissionedDisputeGame;
+        address zkDisputeGame;
         address opcmStandardValidator;
         address opcmInteropMigrator;
     }
@@ -71,6 +72,7 @@ contract ReadImplementationAddresses is Script {
         output_.permissionedDisputeGame = impls.permissionedDisputeGameImpl;
         output_.superFaultDisputeGame = impls.superFaultDisputeGameImpl;
         output_.superPermissionedDisputeGame = impls.superPermissionedDisputeGameImpl;
+        output_.zkDisputeGame = impls.zkDisputeGameImpl;
 
         // Get L1CrossDomainMessenger from AddressManager
         IAddressManager am = IAddressManager(_input.addressManager);

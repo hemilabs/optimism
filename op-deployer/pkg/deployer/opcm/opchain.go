@@ -112,6 +112,7 @@ type ReadImplementationAddressesOutput struct {
 	PermissionedDisputeGameV2    common.Address
 	SuperFaultDisputeGame        common.Address
 	SuperPermissionedDisputeGame common.Address
+	ZkDisputeGame                common.Address
 	OpcmStandardValidator        common.Address
 	OpcmInteropMigrator          common.Address
 }

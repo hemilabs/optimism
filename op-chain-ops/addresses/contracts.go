@@ -43,8 +43,9 @@ type ImplementationsContracts struct {
 	OptimismMintableErc20FactoryImpl common.Address
 	DisputeGameFactoryImpl           common.Address
 	AnchorStateRegistryImpl          common.Address
-	FaultDisputeGameV2Impl           common.Address
-	PermissionedDisputeGameV2Impl    common.Address
+	FaultDisputeGameImpl             common.Address
+	PermissionedDisputeGameImpl      common.Address
+	ZkDisputeGameImpl                common.Address
 	StorageSetterImpl                common.Address
 }
 
