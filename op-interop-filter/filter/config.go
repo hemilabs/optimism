@@ -60,3 +60,48 @@ func NewConfig(ctx *cli.Context, version string) (*Config, error) {
 		RPC:              oprpc.ReadCLIConfig(ctx),
 	}, nil
 }
+
+// loadRollupConfigs loads rollup configs from networks (superchain registry) and custom JSON files.
+func loadRollupConfigs(networks []string, configPaths []string) (map[eth.ChainID]*rollup.Config, error) {
+	configs := make(map[eth.ChainID]*rollup.Config)
+
+	// Load from superchain registry by network name
+	for _, network := range networks {
+		cfg, err := chaincfg.GetRollupConfig(network)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load rollup config for network %q: %w", network, err)
+		}
+		chainID := eth.ChainIDFromBig(cfg.L2ChainID)
+		if _, exists := configs[chainID]; exists {
+			return nil, fmt.Errorf("duplicate chain ID %s: network %q conflicts with another config", chainID, network)
+		}
+		configs[chainID] = cfg
+	}
+
+	// Load from custom JSON files
+	for _, path := range configPaths {
+		cfg, err := loadRollupConfigFromFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load rollup config from %q: %w", path, err)
+		}
+		chainID := eth.ChainIDFromBig(cfg.L2ChainID)
+		if _, exists := configs[chainID]; exists {
+			return nil, fmt.Errorf("duplicate chain ID %s: file %q conflicts with another config", chainID, path)
+		}
+		configs[chainID] = cfg
+	}
+
+	return configs, nil
+}
+
+// loadRollupConfigFromFile loads a rollup config from a JSON file.
+func loadRollupConfigFromFile(path string) (*rollup.Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	var rollupConfig rollup.Config
+	return &rollupConfig, rollupConfig.ParseRollupConfig(file)
+}
