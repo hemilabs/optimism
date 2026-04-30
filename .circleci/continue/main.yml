@@ -991,7 +991,6 @@ jobs:
           mentions: "@security-oncall"
 
   contracts-bedrock-tests:
-    circleci_ip_ranges: true
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
     resource_class: 2xlarge
@@ -1080,7 +1079,6 @@ jobs:
           mentions: "@security-oncall"
 
   contracts-bedrock-heavy-fuzz-nightly:
-    circleci_ip_ranges: true
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
     resource_class: 2xlarge
@@ -1138,7 +1136,6 @@ jobs:
   # AI Contracts Test Maintenance System
   # Runbook: https://github.com/ethereum-optimism/optimism/blob/develop/ops/ai-eng/contracts-test-maintenance/docs/runbook.md
   ai-contracts-test:
-    circleci_ip_ranges: true
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
     resource_class: medium
@@ -1170,7 +1167,6 @@ jobs:
           mentions: "@security-oncall"
 
   contracts-bedrock-coverage:
-    circleci_ip_ranges: true
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
     resource_class: 2xlarge
@@ -1183,6 +1179,10 @@ jobs:
         description: Profile to use for testing
         type: string
         default: ci
+      l1_archive_rpc_url_env_var:
+        description: Mainnet L1 archive RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_MAINNET_L1_ARCHIVE_RPC_URL
       features:
         description: Comma-separated list of features to enable (e.g., "OPTIMISM_PORTAL_INTEROP", "CUSTOM_GAS_TOKEN")
         type: string
@@ -1209,12 +1209,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y lcov
       - run:
+          name: Resolve L1 archive RPC URL
+          command: |
+            printf 'export ETH_RPC_URL="${%s:?%s must be set}"\n' "<<parameters.l1_archive_rpc_url_env_var>>" "<<parameters.l1_archive_rpc_url_env_var>>" >> "$BASH_ENV"
+      - run:
           name: Write pinned block number for cache key
           command: |
             just print-pinned-block-number > ./pinnedBlockNumber.txt
             cat pinnedBlockNumber.txt
-          environment:
-            ETH_RPC_URL: https://ci-mainnet-l1-archive.optimism.io
           working_directory: packages/contracts-bedrock
       - restore_cache:
           name: Restore forked state
@@ -1234,7 +1236,6 @@ jobs:
           command: just coverage-lcov-all
           environment:
             FOUNDRY_PROFILE: <<parameters.test_profile>>
-            ETH_RPC_URL: https://ci-mainnet-l1-archive.optimism.io
           working_directory: packages/contracts-bedrock
           no_output_timeout: <<parameters.test_timeout>>
       - run:
@@ -1242,7 +1243,6 @@ jobs:
           command: just test-rerun | tee failed-test-traces.log
           environment:
             FOUNDRY_PROFILE: <<parameters.test_profile>>
-            ETH_RPC_URL: https://ci-mainnet-l1-archive.optimism.io
           working_directory: packages/contracts-bedrock
           when: on_fail
       - codecov/upload:
@@ -1262,7 +1262,6 @@ jobs:
           mentions: "@security-oncall"
 
   contracts-bedrock-tests-upgrade:
-    circleci_ip_ranges: true
     parameters:
       fork_op_chain:
         description: Fork OP Chain
@@ -1272,9 +1271,10 @@ jobs:
         description: Fork Base Chain
         type: string
         default: "mainnet"
-      fork_base_rpc:
-        description: Fork Base RPC
-        type: string
+      fork_base_archive_rpc_env_var:
+        description: Fork base archive RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_MAINNET_L1_ARCHIVE_RPC_URL
       test_profile:
         description: Profile to use for testing
         type: string
@@ -1302,13 +1302,16 @@ jobs:
           command: forge --version
           working_directory: packages/contracts-bedrock
       - run:
+          name: Resolve fork base archive RPC URL
+          command: |
+            printf 'export ETH_RPC_URL="${%s:?%s must be set}"\n' "<<parameters.fork_base_archive_rpc_env_var>>" "<<parameters.fork_base_archive_rpc_env_var>>" >> "$BASH_ENV"
+      - run:
           name: Write pinned block number for cache key
           command: |
             just print-pinned-block-number > ./pinnedBlockNumber.txt
             cat pinnedBlockNumber.txt
           environment:
             FORK_BASE_CHAIN: <<parameters.fork_base_chain>>
-            ETH_RPC_URL: <<parameters.fork_base_rpc>>
           working_directory: packages/contracts-bedrock
       - restore_cache:
           name: Restore forked state
@@ -1325,20 +1328,17 @@ jobs:
             FOUNDRY_FUZZ_SEED: 42424242
             FOUNDRY_FUZZ_RUNS: 1
             FOUNDRY_PROFILE: <<parameters.test_profile>>
-            ETH_RPC_URL: <<parameters.fork_base_rpc>>
             FORK_OP_CHAIN: <<parameters.fork_op_chain>>
             FORK_BASE_CHAIN: <<parameters.fork_base_chain>>
           working_directory: packages/contracts-bedrock
           no_output_timeout: 15m
       - run:
           name: Print failed test traces
-          command: |
-            just test-upgrade-rerun | tee failed-test-traces.log
+          command: just test-upgrade-rerun | tee failed-test-traces.log
           environment:
             FOUNDRY_FUZZ_SEED: 42424242
             FOUNDRY_FUZZ_RUNS: 1
             FOUNDRY_PROFILE: <<parameters.test_profile>>
-            ETH_RPC_URL: <<parameters.fork_base_rpc>>
             FORK_OP_CHAIN: <<parameters.fork_op_chain>>
             FORK_BASE_CHAIN: <<parameters.fork_base_chain>>
           working_directory: packages/contracts-bedrock
@@ -1363,6 +1363,137 @@ jobs:
           path: packages/contracts-bedrock/results
           destination: junit-results
           when: always
+      - store_test_results:
+          path: packages/contracts-bedrock/results
+          when: always
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
+  contracts-bedrock-tests-l2-fork:
+    parameters:
+      fork_op_chain:
+        description: L2 chain to fork for testing
+        type: string
+        default: "op-mainnet"
+      l2_fork_rpc:
+        description: RPC URL for L2 fork. If empty, derived from fork_op_chain.
+        type: string
+        default: ""
+      op_mainnet_l2_rpc_url_env_var:
+        description: OP Mainnet L2 RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_MAINNET_L2_RPC_URL
+      op_sepolia_l2_rpc_url_env_var:
+        description: OP Sepolia L2 RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_SEPOLIA_L2_RPC_URL
+      l2_fork_block_number:
+        description: Block number to fork from
+        type: string
+        default: "latest"
+      test_profile:
+        description: Profile to use for testing
+        type: string
+        default: ci
+      features:
+        description: Comma-separated list of features to enable (e.g., "L2CM")
+        type: string
+        default: "L2CM"
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge
+    steps:
+      - utils/checkout-with-mise:
+          enable-mise-cache: true
+      - install-contracts-dependencies
+      - check-changed:
+          patterns: contracts-bedrock
+      - install-solc-compilers
+      - run:
+          name: Print dependencies
+          command: just dep-status
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Print forge version
+          command: forge --version
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Resolve RPC URL
+          command: |
+            RPC="<<parameters.l2_fork_rpc>>"
+            RPC_ENV_VAR=""
+            if [ -z "$RPC" ]; then
+              case "<<parameters.fork_op_chain>>" in
+                op-mainnet)
+                  RPC_ENV_VAR="<<parameters.op_mainnet_l2_rpc_url_env_var>>"
+                  ;;
+                op-sepolia)
+                  RPC_ENV_VAR="<<parameters.op_sepolia_l2_rpc_url_env_var>>"
+                  ;;
+              esac
+            fi
+            if [ -n "$RPC_ENV_VAR" ]; then
+              printf 'export L2_FORK_RPC_URL="${%s:?%s must be set}"\n' "$RPC_ENV_VAR" "$RPC_ENV_VAR" >> "$BASH_ENV"
+            elif [ -z "$RPC" ]; then
+              RPC=$(jq -r '.["<<parameters.fork_op_chain>>"] // empty' .circleci/l2-rpcs.json)
+              [ -z "$RPC" ] && echo "Unknown chain '<<parameters.fork_op_chain>>' — add it to .circleci/l2-rpcs.json" && exit 1
+              printf 'export L2_FORK_RPC_URL=%q\n' "$RPC" >> "$BASH_ENV"
+            else
+              printf 'export L2_FORK_RPC_URL=%q\n' "$RPC" >> "$BASH_ENV"
+            fi
+      - run:
+          name: Get latest block number if not specified
+          command: |
+            if [ "<<parameters.l2_fork_block_number>>" = "latest" ]; then
+              BLOCK_NUMBER=$(cast block-number --rpc-url "$L2_FORK_RPC_URL")
+              echo "export L2_FORK_BLOCK_NUMBER=$BLOCK_NUMBER" >> $BASH_ENV
+              echo "Using latest block number: $BLOCK_NUMBER"
+              echo "$BLOCK_NUMBER" > ./l2ForkBlockNumber.txt
+            else
+              echo "export L2_FORK_BLOCK_NUMBER=<<parameters.l2_fork_block_number>>" >> $BASH_ENV
+              echo "Using specified block number: <<parameters.l2_fork_block_number>>"
+              echo "<<parameters.l2_fork_block_number>>" > ./l2ForkBlockNumber.txt
+            fi
+          working_directory: packages/contracts-bedrock
+      - restore_cache:
+          name: Restore forked L2 state
+          key: forked-state-l2-<<parameters.fork_op_chain>>-{{ checksum "packages/contracts-bedrock/l2ForkBlockNumber.txt" }}
+      - setup-features:
+          features: <<parameters.features>>
+      - run:
+          name: Check NUT bundle is up-to-date
+          command: just nut-bundle-check-no-build
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Run L2 fork tests
+          command: |
+            mkdir -p results
+            JUNIT_TEST_PATH=results/results.xml just test-l2-fork-upgrade
+          environment:
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
+          working_directory: packages/contracts-bedrock
+          no_output_timeout: 20m
+      - run:
+          name: Print failed test traces
+          command: |
+            just test-l2-fork-upgrade-rerun | tee failed-test-traces-l2-fork.log
+          environment:
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
+          working_directory: packages/contracts-bedrock
+          when: on_fail
+      - save_cache:
+          name: Save Go build cache
+          key: golang-build-cache-contracts-bedrock-tests-{{ checksum "go.sum" }}
+          paths:
+            - "~/.cache/go-build"
+      - save_cache:
+          name: Save forked L2 state
+          key: forked-state-l2-<<parameters.fork_op_chain>>-{{ checksum "packages/contracts-bedrock/l2ForkBlockNumber.txt" }}
+          when: always
+          paths:
+            - "~/.foundry/cache"
+      - store_artifacts:
+          path: packages/contracts-bedrock/failed-test-traces-l2-fork.log
+          when: on_fail
       - store_test_results:
           path: packages/contracts-bedrock/results
           when: always
@@ -1568,7 +1699,6 @@ jobs:
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
     resource_class: 2xlarge
-    circleci_ip_ranges: true
     parallelism: <<parameters.parallelism>>
     steps:
       - utils/checkout-with-mise:
@@ -1699,7 +1829,6 @@ jobs:
         default: 30m
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
-    circleci_ip_ranges: true
     resource_class: 2xlarge+
     steps:
       - utils/checkout-with-mise:
@@ -2520,6 +2649,7 @@ workflows:
             - go-binaries-for-sysgo
           context:
             - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
           filters:
             branches:
               ignore: develop # Run on all branches EXCEPT develop (PR branches only)
@@ -2539,6 +2669,7 @@ workflows:
             - go-binaries-for-sysgo
           context:
             - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
             - slack
       - analyze-op-program-client:
           context:
@@ -2821,6 +2952,7 @@ workflows:
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
           requires:
             - contracts-bedrock-build
             - cannon-prestate
@@ -2943,5 +3075,229 @@ workflows:
             - circleci-api-token
             - devin-api
             - slack
+
+  l2-fork-test-workflow:
+    when:
+      and:
+        - equal: [true, << pipeline.parameters.c-l2_fork_test_dispatch >>]
+        - equal: ["api", << pipeline.trigger_source >>]
+    jobs:
+      - contracts-bedrock-tests-l2-fork:
+          name: contracts-bedrock-tests-l2-fork-dispatch op-mainnet
+          fork_op_chain: op-mainnet
+          l2_fork_block_number: latest
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+
+  scheduled-weekly-tests:
+    when:
+      or:
+        - equal: [build_weekly, <<pipeline.schedule.name>>]
+        - equal: [true, << pipeline.parameters.c-l2_fork_weekly_dispatch >>]
+    jobs:
+      - contracts-bedrock-tests-l2-fork:
+          matrix:
+            parameters:
+              fork_op_chain:
+                - op-mainnet
+                - zora
+                - ink
+                - mode
+                - metal
+                - arena-z
+                - swell
+                - unichain
+                - soneium
+                - world-chain
+                - base
+                - xlayer
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+
+  contracts-feature-tests:
+    when:
+      or:
+        - and:
+            - equal: ["webhook", << pipeline.trigger_source >>]
+            - << pipeline.parameters.c-contracts_changed >>
+            - << pipeline.parameters.c-non_docs_changes >>
+        # Always run on develop (mirrors previous check-changed whitelist behavior)
+        - and:
+            - equal: ["webhook", << pipeline.trigger_source >>]
+            - equal: ["develop", << pipeline.git.branch >>]
+            - << pipeline.parameters.c-non_docs_changes >>
+        # Merge queue (merge gate). Match checkout branch.
+        - matches:
+            pattern: "^gh-readonly-queue/.*"
+            value: << pipeline.git.branch >>
+        - and:
+            - equal: [true, <<pipeline.parameters.c-main_dispatch>>]
+            - equal: ["api", << pipeline.trigger_source >>]
+    jobs:
+      - contracts-bedrock-tests:
+          # Heavily fuzz any fuzz tests within added or modified test files.
+          name: contracts-bedrock-tests-heavy-fuzz-modified <<matrix.features>>
+          test_list: git diff origin/develop...HEAD --name-only --diff-filter=AM -- './test/**/*.t.sol' | sed 's|packages/contracts-bedrock/||'
+          test_timeout: 1h
+          test_profile: ciheavy
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: &features_matrix
+                - main
+                - CUSTOM_GAS_TOKEN
+                - OPTIMISM_PORTAL_INTEROP
+                - ZK_DISPUTE_GAME
+                - CANNON_KONA
+                - SUPER_ROOT_GAMES_MIGRATION
+                - L2CM
+                - L2CM,CUSTOM_GAS_TOKEN
+                - L2CM,OPTIMISM_PORTAL_INTEROP
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+      # On PRs, run tests with lite profile for better build times.
+      - contracts-bedrock-tests:
+          name: contracts-bedrock-tests <<matrix.features>>
+          test_list: find test -name "*.t.sol"
+          test_profile: liteci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+          filters:
+            branches:
+              ignore: develop
+      # On develop, run tests with ci profile to mirror production.
+      - contracts-bedrock-tests:
+          name: contracts-bedrock-tests-develop <<matrix.features>>
+          test_list: find test -name "*.t.sol"
+          test_profile: ci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+          filters:
+            branches:
+              only: develop
+      - contracts-bedrock-coverage:
+          # Generate coverage reports.
+          name: contracts-bedrock-coverage <<matrix.features>>
+          test_timeout: 1h
+          test_profile: cicoverage
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+      # On PRs, run upgrade tests with lite profile for better build times.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade op-mainnet <<matrix.features>>
+          fork_op_chain: op
+          fork_base_chain: mainnet
+          test_profile: liteci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              ignore: develop
+      # On develop, run upgrade tests with ci profile to mirror production.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade-develop op-mainnet <<matrix.features>>
+          fork_op_chain: op
+          fork_base_chain: mainnet
+          test_profile: ci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              only: develop
+      # On PRs, run chain-specific upgrade tests with lite profile for better build times.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade <<matrix.fork_op_chain>>-mainnet
+          fork_op_chain: <<matrix.fork_op_chain>>
+          fork_base_chain: mainnet
+          test_profile: liteci
+          matrix:
+            parameters:
+              fork_op_chain: ["op", "ink", "unichain"]
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              ignore: develop
+      # On develop, run chain-specific upgrade tests with ci profile to mirror production.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade-develop <<matrix.fork_op_chain>>-mainnet
+          fork_op_chain: <<matrix.fork_op_chain>>
+          fork_base_chain: mainnet
+          test_profile: ci
+          matrix:
+            parameters:
+              fork_op_chain: ["op", "ink", "unichain"]
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              only: develop
+      # Always run L2 fork tests with ci profile
+      - contracts-bedrock-tests-l2-fork:
+          name: contracts-bedrock-tests-l2-fork op-mainnet
+          fork_op_chain: op-mainnet
+          l2_fork_block_number: latest
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+      - contracts-bedrock-checks-fast:
+          name: contracts-bedrock-checks-fast-feature-tests
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+      # -----------------------------------------------------------------------
+      # required-contracts-ci: GitHub required status for this workflow. Terminal requires
+      # keep this job scheduled even when upstream jobs fail; ci-gate then checks they passed.
+      # -----------------------------------------------------------------------
+      - required-contracts-ci:
+          requires:
+            - contracts-bedrock-tests main: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified main: terminal
+            - contracts-bedrock-coverage main: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet main: terminal
+            - contracts-bedrock-checks-fast-feature-tests: terminal
+          context:
+            - circleci-api-token
 
   # ============================================================================
