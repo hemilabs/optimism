@@ -150,8 +150,53 @@ func applyConfigPrefundedL2(t devtest.T, keys devkeys.Keys, l1ChainID, l2ChainID
 	l1Config.WithPrefundedAccount(addrFor(devkeys.SystemConfigOwner), *millionEth)
 }
 
-func startSequencerEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, identity *ELNodeIdentity) *OpGeth {
-	return startL2ELNode(t, l2Net, jwtPath, jwtSecret, "sequencer", identity)
+// startL2ELForKey starts an L2 EL node for the given key, respecting DEVSTACK_L2EL_KIND.
+// This is the single env-aware dispatch point for L2 EL selection.
+func startL2ELForKey(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, key string, identity *ELNodeIdentity) L2ELNode {
+	switch devstackL2ELKind() {
+	case MixedL2ELOpGeth:
+		return startL2ELNode(t, l2Net, jwtPath, jwtSecret, key, identity)
+	case MixedL2ELOpRethV2:
+		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v2")
+	default: // op-reth v1
+		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v1")
+	}
+}
+
+// startL2CLForKey starts an L2 CL node for the given key, respecting DEVSTACK_L2CL_KIND.
+// This is the single env-aware dispatch point for L2 CL selection.
+func startL2CLForKey(
+	t devtest.T,
+	keys devkeys.Keys,
+	l1Net *L1Network,
+	l2Net *L2Network,
+	l1EL L1ELNode,
+	l1CL *L1CLNode,
+	l2EL L2ELNode,
+	jwtSecret [32]byte,
+	clKey, elKey string,
+	isSequencer bool,
+	followSource string,
+	l2CLOpts []L2CLOption,
+) L2CLNode {
+	switch devstackL2CLKind() {
+	case MixedL2CLKona:
+		return startMixedKonaNode(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, clKey, elKey, isSequencer, nil)
+	default: // op-node
+		return startL2CLNode(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, jwtSecret, l2CLNodeStartConfig{
+			Key:            clKey,
+			IsSequencer:    isSequencer,
+			NoDiscovery:    true,
+			EnableReqResp:  true,
+			UseReqResp:     true,
+			L2FollowSource: followSource,
+			L2CLOptions:    l2CLOpts,
+		})
+	}
+}
+
+func startSequencerEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, identity *ELNodeIdentity) L2ELNode {
+	return startL2ELForKey(t, l2Net, jwtPath, jwtSecret, "sequencer", identity)
 }
 
 func startL2ELNode(
