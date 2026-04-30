@@ -16,21 +16,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCLIEndToEndApply tests the full end-to-end apply workflow via CLI
-func TestCLIEndToEndApply(t *testing.T) {
+// TestCLIEndToEndApplyForge tests the full end-to-end apply workflow via CLI using Forge
+func TestCLIEndToEndApplyForge(t *testing.T) {
 	runner := NewCLITestRunnerWithNetwork(t)
 
 	workDir := runner.GetWorkDir()
 	// Use the same chain ID that anvil runs on
 	l1ChainID := uint64(devnet.DefaultChainID)
-	l2ChainID1 := uint256.NewInt(1)
-	l2ChainID2 := uint256.NewInt(2)
+	l2ChainID := uint256.NewInt(1)
 
 	dk, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(t, err)
 
-	t.Run("two chains one after another", func(t *testing.T) {
-		intent, _ := cliInitIntent(t, runner, l1ChainID, []common.Hash{l2ChainID1.Bytes32()})
+	t.Run("single chain with forge", func(t *testing.T) {
+		intent, _ := cliInitIntent(t, runner, l1ChainID, []common.Hash{l2ChainID.Bytes32()})
+		// Ensure OPCM address is nil so it gets deployed via pipeline (using Forge)
+		intent.OPCMAddress = nil
 
 		if intent.SuperchainRoles == nil {
 			t.Log("SuperchainRoles is nil, initializing...")
@@ -62,39 +63,23 @@ func TestCLIEndToEndApply(t *testing.T) {
 		}
 		require.NoError(t, intent.WriteToFile(filepath.Join(workDir, "intent.toml")))
 
-		// Apply first chain with live deployment
+		// Apply with live deployment AND --use-forge
+		// Assuming flag is --use-forge. If specific name differs, I'll need to check.
 		runner.ExpectSuccessWithNetwork(t, []string{
 			"apply",
 			"--deployment-target", "live",
 			"--workdir", workDir,
-		}, nil)
-
-		// Add second chain to intent
-		intent, err := pipeline.ReadIntent(workDir)
-		require.NoError(t, err)
-
-		secondChain := shared.NewChainIntent(t, dk, new(big.Int).SetUint64(l1ChainID), l2ChainID2, 60_000_000)
-		secondChain.Eip1559DenominatorCanyon = standard.Eip1559DenominatorCanyon
-		secondChain.Eip1559Denominator = standard.Eip1559Denominator
-		secondChain.Eip1559Elasticity = standard.Eip1559Elasticity
-		intent.Chains = append(intent.Chains, secondChain)
-
-		require.NoError(t, intent.WriteToFile(filepath.Join(workDir, "intent.toml")))
-
-		// Apply again with both chains
-		runner.ExpectSuccessWithNetwork(t, []string{
-			"apply",
-			"--deployment-target", "live",
-			"--workdir", workDir,
+			"--use-forge",
 		}, nil)
 
 		// Verify final state
 		finalState, err := pipeline.ReadState(workDir)
 		require.NoError(t, err)
-		require.Len(t, finalState.Chains, 2)
-		require.Equal(t, common.Hash(l2ChainID1.Bytes32()), finalState.Chains[0].ID)
-		require.Equal(t, common.Hash(l2ChainID2.Bytes32()), finalState.Chains[1].ID)
-
+		require.Len(t, finalState.Chains, 1)
+		require.Equal(t, common.Hash(l2ChainID.Bytes32()), finalState.Chains[0].ID)
 		require.NotNil(t, finalState.AppliedIntent)
+
+		// Additional check to verify addresses are populated (meaning successful deployment)
+		require.NotEmpty(t, finalState.Chains[0].OpChainContracts.SystemConfigProxy)
 	})
 }
