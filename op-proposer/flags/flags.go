@@ -37,6 +37,11 @@ var (
 		Usage:   "HTTP provider URLs for the supervisor nodes. Multiple URLs can be provided to automatically fail over.",
 		EnvVars: prefixEnvVars("SUPERVISOR_RPCS"),
 	}
+	SuperNodeRpcsFlag = &cli.StringSliceFlag{
+		Name:    "supernode-rpcs",
+		Usage:   "HTTP provider URLs for the supernode instances. Multiple URLs can be provided to automatically fail over.",
+		EnvVars: prefixEnvVars("SUPERNODE_RPCS"),
+	}
 
 	// Optional flags
 	L2OOAddressFlag = &cli.StringFlag{
@@ -95,7 +100,7 @@ var requiredFlags = []cli.Flag{
 var optionalFlags = []cli.Flag{
 	RollupRpcFlag,
 	SupervisorRpcsFlag,
-	L2OOAddressFlag,
+	SuperNodeRpcsFlag,
 	PollIntervalFlag,
 	AllowNonFinalizedFlag,
 	L2OutputHDPathFlag,

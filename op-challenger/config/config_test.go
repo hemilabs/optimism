@@ -145,12 +145,13 @@ func applyValidConfigForSuperCannonKona(t *testing.T, cfg *Config) {
 	applyValidConfigForCannonKona(t, cfg)
 }
 
-func applyValidConfigForSuperAsteriscKona(t *testing.T, cfg *Config) {
-	cfg.SupervisorRPC = validSupervisorRpc
-	applyValidConfigForAsteriscKona(t, cfg)
+func TestNewInteropConfigUsesSupervisorByDefault(t *testing.T) {
+	cfg := NewInteropConfig(validGameFactoryAddress, validL1EthRpc, validL1BeaconUrl, validSuperRpc, []string{validL2Rpc}, validDatadir)
+	require.Equal(t, validSuperRpc, cfg.SuperRPC)
+	require.False(t, cfg.UseSuperNode)
 }
 
-func applyValidConfigForOptimisticZK(cfg *Config) {
+func applyValidConfigForZKDisputeGame(cfg *Config) {
 	cfg.RollupRpc = validRollupRpc
 }
 

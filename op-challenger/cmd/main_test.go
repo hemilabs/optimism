@@ -124,27 +124,24 @@ func TestOpSupervisor(t *testing.T) {
 	}
 
 	t.Run("Valid-SuperCannon", func(t *testing.T) {
-		url := "http://localhost/supervisor"
-		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperCannonGameType, "--supervisor-rpc", "--supervisor-rpc", url))
-		require.Equal(t, url, cfg.SupervisorRPC)
+		url := "http://localhost/super"
+		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperCannonGameType, "--supernode-rpc", "--supernode-rpc", url))
+		require.Equal(t, url, cfg.SuperRPC)
+		require.True(t, cfg.UseSuperNode)
 	})
 
 	t.Run("Valid-SuperPermissioned", func(t *testing.T) {
-		url := "http://localhost/supervisor"
-		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperPermissionedGameType, "--supervisor-rpc", "--supervisor-rpc", url))
-		require.Equal(t, url, cfg.SupervisorRPC)
+		url := "http://localhost/super"
+		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperPermissionedGameType, "--supernode-rpc", "--supernode-rpc", url))
+		require.Equal(t, url, cfg.SuperRPC)
+		require.True(t, cfg.UseSuperNode)
 	})
 
 	t.Run("Valid-SuperCannonKona", func(t *testing.T) {
-		url := "http://localhost/supervisor"
-		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperCannonKonaGameType, "--supervisor-rpc", "--supervisor-rpc", url))
-		require.Equal(t, url, cfg.SupervisorRPC)
-	})
-
-	t.Run("Valid-SuperAsteriscKona", func(t *testing.T) {
-		url := "http://localhost/supervisor"
-		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperAsteriscKonaGameType, "--supervisor-rpc", "--supervisor-rpc", url))
-		require.Equal(t, url, cfg.SupervisorRPC)
+		url := "http://localhost/super"
+		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperCannonKonaGameType, "--supernode-rpc", "--supernode-rpc", url))
+		require.Equal(t, url, cfg.SuperRPC)
+		require.True(t, cfg.UseSuperNode)
 	})
 }
 

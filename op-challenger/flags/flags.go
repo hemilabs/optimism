@@ -706,7 +706,8 @@ func NewConfigFromCLI(ctx *cli.Context, logger log.Logger) (*config.Config, erro
 		MinUpdateInterval:       ctx.Duration(MinUpdateInterval.Name),
 		AdditionalBondClaimants: claimants,
 		RollupRpc:               ctx.String(RollupRpcFlag.Name),
-		SupervisorRPC:           ctx.String(SupervisorRpcFlag.Name),
+		SuperRPC:                ctx.String(SuperNodeRpcFlag.Name),
+		UseSuperNode:            ctx.String(SuperNodeRpcFlag.Name) != "",
 		Cannon: vm.Config{
 			VmType:            gameTypes.CannonGameType,
 			L1:                l1EthRpc,
