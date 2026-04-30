@@ -43,8 +43,9 @@ import (
 type MixedL2ELKind string
 
 const (
-	MixedL2ELOpGeth MixedL2ELKind = "op-geth"
-	MixedL2ELOpReth MixedL2ELKind = "op-reth"
+	MixedL2ELOpGeth   MixedL2ELKind = "op-geth"
+	MixedL2ELOpReth   MixedL2ELKind = "op-reth"
+	MixedL2ELOpRethV2 MixedL2ELKind = "op-reth-proof-v2"
 )
 
 type MixedL2CLKind string
@@ -166,7 +167,9 @@ func NewMixedSingleChainRuntime(t devtest.T, cfg MixedSingleChainPresetConfig) *
 		case MixedL2ELOpGeth:
 			el = startL2ELNode(t, l2Net, jwtPath, jwtSecret, spec.ELKey, identity)
 		case MixedL2ELOpReth:
-			el = startMixedOpRethNode(t, l2Net, spec.ELKey, jwtPath, jwtSecret, metricsRegistrar)
+			el = startMixedOpRethNode(t, l2Net, spec.ELKey, jwtPath, jwtSecret, metricsRegistrar, "v1")
+		case MixedL2ELOpRethV2:
+			el = startMixedOpRethNode(t, l2Net, spec.ELKey, jwtPath, jwtSecret, metricsRegistrar, "v2")
 		default:
 			require.FailNowf("unsupported EL kind", "unsupported mixed EL kind %q", spec.ELKind)
 		}
@@ -279,6 +282,7 @@ func buildMixedOpRethNode(
 	jwtPath string,
 	jwtSecret [32]byte,
 	metricsRegistrar L2MetricsRegistrar,
+	storageVersion string,
 ) *OpReth {
 	tempDir := t.TempDir()
 
@@ -354,6 +358,7 @@ func buildMixedOpRethNode(
 		"--datadir=" + dataDirPath,
 		"--chain=" + chainConfigPath,
 		"--proofs-history.storage-path=" + proofHistoryDir,
+		"--proofs-history.storage-version=" + storageVersion,
 	}
 	initOut, initErr := exec.Command(execPath, initProofsArgs...).CombinedOutput()
 	t.Require().NoError(initErr, "must init op-reth proof history: %s", string(initOut))
@@ -364,6 +369,7 @@ func buildMixedOpRethNode(
 		"--proofs-history.window=10000",
 		"--proofs-history.prune-interval=1m",
 		"--proofs-history.storage-path="+proofHistoryDir,
+		"--proofs-history.storage-version="+storageVersion,
 	)
 
 	return &OpReth{
@@ -388,8 +394,9 @@ func startMixedOpRethNode(
 	jwtPath string,
 	jwtSecret [32]byte,
 	metricsRegistrar L2MetricsRegistrar,
+	storageVersion string,
 ) *OpReth {
-	node := buildMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, metricsRegistrar)
+	node := buildMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, metricsRegistrar, storageVersion)
 	t.Logger().Info("Starting op-reth", "name", key, "chain", l2Net.ChainID())
 	node.Start()
 	t.Cleanup(node.Stop)
@@ -407,8 +414,9 @@ func startMixedOpRethNodeWithSupervisorURL(
 	jwtSecret [32]byte,
 	metricsRegistrar L2MetricsRegistrar,
 	supervisorURL string,
+	storageVersion string,
 ) *OpReth {
-	node := buildMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, metricsRegistrar)
+	node := buildMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, metricsRegistrar, storageVersion)
 	if supervisorURL != "" {
 		node.args = append(node.args, "--rollup.supervisor-http="+supervisorURL)
 	}
