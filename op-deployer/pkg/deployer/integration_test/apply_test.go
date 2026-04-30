@@ -20,7 +20,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum-optimism/optimism/op-service/testutils/devnet"
@@ -90,17 +89,14 @@ func TestEndToEndBootstrapApply(t *testing.T) {
 		defer cancel()
 
 		bstrap, err := bootstrap.Superchain(ctx, bootstrap.SuperchainConfig{
-			L1RPCUrl:                   l1RPC,
-			PrivateKey:                 pkHex,
-			Logger:                     lgr,
-			ArtifactsLocator:           loc,
-			CacheDir:                   testCacheDir,
-			SuperchainProxyAdminOwner:  superchainPAO,
-			ProtocolVersionsOwner:      common.Address{'P', 'V', 'O'},
-			Guardian:                   common.Address{'G'},
-			Paused:                     false,
-			RecommendedProtocolVersion: params.ProtocolVersion{0x01, 0x02, 0x03, 0x04},
-			RequiredProtocolVersion:    params.ProtocolVersion{0x01, 0x02, 0x03, 0x04},
+			L1RPCUrl:                  l1RPC,
+			PrivateKey:                pkHex,
+			Logger:                    lgr,
+			ArtifactsLocator:          loc,
+			CacheDir:                  testCacheDir,
+			SuperchainProxyAdminOwner: superchainPAO,
+			Guardian:                  common.Address{'G'},
+			Paused:                    false,
 		})
 		require.NoError(t, err)
 
@@ -116,7 +112,6 @@ func TestEndToEndBootstrapApply(t *testing.T) {
 			DisputeGameFinalityDelaySeconds: standard.DisputeGameFinalityDelaySeconds,
 			DevFeatureBitmap:                common.Hash{},
 			SuperchainConfigProxy:           bstrap.SuperchainConfigProxy,
-			ProtocolVersionsProxy:           bstrap.ProtocolVersionsProxy,
 			L1ProxyAdminOwner:               superchainPAO,
 			SuperchainProxyAdmin:            bstrap.SuperchainProxyAdmin,
 			CacheDir:                        testCacheDir,
@@ -202,7 +197,6 @@ func TestEndToEndBootstrapApplyWithUpgrade(t *testing.T) {
 		ProofMaturityDelaySeconds:       standard.ProofMaturityDelaySeconds,
 		DisputeGameFinalityDelaySeconds: standard.DisputeGameFinalityDelaySeconds,
 		SuperchainConfigProxy:           superchain.SuperchainConfigAddr,
-		ProtocolVersionsProxy:           superchain.ProtocolVersionsAddr,
 		L1ProxyAdminOwner:               superchainProxyAdminOwner,
 		SuperchainProxyAdmin:            superchainProxyAdmin,
 		CacheDir:                        testCacheDir,
@@ -1173,7 +1167,6 @@ func validateSuperchainDeployment(t *testing.T, st *state.State, cg codeGetter, 
 	addrs := []addrTuple{
 		{"SuperchainProxyAdminImpl", st.SuperchainDeployment.SuperchainProxyAdminImpl},
 		{"SuperchainConfigProxy", st.SuperchainDeployment.SuperchainConfigProxy},
-		{"ProtocolVersionsProxy", st.SuperchainDeployment.ProtocolVersionsProxy},
 		{"OpcmV2Impl", st.ImplementationsDeployment.OpcmV2Impl},
 		{"PreimageOracleImpl", st.ImplementationsDeployment.PreimageOracleImpl},
 		{"MipsImpl", st.ImplementationsDeployment.MipsImpl},
@@ -1181,7 +1174,6 @@ func validateSuperchainDeployment(t *testing.T, st *state.State, cg codeGetter, 
 
 	if includeSuperchainImpls {
 		addrs = append(addrs, addrTuple{"SuperchainConfigImpl", st.SuperchainDeployment.SuperchainConfigImpl})
-		addrs = append(addrs, addrTuple{"ProtocolVersionsImpl", st.SuperchainDeployment.ProtocolVersionsImpl})
 	}
 
 	for _, addr := range addrs {

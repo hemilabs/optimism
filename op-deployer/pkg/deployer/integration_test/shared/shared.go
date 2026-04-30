@@ -62,7 +62,6 @@ func NewIntent(
 		L1ChainID:  l1ChainID.Uint64(),
 		SuperchainRoles: &addresses.SuperchainRoles{
 			SuperchainProxyAdminOwner: AddrFor(t, dk, devkeys.L1ProxyAdminOwnerRole.Key(l1ChainID)),
-			ProtocolVersionsOwner:     AddrFor(t, dk, devkeys.SuperchainDeployerKey.Key(l1ChainID)),
 			SuperchainGuardian:        AddrFor(t, dk, devkeys.SuperchainConfigGuardianKey.Key(l1ChainID)),
 			Challenger:                AddrFor(t, dk, devkeys.ChallengerRole.Key(l1ChainID)),
 		},
