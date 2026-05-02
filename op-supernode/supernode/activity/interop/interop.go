@@ -321,6 +321,9 @@ func (i *Interop) Start(ctx context.Context) error {
 				break
 			}
 			i.log.Warn("log backfill failed, retrying (virtual nodes may not be ready yet)", "err", err)
+			for cid := range i.chains {
+				i.metrics.LogBackfillRetries.WithLabelValues(cid.String()).Inc()
+			}
 			select {
 			case <-i.ctx.Done():
 				return fmt.Errorf("log backfill interrupted: %w", i.ctx.Err())
@@ -340,10 +343,12 @@ func (i *Interop) Start(ctx context.Context) error {
 			if err != nil {
 				// Permanent SafeDB gap: log once and halt — retrying cannot fix it.
 				if errors.Is(err, cc.ErrHistoryUnavailable) {
+					i.metrics.ActivityErrors.WithLabelValues("interop", "history_unavailable").Inc()
 					i.log.Error("interop activity halted: SafeDB history unavailable on this node", "err", err,
 						"remediation", "reseed data dir, advance interop.activation-timestamp past the gap, or rederive from L1")
 					return fmt.Errorf("interop halted due to unavailable history: %w", err)
 				}
+				i.metrics.ActivityErrors.WithLabelValues("interop", "progress").Inc()
 				i.log.Error("failed to progress and record interop", "err", err)
 				time.Sleep(errorBackoffPeriod)
 				continue
@@ -433,6 +438,7 @@ func (i *Interop) progressAndRecord() (bool, error) {
 		return i.applyPendingTransition(*pending)
 	}
 
+	verifyStart := time.Now()
 	output, obs, err := i.progressInterop()
 	if err != nil {
 		return false, err
@@ -452,7 +458,10 @@ func (i *Interop) progressAndRecord() (bool, error) {
 	if err := i.verifiedDB.SetPendingTransition(pendingTx); err != nil {
 		return false, fmt.Errorf("persist pending transition: %w", err)
 	}
-	return i.applyPendingTransition(pendingTx)
+	progress, applyErr := i.applyPendingTransition(pendingTx)
+	// Record verification latency for the full round including apply.
+	i.metrics.InteropVerificationDuration.Observe(time.Since(verifyStart).Seconds())
+	return progress, applyErr
 }
 
 func (i *Interop) refreshCurrentL1OnWait() (bool, error) {
