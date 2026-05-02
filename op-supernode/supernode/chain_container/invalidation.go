@@ -357,6 +357,10 @@ func (c *simpleChainContainer) InvalidateBlock(ctx context.Context, height uint6
 		"payloadHash", payloadHash,
 	)
 
+	if c.metrics != nil {
+		c.metrics.DenyListEntries.WithLabelValues(c.chainID.String()).Inc()
+	}
+
 	// Check if the current chain uses this block at this height
 	if c.engine == nil {
 		c.log.Warn("engine not initialized, cannot check current block")
@@ -399,6 +403,11 @@ func (c *simpleChainContainer) InvalidateBlock(ctx context.Context, height uint6
 		"invalidatedHeight", height,
 		"rewindToTimestamp", priorTimestamp,
 	)
+
+	// Record rewind depth: invalidated block was at `height`, rewound to height-1.
+	if c.metrics != nil {
+		c.metrics.ChainRewindDepthBlocks.WithLabelValues(c.chainID.String()).Observe(1)
+	}
 
 	return true, nil
 }
