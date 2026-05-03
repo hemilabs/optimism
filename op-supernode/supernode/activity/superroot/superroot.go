@@ -92,7 +92,14 @@ func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (atTimest
 		}
 	}
 
-	// collect verified and optimistic L2 and L1 blocks at the given timestamp
+	var (
+		optimistic         = make(map[eth.ChainID]eth.OutputWithRequiredL1, len(s.chains))
+		verifiedRequiredL1 eth.BlockID
+		chainOutputs       = make([]eth.ChainIDAndOutput, 0, len(s.chains))
+	)
+
+	notFound := false
+	// Collect verified L2 and L1 blocks at the given timestamp
 	for chainID, chain := range s.chains {
 		// verifiedAt returns the L2 block which is fully verified at the given timestamp, and the minimum L1 block at which verification is possible
 		verifiedL2, verifiedL1, err := chain.VerifiedAt(ctx, timestamp)
@@ -104,8 +111,10 @@ func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (atTimest
 			L2:            verifiedL2,
 			MinRequiredL1: verifiedL1,
 		}
-		if verifiedL1.Number < minVerifiedRequiredL1.Number || minVerifiedRequiredL1 == (eth.BlockID{}) {
-			minVerifiedRequiredL1 = verifiedL1
+		// Verified data is available: track the L1 block that includes the data
+		// for every chain — i.e. the MAX of per-chain minimum-required L1s.
+		if verifiedL1.Number > verifiedRequiredL1.Number {
+			verifiedRequiredL1 = verifiedL1
 		}
 		// Compute output root at or before timestamp using the verified L2 block number
 		outRoot, err := chain.OutputRootAtL2BlockNumber(ctx, verifiedL2.Number)
@@ -133,17 +142,23 @@ func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (atTimest
 		}
 	}
 
-	// Build super root from collected outputs
-	superV1 := eth.NewSuperV1(timestamp, chainOutputs...)
-	superRoot := eth.SuperRoot(superV1)
-
-	return atTimestampResponse{
-		CurrentL1Derived:      currentL1Derived,
-		CurrentL1Verified:     currentL1Verified,
-		VerifiedAtTimestamp:   verified,
-		OptimisticAtTimestamp: optimistic,
-		MinCurrentL1:          minCurrentL1,
-		MinVerifiedRequiredL1: minVerifiedRequiredL1,
-		SuperRoot:             superRoot,
-	}, nil
+	response := eth.SuperRootAtTimestampResponse{
+		CurrentL1:                 aggregate.CurrentL1,
+		CurrentSafeTimestamp:      aggregate.SafeTimestamp,
+		CurrentLocalSafeTimestamp: aggregate.LocalSafeTimestamp,
+		CurrentFinalizedTimestamp: aggregate.FinalizedTimestamp,
+		OptimisticAtTimestamp:     optimistic,
+		ChainIDs:                  aggregate.ChainIDs,
+	}
+	if !notFound {
+		// Build super root from collected outputs
+		superV1 := eth.NewSuperV1(timestamp, chainOutputs...)
+		superRoot := eth.SuperRoot(superV1)
+		response.Data = &eth.SuperRootResponseData{
+			VerifiedRequiredL1: verifiedRequiredL1,
+			Super:              superV1,
+			SuperRoot:          superRoot,
+		}
+	}
+	return response, nil
 }
