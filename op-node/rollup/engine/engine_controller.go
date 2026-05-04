@@ -465,9 +465,18 @@ func (e *EngineController) tryUpdateEngineInternal(ctx context.Context) error {
 		return err
 	}
 	fc := eth.ForkchoiceState{
-		HeadBlockHash:      e.unsafeHead.Hash,
-		SafeBlockHash:      e.safeHead.Hash,
-		FinalizedBlockHash: e.finalizedHead.Hash,
+		HeadBlockHash: e.unsafeHead.Hash,
+		SafeBlockHash: e.SafeL2Head().Hash,
+	}
+	// only set finalized after initial EL sync
+	if !e.isEngineInitialELSyncing() {
+		fc.FinalizedBlockHash = e.FinalizedHead().Hash
+	}
+	if fc == e.lastForkchoice {
+		return nil
+	}
+	if e.isEngineInitialELSyncing() {
+		e.log.Warn("Attempting to update forkchoice state while EL syncing")
 	}
 	logFn := e.logSyncProgressMaybe()
 	defer logFn()
@@ -579,9 +588,12 @@ func (e *EngineController) insertUnsafePayload(ctx context.Context, envelope *et
 
 	// Mark the new payload as valid
 	fc := eth.ForkchoiceState{
-		HeadBlockHash:      envelope.ExecutionPayload.BlockHash,
-		SafeBlockHash:      e.safeHead.Hash,
-		FinalizedBlockHash: e.finalizedHead.Hash,
+		HeadBlockHash: envelope.ExecutionPayload.BlockHash,
+		SafeBlockHash: e.SafeL2Head().Hash,
+	}
+	// only set finalized after initial EL sync
+	if !e.isEngineInitialELSyncing() {
+		fc.FinalizedBlockHash = e.FinalizedHead().Hash
 	}
 	if e.syncStatus == syncStatusFinishedELButNotFinalized {
 		offsetRef := ref
