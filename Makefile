@@ -1,5 +1,4 @@
-# provide JUSTFLAGS for just-backed targets
-include ./justfiles/flags.mk
+DEPRECATED_TARGETS := help build build-go build-contracts build-customlint lint-go lint-go-fix check-op-geth-version golang-docker docker-builder-clean docker-builder cross-op-node contracts-bedrock-docker submodules op-node generate-mocks-op-node generate-mocks-op-service op-batcher op-proposer op-challenger op-dispute-mon op-supernode op-interop-filter op-program cannon reproducible-prestate-op-program reproducible-prestate-kona reproducible-prestate cannon-prestates mod-tidy clean nuke test-unit semgrep-ci op-program-client op-program-host make-pre-test go-tests go-tests-short go-tests-short-ci go-tests-ci go-tests-fraud-proofs-ci test update-op-geth compute-git-versions
 
 BEDROCK_TAGS_REMOTE?=origin
 OP_STACK_GO_BUILDER?=us-docker.pkg.dev/oplabs-tools-artifacts/images/op-stack-go:latest

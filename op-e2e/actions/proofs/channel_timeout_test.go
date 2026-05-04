@@ -213,10 +213,8 @@ func runChannelTimeoutTest_CloseChannelLate(gt *testing.T, testCfg *helpers.Test
 	env.RunFaultProofProgramFromGenesis(t, l2SafeHead.Number.Uint64(), testCfg.CheckResult, testCfg.InputParams...)
 }
 
-func Test_ProgramAction_ChannelTimeout(gt *testing.T) {
+func TestChannelTimeout(gt *testing.T) {
 	matrix := helpers.NewMatrix[any]()
-	defer matrix.Run(gt)
-
 	matrix.AddTestCase(
 		"HonestClaim",
 		nil,
@@ -247,4 +245,5 @@ func Test_ProgramAction_ChannelTimeout(gt *testing.T) {
 		helpers.ExpectError(claim.ErrClaimNotValid),
 		helpers.WithL2Claim(common.HexToHash("0xdeadbeef")),
 	)
+	matrix.Run(gt)
 }
