@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_ProgramAction_HoloceneFrames(gt *testing.T) {
+func TestHoloceneFrames(gt *testing.T) {
 	type testCase struct {
 		name   string
 		frames []uint
@@ -116,8 +116,6 @@ func Test_ProgramAction_HoloceneFrames(gt *testing.T) {
 	}
 
 	matrix := helpers.NewMatrix[testCase]()
-	defer matrix.Run(gt)
-
 	for _, ordering := range testCases {
 		matrix.AddTestCase(
 			fmt.Sprintf("HonestClaim-%s", ordering.name),
@@ -135,4 +133,5 @@ func Test_ProgramAction_HoloceneFrames(gt *testing.T) {
 			helpers.WithL2Claim(common.HexToHash("0xdeadbeef")),
 		)
 	}
+	matrix.Run(gt)
 }
