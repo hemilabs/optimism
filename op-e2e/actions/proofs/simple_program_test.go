@@ -53,13 +53,12 @@ func runSimpleProgramTest(gt *testing.T, testCfg *helpers.TestCfg[any]) {
 	env.RunFaultProofProgramFromGenesis(t, l2SafeHead.Number.Uint64(), testCfg.CheckResult, testCfg.InputParams...)
 }
 
-func Test_ProgramAction_SimpleEmptyChain(gt *testing.T) {
+func TestSimpleEmptyChain(gt *testing.T) {
 	matrix := helpers.NewMatrix[any]()
-	defer matrix.Run(gt)
-
 	matrix.AddDefaultTestCases(
 		nil,
 		helpers.LatestForkOnly,
 		runSimpleProgramTest,
 	)
+	matrix.Run(gt)
 }
