@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_ProgramAction_HoloceneBatches(gt *testing.T) {
+func TestHoloceneBatches(gt *testing.T) {
 	type testCase struct {
 		name        string
 		blocks      []uint // blocks is an ordered list of blocks (by number) to add to a single channel.
@@ -141,8 +141,6 @@ func Test_ProgramAction_HoloceneBatches(gt *testing.T) {
 	}
 
 	matrix := helpers.NewMatrix[testCase]()
-	defer matrix.Run(gt)
-
 	for _, ordering := range testCases {
 		matrix.AddTestCase(
 			fmt.Sprintf("HonestClaim-%s", ordering.name),
@@ -160,4 +158,5 @@ func Test_ProgramAction_HoloceneBatches(gt *testing.T) {
 			helpers.WithL2Claim(common.HexToHash("0xdeadbeef")),
 		)
 	}
+	matrix.Run(gt)
 }
