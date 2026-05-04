@@ -102,6 +102,7 @@ interface IOPContractsManagerV2 {
 
     error OPContractsManagerV2_InvalidGameConfigs();
     error OPContractsManagerV2_InvalidUpgradeInput();
+    error OPContractsManagerV2_InvalidEthLockbox();
     error OPContractsManagerV2_SuperchainConfigNeedsUpgrade();
     error OPContractsManagerV2_UnsupportedGameType();
     error OPContractsManagerV2_InvalidUpgradeInstruction(string _key);

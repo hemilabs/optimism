@@ -191,6 +191,16 @@ abstract contract OptimismPortal2_TestInit is DisputeGameFactory_TestInit {
         }
     }
 
+    /// @notice Enables the runtime interop features used by portal migration methods.
+    function forceEnableInterop() public {
+        forceEnableLockbox(address(ethLockbox));
+
+        if (!isSysFeatureEnabled(Features.INTEROP)) {
+            vm.prank(address(proxyAdmin));
+            systemConfig.setFeature(Features.INTEROP, true);
+        }
+    }
+
     /// @notice Sets the useCustomGasToken variable
     function setUseCustomGasToken(bool _useCustomGasToken) public {
         vm.prank(address(proxyAdmin));
@@ -671,10 +681,11 @@ contract OptimismPortal2_DonateETH_Test is OptimismPortal2_TestInit {
 
 /// @title OptimismPortal2_MigrateLiquidity_Test
 /// @notice Test contract for OptimismPortal2 `migrateLiquidity` function.
-contract OptimismPortal2_MigrateLiquidity_Test is CommonTest {
+contract OptimismPortal2_MigrateLiquidity_Test is OptimismPortal2_TestInit {
     function setUp() public virtual override {
         super.setUp();
         skipIfDevFeatureDisabled(DevFeatures.OPTIMISM_PORTAL_INTEROP);
+        forceEnableInterop();
     }
 
     /// @notice Tests the liquidity migration from the portal to the lockbox reverts if not called
@@ -713,6 +724,7 @@ contract OptimismPortal2_migrateToSharedDisputeGame_Test is OptimismPortal2_Test
     function setUp() public override {
         super.setUp();
         skipIfDevFeatureDisabled(DevFeatures.OPTIMISM_PORTAL_INTEROP);
+        forceEnableInterop();
     }
 
     /// @notice Tests that `migrateToSharedDisputeGame` reverts if the caller is not the proxy admin
