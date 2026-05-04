@@ -288,9 +288,9 @@ func (c Config) Check() error {
 	if c.MaxConcurrency == 0 {
 		return ErrMaxConcurrencyZero
 	}
-	if c.GameTypeEnabled(gameTypes.SuperCannonGameType) || c.GameTypeEnabled(gameTypes.SuperPermissionedGameType) {
-		if c.SupervisorRPC == "" {
-			return ErrMissingSupervisorRpc
+	if c.GameTypeEnabled(gameTypes.SuperCannonGameType) {
+		if c.SuperRPC == "" {
+			return ErrMissingSuperRpc
 		}
 
 		if len(c.Cannon.Networks) == 0 && c.Cannon.DepsetConfigPath == "" {
@@ -308,9 +308,9 @@ func (c Config) Check() error {
 			return err
 		}
 	}
-	if c.GameTypeEnabled(gameTypes.SuperCannonKonaGameType) {
-		if c.SupervisorRPC == "" {
-			return ErrMissingSupervisorRpc
+	if c.GameTypeEnabled(gameTypes.SuperCannonKonaGameType) || c.GameTypeEnabled(gameTypes.SuperPermissionedGameType) {
+		if c.SuperRPC == "" {
+			return ErrMissingSuperRpc
 		}
 
 		if len(c.CannonKona.Networks) == 0 && c.CannonKona.DepsetConfigPath == "" {

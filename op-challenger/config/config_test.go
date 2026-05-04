@@ -51,12 +51,9 @@ var (
 )
 
 var singleCannonGameTypes = []gameTypes.GameType{gameTypes.CannonGameType, gameTypes.PermissionedGameType}
-var superCannonGameTypes = []gameTypes.GameType{gameTypes.SuperCannonGameType, gameTypes.SuperPermissionedGameType}
+var superCannonGameTypes = []gameTypes.GameType{gameTypes.SuperCannonGameType}
 var allCannonGameTypes []gameTypes.GameType
-var cannonKonaGameTypes = []gameTypes.GameType{gameTypes.CannonKonaGameType, gameTypes.SuperCannonKonaGameType}
-var asteriscGameTypes = []gameTypes.GameType{gameTypes.AsteriscGameType}
-var asteriscKonaGameTypes = []gameTypes.GameType{gameTypes.AsteriscKonaGameType}
-var superAsteriscKonaGameTypes = []gameTypes.GameType{gameTypes.SuperAsteriscKonaGameType}
+var cannonKonaGameTypes = []gameTypes.GameType{gameTypes.CannonKonaGameType, gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType}
 
 func init() {
 	allCannonGameTypes = append(allCannonGameTypes, singleCannonGameTypes...)
@@ -157,7 +154,7 @@ func applyValidConfigForZKDisputeGame(cfg *Config) {
 
 func validConfig(t *testing.T, gameType gameTypes.GameType) Config {
 	cfg := NewConfig(validGameFactoryAddress, validL1EthRpc, validL1BeaconUrl, validRollupRpc, validL2Rpc, validDatadir, gameType)
-	if gameType == gameTypes.SuperCannonGameType || gameType == gameTypes.SuperPermissionedGameType {
+	if gameType == gameTypes.SuperCannonGameType {
 		applyValidConfigForSuperCannon(t, &cfg)
 	}
 	if gameType == gameTypes.CannonGameType || gameType == gameTypes.PermissionedGameType {
@@ -166,7 +163,7 @@ func validConfig(t *testing.T, gameType gameTypes.GameType) Config {
 	if gameType == gameTypes.CannonKonaGameType {
 		applyValidConfigForCannonKona(t, &cfg)
 	}
-	if gameType == gameTypes.SuperCannonKonaGameType {
+	if gameType == gameTypes.SuperCannonKonaGameType || gameType == gameTypes.SuperPermissionedGameType {
 		applyValidConfigForSuperCannonKona(t, &cfg)
 	}
 	if gameType == gameTypes.AsteriscGameType {
@@ -519,14 +516,14 @@ func TestDepsetConfig(t *testing.T) {
 		})
 	}
 
-	for _, gameType := range superAsteriscKonaGameTypes {
+	for _, gameType := range []gameTypes.GameType{gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType} {
 		gameType := gameType
-		t.Run(fmt.Sprintf("TestAsteriscNetworkOrDepsetConfigRequired-%v", gameType), func(t *testing.T) {
+		t.Run(fmt.Sprintf("TestCannonKonaNetworkOrDepsetConfigRequired-%v", gameType), func(t *testing.T) {
 			cfg := validConfig(t, gameType)
-			cfg.AsteriscKona.Networks = nil
-			cfg.AsteriscKona.RollupConfigPaths = []string{"foo.json"}
-			cfg.AsteriscKona.L2GenesisPaths = []string{"genesis.json"}
-			cfg.AsteriscKona.DepsetConfigPath = ""
+			cfg.CannonKona.Networks = nil
+			cfg.CannonKona.RollupConfigPaths = []string{"foo.json"}
+			cfg.CannonKona.L2GenesisPaths = []string{"genesis.json"}
+			cfg.CannonKona.DepsetConfigPath = ""
 			require.ErrorIs(t, cfg.Check(), ErrMissingDepsetConfig)
 		})
 	}
