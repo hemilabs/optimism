@@ -279,14 +279,8 @@ func startInteropChallenger(
 		sharedchallenger.WithCannonConfig(rollupCfgs, l1Net.genesis, l2Geneses, sharedchallenger.InteropVariant),
 		sharedchallenger.WithSuperCannonGameType(),
 		sharedchallenger.WithSuperPermissionedGameType(),
-	}
-	if enableCannonKona {
-		t.Log("Enabling cannon-kona for super challenger")
-		options = append(options,
-			sharedchallenger.WithCannonKonaInteropConfig(rollupCfgs, l1Net.genesis, l2Geneses),
-			sharedchallenger.WithSuperCannonKonaGameType(),
-			sharedchallenger.WithExperimentalWitnessEndpoint(),
-		)
+		sharedchallenger.WithCannonKonaInteropConfig(rollupCfgs, l1Net.genesis, l2Geneses),
+		sharedchallenger.WithSuperCannonKonaGameType(),
 	}
 	cfg, err := sharedchallenger.NewInteropChallengerConfig(
 		t.TempDir(),
