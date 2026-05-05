@@ -338,14 +338,8 @@ func startMinimalChallenger(
 		sharedchallenger.WithCannonGameType(),
 		sharedchallenger.WithPermissionedGameType(),
 		sharedchallenger.WithFastGames(),
-	}
-	if enableCannonKona {
-		t.Log("Enabling cannon-kona for challenger")
-		options = append(options,
-			sharedchallenger.WithCannonKonaConfig(rollupCfgs, l1Net.genesis, l2Geneses),
-			sharedchallenger.WithCannonKonaGameType(),
-			sharedchallenger.WithExperimentalWitnessEndpoint(),
-		)
+		sharedchallenger.WithCannonKonaConfig(rollupCfgs, l1Net.genesis, l2Geneses),
+		sharedchallenger.WithCannonKonaGameType(),
 	}
 	cfg, err := sharedchallenger.NewPreInteropChallengerConfig(
 		t.TempDir(),
