@@ -58,6 +58,7 @@ jobs:
       set: |
         *.args.GIT_COMMIT=${{ github.sha }}
         *.args.GIT_DATE=${{ needs.prep.outputs.date }}
+        op-reth.args.BUILD_PROFILE=${{ github.event_name == 'pull_request' && 'fast-build' || 'maxperf' }}
     permissions:
       contents: read
       id-token: write
@@ -85,6 +86,7 @@ jobs:
       set: |
         *.args.GIT_COMMIT=${{ github.sha }}
         *.args.GIT_DATE=${{ needs.prep.outputs.date }}
+        op-reth.args.BUILD_PROFILE=${{ github.event_name == 'pull_request' && 'fast-build' || 'maxperf' }}
     permissions:
       contents: read
 
