@@ -128,7 +128,6 @@ contract ForkLive is Deployer, StdAssertions, DisputeGames {
         artifacts.save("L2ChainId", address(uint160(vm.parseTomlUint(opToml, ".chain_id"))));
         // Superchain shared contracts
         saveProxyAndImpl("SuperchainConfig", superchainToml, ".superchain_config_addr");
-        saveProxyAndImpl("ProtocolVersions", superchainToml, ".protocol_versions_addr");
         // Core contracts
         artifacts.save("ProxyAdmin", vm.parseTomlAddress(opToml, ".addresses.ProxyAdmin"));
         saveProxyAndImpl("SystemConfig", opToml, ".addresses.SystemConfigProxy");

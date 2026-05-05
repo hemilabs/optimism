@@ -41,7 +41,6 @@ op-deployer bootstrap superchain \
   --artifacts-locator="<locator>" \
   --outfile="<path to outfile>" \
   --superchain-proxy-admin-owner="<role address>" \
-  --protocol-versions-owner="<role address>" \
   --guardian="<role address>"
 ```
 
@@ -77,7 +76,6 @@ op-deployer bootstrap implementations \
   --outfile="<path to outfile>" \
   --mips-version="2" \
   --private-key="<contract deployer private key>" \
-  --protocol-versions-proxy="<address output from bootstrap superchain>" \
   --superchain-config-proxy="<address output from bootstrap superchain>" \
   --upgrade-controller="<superchain-proxy-admin-owner used in bootstrap superchain>"
 ```
