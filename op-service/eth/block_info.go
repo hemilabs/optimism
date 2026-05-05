@@ -7,7 +7,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 type BlockInfo interface {
@@ -30,11 +29,7 @@ type BlockInfo interface {
 	GasLimit() uint64
 	ParentBeaconRoot() *common.Hash // Dencun extension
 	WithdrawalsRoot() *common.Hash  // Isthmus extension
-
-	// HeaderRLP returns the RLP of the block header as per consensus rules
-	// Returns an error if the header RLP could not be written
-	HeaderRLP() ([]byte, error)
-	Header() *types.Header
+	Extra() []byte
 }
 
 func InfoToL1BlockRef(info BlockInfo) L1BlockRef {
@@ -66,11 +61,7 @@ func (b blockInfo) BlobBaseFee(chainConfig *params.ChainConfig) *big.Int {
 	if ebg == nil {
 		return nil
 	}
-	return eip4844.CalcBlobFee(chainConfig, b.Header())
-}
-
-func (b blockInfo) HeaderRLP() ([]byte, error) {
-	return rlp.EncodeToBytes(b.Header())
+	return eip4844.CalcBlobFee(chainConfig, b.Block.Header())
 }
 
 func (b blockInfo) ParentBeaconRoot() *common.Hash {
@@ -78,7 +69,7 @@ func (b blockInfo) ParentBeaconRoot() *common.Hash {
 }
 
 func (b blockInfo) WithdrawalsRoot() *common.Hash {
-	return b.Header().WithdrawalsHash
+	return b.Block.Header().WithdrawalsHash
 }
 
 func BlockToInfo(b *types.Block) BlockInfo {
@@ -159,16 +150,12 @@ func (h *headerBlockInfo) ParentBeaconRoot() *common.Hash {
 	return h.header.ParentBeaconRoot
 }
 
-func (h *headerBlockInfo) HeaderRLP() ([]byte, error) {
-	return rlp.EncodeToBytes(h.header) // usage is rare and mostly 1-time-use, no need to cache
-}
-
-func (h *headerBlockInfo) Header() *types.Header {
-	return h.header
-}
-
 func (h *headerBlockInfo) WithdrawalsRoot() *common.Hash {
 	return h.header.WithdrawalsHash
+}
+
+func (h *headerBlockInfo) Extra() []byte {
+	return h.header.Extra
 }
 
 func (h *headerBlockInfo) MarshalJSON() ([]byte, error) {
