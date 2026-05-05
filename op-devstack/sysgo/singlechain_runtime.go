@@ -342,7 +342,6 @@ func startMinimalChallenger(
 		sharedchallenger.WithFastGames(),
 		sharedchallenger.WithCannonKonaConfig(rollupCfgs, l1Net.genesis, l2Geneses),
 		sharedchallenger.WithCannonKonaGameType(),
-		sharedchallenger.WithExperimentalWitnessEndpoint(),
 	}
 	cfg, err := sharedchallenger.NewPreInteropChallengerConfig(
 		t.Ctx(),
