@@ -10,8 +10,12 @@ import (
 	"github.com/ethereum-optimism/optimism/op-core/devfeatures"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/integration_test/shared"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/pipeline"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils/devnet"
 	"github.com/ethereum/go-ethereum/common"
@@ -103,12 +107,16 @@ func TestInteropMigration(t *testing.T) {
 	gameArgs, err := abi.Arguments{{Type: bytes32Type}}.Pack(testPrestate)
 	require.NoError(t, err)
 
-	// Define game type constants matching Solidity GameTypes library
+	// Define game type constants matching Solidity GameTypes library.
 	const (
-		GameTypeCannon      = uint32(0)
-		GameTypeSuperCannon = uint32(4)
+		GameTypeCannon          = uint32(0)
+		GameTypeSuperCannonKona = uint32(9)
 	)
 
+	// The registered game type and the starting respected game type are intentionally
+	// different: the migrator does not validate disputeGameConfigs[i].gameType (see
+	// OPContractsManagerMigrator.migrate), so this exercises the permissive-registration
+	// invariant alongside the strict respected-type check.
 	input := InteropMigrationInput{
 		Prank: l1ProxyAdminOwner,
 		Opcm:  opcmAddr,
@@ -128,7 +136,7 @@ func TestInteropMigration(t *testing.T) {
 				Root:             common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000def"),
 				L2SequenceNumber: big.NewInt(1),
 			},
-			StartingRespectedGameType: GameTypeSuperCannon,
+			StartingRespectedGameType: GameTypeSuperCannonKona,
 		},
 	}
 
@@ -186,6 +194,65 @@ func TestMigrateCLIV2Flags(t *testing.T) {
 	require.Equal(t, uint32(0), startingRespectedGameType)
 }
 
+func TestMigrateDefaultGameTypeFlags(t *testing.T) {
+	require.Equal(t, uint64(standard.DisputeGameType), DisputeGameTypeFlag.Value)
+	require.Equal(t, uint64(migrateStartingRespectedGameTypeDefault), MigrateStartingRespectedGameTypeFlag.Value)
+}
+
+func TestMigrateCLIRejectsSuperCannonBeforeRPC(t *testing.T) {
+	cases := []struct {
+		name       string
+		dispute    uint64
+		respected  uint64
+		errFlagArg string
+	}{
+		{
+			name:       "dispute-game-type SUPER_CANNON",
+			dispute:    uint64(superCannonGameType),
+			respected:  9,
+			errFlagArg: "--dispute-game-type = 4",
+		},
+		{
+			name:       "starting-respected-game-type SUPER_CANNON",
+			dispute:    9,
+			respected:  uint64(superCannonGameType),
+			errFlagArg: "--starting-respected-game-type = 4",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := cli.NewApp()
+			flagSet := flag.NewFlagSet(tc.name, flag.ContinueOnError)
+
+			for _, cliFlag := range oplog.CLIFlags(deployer.EnvVarPrefix) {
+				require.NoError(t, cliFlag.Apply(flagSet))
+			}
+
+			flagSet.String(deployer.L1RPCURLFlag.Name, "unsupported://127.0.0.1", "doc")
+			flagSet.String(deployer.PrivateKeyFlag.Name, "0000000000000000000000000000000000000000000000000000000000000001", "doc")
+			flagSet.String(OPCMImplFlag.Name, "0xaf334f4537e87f5155d135392ff6d52f1866465e", "doc")
+			flagSet.String(SystemConfigProxyFlag.Name, "0x034edD2A225f7f429A63E0f1D2084B9E0A93b538", "doc")
+			flagSet.String(L1ProxyAdminOwnerFlag.Name, "0x1Eb2fFc903729a0F03966B917003800b145F56E2", "doc")
+			flagSet.Bool(MigrateDisputeGameEnabledFlag.Name, true, "doc")
+			flagSet.String(InitialBondFlag.Name, "1000000000000000000", "doc")
+			flagSet.Uint64(DisputeGameTypeFlag.Name, tc.dispute, "doc")
+			flagSet.String(DisputeAbsolutePrestateFlag.Name, "0x0000000000000000000000000000000000000000000000000000000000000abc", "doc")
+			flagSet.String(StartingAnchorRootFlag.Name, "0x0000000000000000000000000000000000000000000000000000000000000def", "doc")
+			flagSet.Uint64(StartingAnchorL2SequenceNumberFlag.Name, 1, "doc")
+			flagSet.Uint64(MigrateStartingRespectedGameTypeFlag.Name, tc.respected, "doc")
+
+			ctx := cli.NewContext(app, flagSet, nil)
+
+			err := MigrateCLI(ctx)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.errFlagArg)
+			require.Contains(t, err.Error(), "SUPER_CANNON")
+			require.NotContains(t, err.Error(), "failed to dial RPC")
+		})
+	}
+}
+
 func TestMigrateCLIV2Uint32Overflow(t *testing.T) {
 	testCases := []struct {
 		name                      string
@@ -197,7 +264,7 @@ func TestMigrateCLIV2Uint32Overflow(t *testing.T) {
 		{
 			name:                      "valid uint32 values",
 			disputeGameType:           0,
-			startingRespectedGameType: 4,
+			startingRespectedGameType: 0,
 			expectError:               false,
 		},
 		{
@@ -209,7 +276,7 @@ func TestMigrateCLIV2Uint32Overflow(t *testing.T) {
 		{
 			name:                      "disputeGameType overflow",
 			disputeGameType:           0x100000000, // 2^32
-			startingRespectedGameType: 4,
+			startingRespectedGameType: 0,
 			expectError:               true,
 			expectedErrContains:       "disputeGameType",
 		},
@@ -223,7 +290,7 @@ func TestMigrateCLIV2Uint32Overflow(t *testing.T) {
 		{
 			name:                      "disputeGameType large overflow",
 			disputeGameType:           0xFFFFFFFFFFFFFFFF, // max uint64
-			startingRespectedGameType: 4,
+			startingRespectedGameType: 0,
 			expectError:               true,
 			expectedErrContains:       "disputeGameType",
 		},
@@ -324,14 +391,41 @@ func TestEncodedMigrateInputV2(t *testing.T) {
 				SystemConfigProxy: common.HexToAddress("0x034edD2A225f7f429A63E0f1D2084B9E0A93b538"),
 				CannonPrestate:    common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000abc"),
 			},
+			DisputeGameConfigs: []DisputeGameConfig{
+				{
+					Enabled:  true,
+					InitBond: big.NewInt(1000),
+					GameType: 9,
+					GameArgs: gameArgs,
+				},
+			},
+			StartingAnchorRoot: Proposal{
+				Root:             common.Hash{0xde},
+				L2SequenceNumber: big.NewInt(100),
+			},
+			StartingRespectedGameType: 9,
 		},
 	}
 	output, err := Migrate(host, input)
 	require.NoError(t, err)
 	require.NotEqual(t, common.Address{}, output.DisputeGameFactory)
 
-	dump, err := bcast.Dump()
-	require.NoError(t, err)
-	require.True(t, dump[0].Value.ToInt().Cmp(common.Big0) == 0)
-	require.Equal(t, *dump[0].To, pao)
+	expected := "0000000000000000000000000000000000000000000000000000000000000020" + // offset to tuple
+		"00000000000000000000000000000000000000000000000000000000000000a0" + // offset to chainSystemConfigs (5 words * 32 = 160 = 0xa0)
+		"00000000000000000000000000000000000000000000000000000000000000e0" + // offset to disputeGameConfigs (0xa0 + 0x40)
+		"de00000000000000000000000000000000000000000000000000000000000000" + // startingAnchorRoot.root
+		"0000000000000000000000000000000000000000000000000000000000000064" + // startingAnchorRoot.l2SequenceNumber (100)
+		"0000000000000000000000000000000000000000000000000000000000000009" + // startingRespectedGameType (9, SUPER_CANNON_KONA)
+		"0000000000000000000000000000000000000000000000000000000000000001" + // chainSystemConfigs.length (1)
+		"0000000000000000000000000100000000000000000000000000000000000000" + // chainSystemConfigs[0]
+		"0000000000000000000000000000000000000000000000000000000000000001" + // disputeGameConfigs.length (1)
+		"0000000000000000000000000000000000000000000000000000000000000020" + // offset to disputeGameConfigs[0]
+		"0000000000000000000000000000000000000000000000000000000000000001" + // disputeGameConfigs[0].enabled
+		"00000000000000000000000000000000000000000000000000000000000003e8" + // disputeGameConfigs[0].initBond (1000)
+		"0000000000000000000000000000000000000000000000000000000000000009" + // disputeGameConfigs[0].gameType (9, SUPER_CANNON_KONA)
+		"0000000000000000000000000000000000000000000000000000000000000080" + // offset to gameArgs
+		"0000000000000000000000000000000000000000000000000000000000000020" + // gameArgs.length (32 bytes)
+		"aa00000000000000000000000000000000000000000000000000000000000000" // gameArgs data (prestate)
+
+	require.Equal(t, expected, hex.EncodeToString(data))
 }

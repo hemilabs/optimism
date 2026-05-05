@@ -247,11 +247,6 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 		{
 			Enabled:  false,
 			InitBond: big.NewInt(0),
-			GameType: embedded.GameTypeSuperCannon,
-		},
-		{
-			Enabled:  false,
-			InitBond: big.NewInt(0),
 			GameType: embedded.GameTypeSuperPermCannon,
 		},
 		{

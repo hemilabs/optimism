@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/gameargs"
+	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
@@ -73,6 +75,8 @@ var faultDisputeGameABIString = `
 var portalABI *abi.ABI
 var disputeGameFactoryABI *abi.ABI
 var faultDisputeGameABI *abi.ABI
+
+const expectedPermissionlessGameType = gameTypes.SuperCannonKonaGameType
 
 func init() {
 	if parsed, err := abi.JSON(bytes.NewReader([]byte(portalABIString))); err != nil {
@@ -156,7 +160,7 @@ func checkPermissionless(t devtest.T, sys *presets.SimpleInterop, l1Caller *batc
 	chains := []*dsl.L2Network{sys.L2ChainA, sys.L2ChainB}
 	for _, chain := range chains {
 		gameType := getRespectedGameType(t, l1Caller, chain)
-		t.Require().Equal(uint32(0), gameType, "chain is not permissionless")
+		t.Require().Equal(uint32(expectedPermissionlessGameType), gameType, "chain is not permissionless")
 	}
 }
 
@@ -179,7 +183,11 @@ func getSuperchainConfigFromPortal(t devtest.T, l1Caller *batching.MultiCaller, 
 func getPrestate(t devtest.T, l1Caller *batching.MultiCaller, l2Chain *dsl.L2Network) [32]byte {
 	dgf := l2Chain.DisputeGameFactoryProxyAddr()
 	dgfContract := batching.NewBoundContract(disputeGameFactoryABI, dgf)
-	results, err := l1Caller.SingleCall(context.Background(), rpcblock.Latest, dgfContract.Call("gameImpls", uint32(0)))
+	results, err := l1Caller.SingleCall(
+		context.Background(),
+		rpcblock.Latest,
+		dgfContract.Call("gameArgs", uint32(expectedPermissionlessGameType)),
+	)
 	t.Require().NoError(err)
 	gameImpl := results.GetAddress(0)
 
