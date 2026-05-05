@@ -12,6 +12,7 @@ type L1Deployment struct {
 type Implementations struct {
 	OpcmStandardValidator            common.Address `json:"OPCMStandardValidator"`
 	OpcmUtils                        common.Address `json:"OPCMUtils"`
+	OpcmMigrator                     common.Address `json:"OPCMMigrator"`
 	OpcmV2                           common.Address `json:"OPCMV2"`
 	OpcmContainer                    common.Address `json:"OPCMContainer"`
 	DelayedWETHImpl                  common.Address `json:"DelayedWETHImpl"`
@@ -27,11 +28,8 @@ type Implementations struct {
 	DisputeGameFactoryImpl           common.Address `json:"DisputeGameFactoryImpl"`
 	AnchorStateRegistryImpl          common.Address `json:"AnchorStateRegistryImpl"`
 	SuperchainConfigImpl             common.Address `json:"SuperchainConfigImpl"`
-	// ProtocolVersionsImpl mirrors opcm.DeployImplementationsOutput; will
-	// be removed in PR 2 of #20309 alongside the Solidity script change.
-	ProtocolVersionsImpl             common.Address `json:"ProtocolVersionsImpl"`
-	FaultDisputeGameV2Impl           common.Address `json:"FaultDisputeGameV2Impl"`
-	PermissionedDisputeGameV2Impl    common.Address `json:"PermissionedDisputeGameV2Impl"`
+	FaultDisputeGameImpl             common.Address `json:"FaultDisputeGameImpl"`
+	PermissionedDisputeGameImpl      common.Address `json:"PermissionedDisputeGameImpl"`
 	SuperFaultDisputeGameImpl        common.Address `json:"SuperFaultDisputeGameImpl"`
 	SuperPermissionedDisputeGameImpl common.Address `json:"SuperPermissionedDisputeGameImpl"`
 	ZkDisputeGameImpl                common.Address `json:"ZkDisputeGameImpl"`

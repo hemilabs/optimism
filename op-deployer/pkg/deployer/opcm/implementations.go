@@ -1,6 +1,7 @@
 package opcm
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
@@ -10,9 +11,7 @@ import (
 
 // DeployImplementationsInput must mirror the Solidity
 // DeployImplementations.s.sol input struct exactly — script ABI matching is
-// checked at load time. The ProtocolVersionsProxy field is no longer
-// populated by callers (zero-valued) and will be removed in the PR 2 sibling
-// of #20309 alongside the Solidity script change.
+// checked at load time.
 type DeployImplementationsInput struct {
 	WithdrawalDelaySeconds          *big.Int
 	MinProposalSizeBytes            *big.Int
@@ -26,18 +25,17 @@ type DeployImplementationsInput struct {
 	FaultGameV2ClockExtension       *big.Int
 	FaultGameV2MaxClockDuration     *big.Int
 	SuperchainConfigProxy           common.Address
-	ProtocolVersionsProxy           common.Address
 	SuperchainProxyAdmin            common.Address
 	L1ProxyAdminOwner               common.Address
 	Challenger                      common.Address
 }
 
 // DeployImplementationsOutput must mirror DeployImplementations.s.sol's
-// output struct. ProtocolVersionsImpl is no longer read by callers, but
-// stays here until PR 2 of #20309 strips it from Solidity.
+// output struct.
 type DeployImplementationsOutput struct {
 	OpcmStandardValidator            common.Address `json:"opcmStandardValidatorAddress"`
 	OpcmUtils                        common.Address `json:"opcmUtilsAddress"`
+	OpcmMigrator                     common.Address `json:"opcmMigratorAddress"`
 	OpcmV2                           common.Address `json:"opcmV2Address"`
 	OpcmContainer                    common.Address `json:"opcmContainerAddress"`
 	DelayedWETHImpl                  common.Address `json:"delayedWETHImplAddress"`
@@ -53,9 +51,8 @@ type DeployImplementationsOutput struct {
 	DisputeGameFactoryImpl           common.Address `json:"disputeGameFactoryImplAddress"`
 	AnchorStateRegistryImpl          common.Address `json:"anchorStateRegistryImplAddress"`
 	SuperchainConfigImpl             common.Address `json:"superchainConfigImplAddress"`
-	ProtocolVersionsImpl             common.Address `json:"protocolVersionsImplAddress"`
-	FaultDisputeGameV2Impl           common.Address `json:"faultDisputeGameV2ImplAddress"`
-	PermissionedDisputeGameV2Impl    common.Address `json:"permissionedDisputeGameV2ImplAddress"`
+	FaultDisputeGameImpl             common.Address `json:"faultDisputeGameImplAddress"`
+	PermissionedDisputeGameImpl      common.Address `json:"permissionedDisputeGameImplAddress"`
 	SuperFaultDisputeGameImpl        common.Address `json:"superFaultDisputeGameImplAddress"`
 	SuperPermissionedDisputeGameImpl common.Address `json:"superPermissionedDisputeGameImplAddress"`
 	ZkDisputeGameImpl                common.Address `json:"zkDisputeGameImplAddress" abi:"zkDisputeGameImpl"`
@@ -77,4 +74,19 @@ func NewDeployImplementationsForgeCaller(client *forge.Client) forge.ScriptCalle
 		&forge.BytesScriptEncoder[DeployImplementationsInput]{TypeName: "DeployImplementationsInput"},
 		&forge.BytesScriptDecoder[DeployImplementationsOutput]{TypeName: "DeployImplementationsOutput"},
 	)
+}
+
+// DeployImplementationsViaForge deploys implementation contracts using Forge
+func DeployImplementationsViaForge(env *ForgeEnv, input DeployImplementationsInput) (DeployImplementationsOutput, error) {
+	var output DeployImplementationsOutput
+	if err := env.validate(true); err != nil {
+		return output, err
+	}
+	forgeCaller := NewDeployImplementationsForgeCaller(env.Client)
+	var err error
+	output, _, err = forgeCaller(env.Context, input, env.buildForgeOpts()...)
+	if err != nil {
+		return output, fmt.Errorf("failed to deploy implementations with Forge: %w", err)
+	}
+	return output, nil
 }
