@@ -17,11 +17,15 @@ direnv = "2.35.0"
 just = "1.37.0"
 
 svm-rs = "0.5.19"
+
+# Rust tooling
+"github:crate-ci/cargo-release" = { version = "1.1.2" }
+
 "github:nextest-rs/nextest" = { version = "0.9.132", version_prefix = "cargo-nextest-", bin = "cargo-nextest" }
 
 # Go dependencies
 "go:github.com/ethereum/go-ethereum/cmd/abigen" = "1.15.10"
-"go:github.com/ethereum/go-ethereum/cmd/geth" = "1.16.4" # Osaka testnet release.
+"go:github.com/ethereum/go-ethereum/cmd/geth" = "1.16.4"    # Osaka testnet release.
 
 # Python dependencies
 "pipx:slither-analyzer" = "0.10.2"
