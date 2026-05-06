@@ -89,6 +89,11 @@ var (
 		EnvVars: prefixEnvVars("VALIDATION_INTERVAL"),
 		Value:   500 * time.Millisecond,
 	}
+	ReorgRecoveryEnabledFlag = &cli.BoolFlag{
+		Name:    "reorg-recovery-enabled",
+		Usage:   "Automatically resolve reorg-triggered failsafe by rewinding logs DBs to finalized.",
+		EnvVars: prefixEnvVars("REORG_RECOVERY_ENABLED"),
+	}
 	DangerouslyEnablePassthroughFlag = &cli.BoolFlag{
 		Name:    "dangerously-enable-passthrough",
 		Usage:   "Allow all transactions through without interop filtering. DANGEROUS: disables all executing message validation.",
@@ -104,6 +109,14 @@ var optionalFlags = []cli.Flag{
 	DataDirFlag,
 	BackfillDurationFlag,
 	JWTSecretFlag,
+	AdminRPCAddrFlag,
+	AdminRPCPortFlag,
+	RPCAddrFlag,
+	RPCPortFlag,
+	PollIntervalFlag,
+	ValidationIntervalFlag,
+	ReorgRecoveryEnabledFlag,
+	DangerouslyEnablePassthroughFlag,
 }
 
 func init() {

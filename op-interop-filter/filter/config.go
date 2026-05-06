@@ -15,11 +15,22 @@ import (
 )
 
 type Config struct {
-	L2RPCs           []string
-	DataDir          string
-	BackfillDuration time.Duration
-	JWTSecretPath    string
-	Version          string
+	L2RPCs                      []string
+	RollupConfigs               map[eth.ChainID]*rollup.Config // Rollup configs keyed by chain ID
+	DataDir                     string
+	BackfillDuration            time.Duration
+	MessageExpiryWindow         uint64 // Message expiry window in seconds (default: 7 days)
+	MessageExpiryWindowExplicit bool   // True if explicitly set via flag
+	JWTSecretPath               string
+	RPCAddr                     string // Address for public RPC server
+	RPCPort                     int    // Port for public RPC server (default: 8545)
+	AdminRPCAddr                string // Address for admin RPC server (empty = disabled)
+	AdminRPCPort                int    // Port for admin RPC server (default: 8546)
+	Version                     string
+	PollInterval                time.Duration // Interval for polling new blocks (default: 2s)
+	ValidationInterval          time.Duration // Interval for cross-chain validation (default: 500ms)
+	ReorgRecoveryEnabled        bool          // If true, automatically rewinds reorg-triggered failsafe to finalized
+	Passthrough                 bool          // If true, all transactions pass through without filtering
 
 	LogConfig     oplog.CLIConfig
 	MetricsConfig opmetrics.CLIConfig
@@ -76,15 +87,25 @@ func NewConfig(ctx *cli.Context, version string) (*Config, error) {
 	}
 
 	return &Config{
-		L2RPCs:           ctx.StringSlice(flags.L2RPCsFlag.Name),
-		DataDir:          ctx.String(flags.DataDirFlag.Name),
-		BackfillDuration: backfillDuration,
-		JWTSecretPath:    ctx.String(flags.JWTSecretFlag.Name),
-		Version:          version,
-		LogConfig:        oplog.ReadCLIConfig(ctx),
-		MetricsConfig:    opmetrics.ReadCLIConfig(ctx),
-		PprofConfig:      oppprof.ReadCLIConfig(ctx),
-		RPC:              oprpc.ReadCLIConfig(ctx),
+		L2RPCs:                      ctx.StringSlice(flags.L2RPCsFlag.Name),
+		RollupConfigs:               rollupConfigs,
+		DataDir:                     ctx.String(flags.DataDirFlag.Name),
+		BackfillDuration:            backfillDuration,
+		MessageExpiryWindow:         uint64(messageExpiryWindow.Seconds()),
+		MessageExpiryWindowExplicit: ctx.IsSet(flags.MessageExpiryWindowFlag.Name),
+		JWTSecretPath:               ctx.String(flags.JWTSecretFlag.Name),
+		RPCAddr:                     ctx.String(flags.RPCAddrFlag.Name),
+		RPCPort:                     ctx.Int(flags.RPCPortFlag.Name),
+		AdminRPCAddr:                ctx.String(flags.AdminRPCAddrFlag.Name),
+		AdminRPCPort:                ctx.Int(flags.AdminRPCPortFlag.Name),
+		Version:                     version,
+		PollInterval:                pollInterval,
+		ValidationInterval:          validationInterval,
+		ReorgRecoveryEnabled:        ctx.Bool(flags.ReorgRecoveryEnabledFlag.Name),
+		Passthrough:                 ctx.Bool(flags.DangerouslyEnablePassthroughFlag.Name),
+		LogConfig:                   oplog.ReadCLIConfig(ctx),
+		MetricsConfig:               opmetrics.ReadCLIConfig(ctx),
+		PprofConfig:                 oppprof.ReadCLIConfig(ctx),
 	}, nil
 }
 

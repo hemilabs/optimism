@@ -140,7 +140,28 @@ func (s *Service) initBackend(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	s.backend = backend
+
+	crossValidator := NewLockstepCrossValidator(
+		ctx,
+		s.log,
+		s.metrics,
+		cfg.MessageExpiryWindow,
+		startTimestamp,
+		cfg.ValidationInterval,
+		chains,
+	)
+
+	s.backend = NewBackend(ctx, BackendParams{
+		Logger:         s.log,
+		Metrics:        s.metrics,
+		Chains:         chains,
+		CrossValidator: crossValidator,
+		Passthrough:    cfg.Passthrough,
+
+		ReorgRecoveryEnabled: cfg.ReorgRecoveryEnabled,
+	})
+
+	s.log.Info("Created backend", "chains", len(chains))
 	return nil
 }
 

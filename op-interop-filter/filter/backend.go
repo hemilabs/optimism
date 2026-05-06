@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,15 +22,50 @@ import (
 type Backend struct {
 	log     log.Logger
 	metrics metrics.Metricer
-	cfg     *Config
+
+	// Chain ingesters keyed by chain ID.
+	chains map[eth.ChainID]ChainIngester
+
+	// Cross-validator handles all cross-chain message validation.
+	crossValidator CrossValidator
+
+	// Manual failsafe override
+	manualFailsafe atomic.Bool
+
+	// Passthrough mode: all transactions pass without filtering
+	passthrough bool
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	reorgRecoveryEnabled bool
+	reorgRecoveryWg      sync.WaitGroup
 }
 
-// NewBackend creates a new Backend instance
-func NewBackend(ctx context.Context, logger log.Logger, m metrics.Metricer, cfg *Config) (*Backend, error) {
-	b := &Backend{
-		log:     logger,
-		metrics: m,
-		cfg:     cfg,
+// BackendParams contains parameters for creating a Backend.
+type BackendParams struct {
+	Logger         log.Logger
+	Metrics        metrics.Metricer
+	Chains         map[eth.ChainID]ChainIngester
+	CrossValidator CrossValidator
+	Passthrough    bool
+
+	ReorgRecoveryEnabled bool
+}
+
+// NewBackend creates a new Backend instance with the provided components.
+func NewBackend(parentCtx context.Context, params BackendParams) *Backend {
+	ctx, cancel := context.WithCancel(parentCtx)
+
+	return &Backend{
+		log:                  params.Logger,
+		metrics:              params.Metrics,
+		chains:               params.Chains,
+		crossValidator:       params.CrossValidator,
+		passthrough:          params.Passthrough,
+		ctx:                  ctx,
+		cancel:               cancel,
+		reorgRecoveryEnabled: params.ReorgRecoveryEnabled,
 	}
 	logger.Info("Created backend", "chains", len(cfg.L2RPCs))
 	return b, nil
@@ -37,14 +73,46 @@ func NewBackend(ctx context.Context, logger log.Logger, m metrics.Metricer, cfg 
 
 // Start starts the backend
 func (b *Backend) Start(ctx context.Context) error {
-	b.log.Info("Starting backend (stub)")
+	b.log.Info("Starting backend")
+
+	for chainID, ingester := range b.chains {
+		if err := ingester.Start(); err != nil {
+			return fmt.Errorf("failed to start chain ingester for %v: %w", chainID, err)
+		}
+	}
+
+	if err := b.crossValidator.Start(); err != nil {
+		return fmt.Errorf("failed to start cross-validator: %w", err)
+	}
+
+	if b.reorgRecoveryEnabled {
+		b.reorgRecoveryWg.Add(1)
+		go b.runReorgRecovery(b.ctx)
+	}
+
 	return nil
 }
 
 // Stop stops the backend
 func (b *Backend) Stop(ctx context.Context) error {
-	b.log.Info("Stopping backend (stub)")
-	return nil
+	b.log.Info("Stopping backend")
+	b.cancel()
+
+	var result error
+
+	b.reorgRecoveryWg.Wait()
+
+	if err := b.crossValidator.Stop(); err != nil {
+		result = errors.Join(result, fmt.Errorf("failed to stop cross-validator: %w", err))
+	}
+
+	for chainID, ingester := range b.chains {
+		if err := ingester.Stop(); err != nil {
+			result = errors.Join(result, fmt.Errorf("failed to stop chain ingester for %v: %w", chainID, err))
+		}
+	}
+
+	return result
 }
 
 // FailsafeEnabled returns whether failsafe is enabled
