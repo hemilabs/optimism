@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "alloy-op-evm"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips 2.0.4",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "alloy-op-hardforks"
-version = "0.4.7"
+version = "0.5.0"
 dependencies = [
  "alloy-chains",
  "alloy-hardforks",
@@ -7692,7 +7692,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "op-alloy"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "op-alloy-consensus",
  "op-alloy-network",
@@ -7704,7 +7704,7 @@ dependencies = [
 
 [[package]]
 name = "op-alloy-consensus"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips 2.0.4",
@@ -7737,7 +7737,7 @@ checksum = "a79f352fc3893dcd670172e615afef993a41798a1d3fc0db88a3e60ef2e70ecc"
 
 [[package]]
 name = "op-alloy-network"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "alloy-consensus",
  "alloy-network",
@@ -7749,7 +7749,7 @@ dependencies = [
 
 [[package]]
 name = "op-alloy-provider"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "alloy-network",
  "alloy-primitives",
@@ -7762,7 +7762,7 @@ dependencies = [
 
 [[package]]
 name = "op-alloy-rpc-jsonrpsee"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "alloy-primitives",
  "jsonrpsee",
@@ -7770,7 +7770,7 @@ dependencies = [
 
 [[package]]
 name = "op-alloy-rpc-types"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips 2.0.4",
@@ -7794,7 +7794,7 @@ dependencies = [
 
 [[package]]
 name = "op-alloy-rpc-types-engine"
-version = "0.24.0"
+version = "2.0.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips 2.0.4",
@@ -7853,7 +7853,7 @@ dependencies = [
 
 [[package]]
 name = "op-revm"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
