@@ -57,8 +57,6 @@ func (g *GameCallerCreator) CreateContract(ctx context.Context, game gameTypes.G
 		gameTypes.AsteriscGameType,
 		gameTypes.AlphabetGameType,
 		gameTypes.FastGameType,
-		gameTypes.AsteriscKonaGameType,
-		gameTypes.SuperCannonGameType,
 		gameTypes.SuperPermissionedGameType,
 		gameTypes.SuperCannonKonaGameType,
 		gameTypes.SuperAsteriscKonaGameType:

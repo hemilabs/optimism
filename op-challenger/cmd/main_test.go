@@ -98,10 +98,7 @@ func TestL1Beacon(t *testing.T) {
 	})
 }
 
-func TestOpSupervisor(t *testing.T) {
-	t.Run("RequiredForSuperCannon", func(t *testing.T) {
-		verifyArgsInvalid(t, "flag supervisor-rpc is required", addRequiredArgsExcept(gameTypes.SuperCannonGameType, "--supervisor-rpc"))
-	})
+func TestSuperNodeRpc(t *testing.T) {
 	t.Run("RequiredForSuperPermissioned", func(t *testing.T) {
 		verifyArgsInvalid(t, "flag supervisor-rpc is required", addRequiredArgsExcept(gameTypes.SuperPermissionedGameType, "--supervisor-rpc"))
 	})
@@ -114,7 +111,7 @@ func TestOpSupervisor(t *testing.T) {
 
 	for _, gameType := range gameTypes.SupportedGameTypes {
 		gameType := gameType
-		if gameType == gameTypes.SuperCannonGameType || gameType == gameTypes.SuperPermissionedGameType || gameType == gameTypes.SuperAsteriscKonaGameType || gameType == gameTypes.SuperCannonKonaGameType {
+		if gameType == gameTypes.SuperPermissionedGameType || gameType == gameTypes.SuperCannonKonaGameType {
 			continue
 		}
 
@@ -122,13 +119,6 @@ func TestOpSupervisor(t *testing.T) {
 			configForArgs(t, addRequiredArgsExcept(gameType, "--supervisor-rpc"))
 		})
 	}
-
-	t.Run("Valid-SuperCannon", func(t *testing.T) {
-		url := "http://localhost/super"
-		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperCannonGameType, "--supernode-rpc", "--supernode-rpc", url))
-		require.Equal(t, url, cfg.SuperRPC)
-		require.True(t, cfg.UseSuperNode)
-	})
 
 	t.Run("Valid-SuperPermissioned", func(t *testing.T) {
 		url := "http://localhost/super"
@@ -767,93 +757,6 @@ func TestCannonCustomConfigArgs(t *testing.T) {
 	}
 }
 
-func TestSuperCannonCustomConfigArgs(t *testing.T) {
-	for _, gameType := range []gameTypes.GameType{gameTypes.SuperCannonGameType} {
-		gameType := gameType
-
-		t.Run(fmt.Sprintf("TestRequireEitherCannonNetworkOrRollupAndGenesisAndDepset-%v", gameType), func(t *testing.T) {
-			expectedErrorMessage := "flag network or rollup-config/cannon-rollup-config, l2-genesis/cannon-l2-genesis and depset-config/cannon-depset-config is required"
-			// Missing all
-			verifyArgsInvalid(
-				t,
-				expectedErrorMessage,
-				addRequiredArgsExcept(gameType, "--network"))
-			// Missing l2-genesis
-			verifyArgsInvalid(
-				t,
-				expectedErrorMessage,
-				addRequiredArgsExcept(gameType, "--network", "--cannon-rollup-config=rollup.json", "--cannon-depset-config=depset.json"))
-			// Missing rollup-config
-			verifyArgsInvalid(
-				t,
-				expectedErrorMessage,
-				addRequiredArgsExcept(gameType, "--network", "--cannon-l2-genesis=gensis.json", "--cannon-depset-config=depset.json"))
-			// Missing depset-config
-			verifyArgsInvalid(
-				t,
-				expectedErrorMessage,
-				addRequiredArgsExcept(gameType, "--network", "--cannon-rollup-config=rollup.json", "--cannon-l2-genesis=gensis.json"))
-		})
-
-		validateCustomNetworkFlagsProhibitedWithNetworkFlag(t, gameType, gameTypes.CannonGameType, "cannon-l2-custom")
-
-		t.Run(fmt.Sprintf("TestNetwork-%v", gameType), func(t *testing.T) {
-			t.Run("NotRequiredWhenRollupGenesisAndDepsetIsSpecified", func(t *testing.T) {
-				configForArgs(t, addRequiredArgsExcept(gameType, "--network",
-					"--cannon-rollup-config=rollup.json", "--cannon-l2-genesis=genesis.json", "--cannon-depset-config=depset.json"))
-			})
-
-			t.Run("Valid", func(t *testing.T) {
-				cfg := configForArgs(t, addRequiredArgsExcept(gameType, "--network", "--network", testNetwork))
-				require.Equal(t, []string{testNetwork}, cfg.Cannon.Networks)
-			})
-		})
-
-		t.Run(fmt.Sprintf("TestSetCannonL2ChainId-%v", gameType), func(t *testing.T) {
-			cfg := configForArgs(t, addRequiredArgsExcept(gameType, "--network",
-				"--cannon-rollup-config=rollup.json",
-				"--cannon-l2-genesis=genesis.json",
-				"--cannon-depset-config=depset.json",
-				"--cannon-l2-custom"))
-			require.True(t, cfg.Cannon.L2Custom)
-		})
-
-		t.Run(fmt.Sprintf("TestCannonRollupConfig-%v", gameType), func(t *testing.T) {
-			t.Run("NotRequiredForAlphabetTrace", func(t *testing.T) {
-				configForArgs(t, addRequiredArgsExcept(gameTypes.AlphabetGameType, "--cannon-rollup-config"))
-			})
-
-			t.Run("Valid", func(t *testing.T) {
-				cfg := configForArgs(t, addRequiredArgsExcept(gameType, "--network",
-					"--cannon-rollup-config=rollup.json", "--cannon-l2-genesis=genesis.json", "--cannon-depset-config=depset.json"))
-				require.Equal(t, []string{"rollup.json"}, cfg.Cannon.RollupConfigPaths)
-			})
-		})
-
-		t.Run(fmt.Sprintf("TestCannonL2Genesis-%v", gameType), func(t *testing.T) {
-			t.Run("NotRequiredForAlphabetTrace", func(t *testing.T) {
-				configForArgs(t, addRequiredArgsExcept(gameTypes.AlphabetGameType, "--cannon-l2-genesis"))
-			})
-
-			t.Run("Valid", func(t *testing.T) {
-				cfg := configForArgs(t, addRequiredArgsExcept(gameType, "--network", "--cannon-rollup-config=rollup.json", "--cannon-l2-genesis=genesis.json", "--cannon-depset-config=depset.json"))
-				require.Equal(t, []string{"genesis.json"}, cfg.Cannon.L2GenesisPaths)
-			})
-		})
-
-		t.Run(fmt.Sprintf("TestCannonDepsetConfig-%v", gameType), func(t *testing.T) {
-			t.Run("NotRequiredForAlphabetTrace", func(t *testing.T) {
-				configForArgs(t, addRequiredArgsExcept(gameTypes.AlphabetGameType, "--cannon-depset-config"))
-			})
-
-			t.Run("Valid", func(t *testing.T) {
-				cfg := configForArgs(t, addRequiredArgsExcept(gameType, "--network", "--cannon-rollup-config=rollup.json", "--cannon-l2-genesis=genesis.json", "--cannon-depset-config=depset.json"))
-				require.Equal(t, "depset.json", cfg.Cannon.DepsetConfigPath)
-			})
-		})
-	}
-}
-
 func TestSuperCannonKonaCustomConfigArgs(t *testing.T) {
 	for _, gameType := range []gameTypes.GameType{gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType} {
 		gameType := gameType
@@ -1029,7 +932,7 @@ func TestSuperAsteriscKonaCustomConfigArgs(t *testing.T) {
 }
 
 func TestCannonRequiredArgs(t *testing.T) {
-	for _, gameType := range []gameTypes.GameType{gameTypes.CannonGameType, gameTypes.PermissionedGameType, gameTypes.SuperCannonGameType} {
+	for _, gameType := range []gameTypes.GameType{gameTypes.CannonGameType, gameTypes.PermissionedGameType} {
 		gameType := gameType
 		t.Run(fmt.Sprintf("TestCannonBin-%v", gameType), func(t *testing.T) {
 			t.Run("NotRequiredForAlphabetTrace", func(t *testing.T) {
@@ -1232,13 +1135,7 @@ func TestCannonKonaRequiredArgs(t *testing.T) {
 
 func TestDepsetConfig(t *testing.T) {
 	for _, gameType := range gameTypes.SupportedGameTypes {
-		if gameType == gameTypes.SuperCannonGameType {
-			t.Run("Required-"+gameType.String(), func(t *testing.T) {
-				verifyArgsInvalid(t,
-					"flag network or rollup-config/cannon-rollup-config, l2-genesis/cannon-l2-genesis and depset-config/cannon-depset-config is required",
-					addRequiredArgsExcept(gameType, "--network", "--rollup-config=rollup.json", "--l2-genesis=genesis.json"))
-			})
-		} else if gameType == gameTypes.SuperCannonKonaGameType || gameType == gameTypes.SuperPermissionedGameType {
+		if gameType == gameTypes.SuperCannonKonaGameType || gameType == gameTypes.SuperPermissionedGameType {
 			t.Run("Required-"+gameType.String(), func(t *testing.T) {
 				verifyArgsInvalid(t,
 					"flag network or rollup-config/cannon-kona-rollup-config, l2-genesis/cannon-kona-l2-genesis and depset-config/cannon-kona-depset-config is required",
@@ -1278,7 +1175,7 @@ func TestRollupRpc(t *testing.T) {
 	for _, gameType := range gameTypes.SupportedGameTypes {
 		gameType := gameType
 
-		if gameType == gameTypes.SuperCannonGameType || gameType == gameTypes.SuperPermissionedGameType || gameType == gameTypes.SuperAsteriscKonaGameType || gameType == gameTypes.SuperCannonKonaGameType {
+		if gameType == gameTypes.SuperPermissionedGameType || gameType == gameTypes.SuperCannonKonaGameType {
 			t.Run(fmt.Sprintf("NotRequiredFor-%v", gameType), func(t *testing.T) {
 				configForArgs(t, addRequiredArgsExcept(gameType, "--rollup-rpc"))
 			})
@@ -1461,8 +1358,6 @@ func requiredArgs(gameType gameTypes.GameType) map[string]string {
 		addRequiredCannonArgs(args)
 	case gameTypes.CannonKonaGameType:
 		addRequiredCannonKonaArgs(args)
-	case gameTypes.SuperCannonGameType:
-		addRequiredSuperCannonArgs(args)
 	case gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType:
 		addRequiredSuperCannonKonaArgs(args)
 	case gameTypes.SuperAsteriscKonaGameType:
@@ -1471,11 +1366,6 @@ func requiredArgs(gameType gameTypes.GameType) map[string]string {
 		addRequiredOutputRootArgs(args)
 	}
 	return args
-}
-
-func addRequiredSuperCannonArgs(args map[string]string) {
-	addRequiredCannonBaseArgs(args)
-	args["--supervisor-rpc"] = supervisorRpc
 }
 
 func addRequiredCannonArgs(args map[string]string) {

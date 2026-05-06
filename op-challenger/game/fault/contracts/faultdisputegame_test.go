@@ -52,17 +52,17 @@ func (c contractVersion) String() string {
 }
 
 func (c contractVersion) IsSuperGame() bool {
-	return c.gameType == gameTypes.SuperCannonGameType || c.gameType == gameTypes.SuperPermissionedGameType || c.gameType == gameTypes.SuperAsteriscKonaGameType
+	return c.gameType == gameTypes.SuperCannonKonaGameType || c.gameType == gameTypes.SuperPermissionedGameType
 }
 
 const (
-	vers080        = "0.8.0"
-	vers0180       = "0.18.0"
-	vers111        = "1.1.1"
-	vers120        = "1.2.0"
-	vers131        = "1.3.1"
-	versLatest     = "1.4.0"
-	verSuperCannon = "0.1.0"
+	vers080            = "0.8.0"
+	vers0180           = "0.18.0"
+	vers111            = "1.1.1"
+	vers120            = "1.2.0"
+	vers131            = "1.3.1"
+	versLatest         = "1.4.0"
+	verSuperCannonKona = "0.1.0"
 )
 
 var versions = []contractVersion{
@@ -107,8 +107,8 @@ var versions = []contractVersion{
 		loadAbi:  snapshots.LoadFaultDisputeGameABI,
 	},
 	{
-		version:  verSuperCannon,
-		gameType: gameTypes.SuperCannonGameType,
+		version:  verSuperCannonKona,
+		gameType: gameTypes.SuperCannonKonaGameType,
 		loadAbi:  snapshots.LoadSuperFaultDisputeGameABI,
 	},
 }

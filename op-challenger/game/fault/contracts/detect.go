@@ -35,8 +35,6 @@ func DetectGameType(ctx context.Context, addr common.Address, caller *batching.M
 		gameTypes.AsteriscGameType,
 		gameTypes.AlphabetGameType,
 		gameTypes.FastGameType,
-		gameTypes.AsteriscKonaGameType,
-		gameTypes.SuperCannonGameType,
 		gameTypes.SuperPermissionedGameType,
 		gameTypes.SuperCannonKonaGameType,
 		gameTypes.SuperAsteriscKonaGameType:

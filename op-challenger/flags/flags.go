@@ -39,9 +39,6 @@ var (
 	faultDisputeVMs = []gameTypes.GameType{
 		gameTypes.CannonGameType,
 		gameTypes.CannonKonaGameType,
-		gameTypes.AsteriscGameType,
-		gameTypes.AsteriscKonaGameType,
-		gameTypes.SuperCannonGameType,
 		gameTypes.SuperCannonKonaGameType,
 		gameTypes.SuperAsteriscKonaGameType,
 	}
@@ -339,24 +336,6 @@ func CheckCannonBaseFlags(ctx *cli.Context) error {
 	return nil
 }
 
-func CheckSuperCannonFlags(ctx *cli.Context) error {
-	if !ctx.IsSet(SupervisorRpcFlag.Name) {
-		return fmt.Errorf("flag %v is required", SupervisorRpcFlag.Name)
-	}
-	if !ctx.IsSet(flags.NetworkFlagName) &&
-		!(RollupConfigFlag.IsSet(ctx, gameTypes.CannonGameType) && L2GenesisFlag.IsSet(ctx, gameTypes.CannonGameType) && DepsetConfigFlag.IsSet(ctx, gameTypes.CannonGameType)) {
-		return fmt.Errorf("flag %v or %v, %v and %v is required",
-			flags.NetworkFlagName,
-			RollupConfigFlag.EitherFlagName(gameTypes.CannonGameType),
-			L2GenesisFlag.EitherFlagName(gameTypes.CannonGameType),
-			DepsetConfigFlag.EitherFlagName(gameTypes.CannonGameType))
-	}
-	if err := CheckCannonBaseFlags(ctx); err != nil {
-		return err
-	}
-	return nil
-}
-
 func CheckSuperCannonKonaFlags(ctx *cli.Context) error {
 	if !ctx.IsSet(SupervisorRpcFlag.Name) {
 		return fmt.Errorf("flag %v is required", SupervisorRpcFlag.Name)
@@ -519,10 +498,6 @@ func CheckRequired(ctx *cli.Context, types []gameTypes.GameType) error {
 			}
 		case gameTypes.CannonKonaGameType:
 			if err := CheckCannonKonaFlags(ctx); err != nil {
-				return err
-			}
-		case gameTypes.SuperCannonGameType:
-			if err := CheckSuperCannonFlags(ctx); err != nil {
 				return err
 			}
 		case gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType:
