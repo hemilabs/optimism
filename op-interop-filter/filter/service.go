@@ -136,9 +136,59 @@ func (s *Service) initMetricsServer(cfg *Config) error {
 }
 
 func (s *Service) initBackend(ctx context.Context, cfg *Config) error {
-	backend, err := NewBackend(ctx, s.log, s.metrics, cfg)
-	if err != nil {
-		return err
+	// Calculate start timestamp once for all components.
+	// Chain ingesters will start ingesting from (startTimestamp - backfillDuration)
+	// and report Ready() once they reach startTimestamp.
+	// Cross-validator initializes to startTimestamp and waits for chains to catch up.
+	startTimestamp := uint64(clock.SystemClock.Now().Unix())
+
+	chains := make(map[eth.ChainID]ChainIngester)
+
+	// Create chain ingesters for each L2 RPC
+	for _, rpcURL := range cfg.L2RPCs {
+		// Query chain ID from the RPC
+		ethClient, err := ethclient.Dial(rpcURL)
+		if err != nil {
+			return fmt.Errorf("failed to connect to %s: %w", rpcURL, err)
+		}
+		chainIDBig, err := ethClient.ChainID(ctx)
+		ethClient.Close()
+		if err != nil {
+			return fmt.Errorf("failed to query chain ID from %s: %w", rpcURL, err)
+		}
+		chainID := eth.ChainIDFromBig(chainIDBig)
+
+		// Look up rollup config for this chain ID
+		rollupCfg, ok := cfg.RollupConfigs[chainID]
+		if !ok {
+			return fmt.Errorf("no rollup config found for chain %s from RPC %s (use --networks or --rollup-configs)", chainID, rpcURL)
+		}
+
+		if _, exists := chains[chainID]; exists {
+			return fmt.Errorf("duplicate chain ID %s: multiple RPCs return the same chain ID", chainID)
+		}
+
+		s.log.Info("Creating chain ingester", "chain", chainID, "rpc", rpcURL)
+
+		ingester, err := NewLogsDBChainIngester(
+			ctx,
+			s.log,
+			s.metrics,
+			chainID,
+			rpcURL,
+			cfg.DataDir,
+			startTimestamp,
+			cfg.BackfillDuration,
+			cfg.PollInterval,
+			rollupCfg,
+			cfg.RPCConcurrency,
+			cfg.FetchConcurrency,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create chain ingester for chain %s: %w", chainID, err)
+		}
+
+		chains[chainID] = ingester
 	}
 
 	crossValidator := NewLockstepCrossValidator(

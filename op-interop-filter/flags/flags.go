@@ -14,7 +14,11 @@ import (
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 )
 
-const EnvVarPrefix = "OP_INTEROP_FILTER"
+const (
+	EnvVarPrefix            = "OP_INTEROP_FILTER"
+	DefaultRPCConcurrency   = 100
+	DefaultFetchConcurrency = 64
+)
 
 func prefixEnvVars(name string) []string {
 	return opservice.PrefixEnvVar(EnvVarPrefix, name)
@@ -94,6 +98,18 @@ var (
 		Usage:   "Automatically resolve reorg-triggered failsafe by rewinding logs DBs to finalized.",
 		EnvVars: prefixEnvVars("REORG_RECOVERY_ENABLED"),
 	}
+	RPCConcurrencyFlag = &cli.IntFlag{
+		Name:    "rpc-concurrency",
+		Usage:   "Maximum number of concurrent RPC requests per chain",
+		EnvVars: prefixEnvVars("RPC_CONCURRENCY"),
+		Value:   DefaultRPCConcurrency,
+	}
+	FetchConcurrencyFlag = &cli.IntFlag{
+		Name:    "fetch-concurrency",
+		Usage:   "Number of blocks to fetch concurrently during ingestion. Must be <= rpc-concurrency.",
+		EnvVars: prefixEnvVars("FETCH_CONCURRENCY"),
+		Value:   DefaultFetchConcurrency,
+	}
 	DangerouslyEnablePassthroughFlag = &cli.BoolFlag{
 		Name:    "dangerously-enable-passthrough",
 		Usage:   "Allow all transactions through without interop filtering. DANGEROUS: disables all executing message validation.",
@@ -116,6 +132,8 @@ var optionalFlags = []cli.Flag{
 	PollIntervalFlag,
 	ValidationIntervalFlag,
 	ReorgRecoveryEnabledFlag,
+	RPCConcurrencyFlag,
+	FetchConcurrencyFlag,
 	DangerouslyEnablePassthroughFlag,
 }
 
