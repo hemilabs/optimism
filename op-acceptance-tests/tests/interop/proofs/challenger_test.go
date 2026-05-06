@@ -16,7 +16,7 @@ import (
 
 func TestChallengerPlaysGame(gt *testing.T) {
 	t := devtest.ParallelT(gt)
-	sys := presets.NewSimpleInteropSupernodeProofs(t)
+	sys := presets.NewSimpleInteropSupernodeProofs(t, presets.WithoutHonestProposer())
 	dsl.CheckAll(t,
 		sys.L2CLA.AdvancedFn(types.CrossSafe, 1, 30),
 		sys.L2CLB.AdvancedFn(types.CrossSafe, 1, 30),
@@ -39,7 +39,7 @@ func TestChallengerPlaysGame(gt *testing.T) {
 func TestChallengerRespondsToMultipleInvalidClaims(gt *testing.T) {
 	gt.Skip("Skipping Interop Acceptance Test")
 	t := devtest.ParallelT(gt)
-	sys := presets.NewSimpleInteropSupernodeProofs(t)
+	sys := presets.NewSimpleInteropSupernodeProofs(t, presets.WithoutHonestProposer())
 	dsl.CheckAll(t,
 		sys.L2CLA.AdvancedFn(types.CrossSafe, 1, 30),
 		sys.L2CLB.AdvancedFn(types.CrossSafe, 1, 30),
@@ -63,7 +63,7 @@ func TestChallengerRespondsToMultipleInvalidClaims(gt *testing.T) {
 func TestChallengerRespondsToMultipleInvalidClaimsEOA(gt *testing.T) {
 	gt.Skip("Skipping Interop Acceptance Test")
 	t := devtest.ParallelT(gt)
-	sys := presets.NewSimpleInteropSupernodeProofs(t)
+	sys := presets.NewSimpleInteropSupernodeProofs(t, presets.WithoutHonestProposer())
 	dsl.CheckAll(t,
 		sys.L2CLA.AdvancedFn(types.CrossSafe, 1, 30),
 		sys.L2CLB.AdvancedFn(types.CrossSafe, 1, 30),
