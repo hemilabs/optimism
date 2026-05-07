@@ -11401,6 +11401,7 @@ dependencies = [
  "auto_impl",
  "bincode 2.0.1",
  "bytes",
+ "crossbeam-channel",
  "derive_more",
  "eyre",
  "metrics",
