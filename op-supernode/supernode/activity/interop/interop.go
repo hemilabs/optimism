@@ -65,6 +65,7 @@ type RoundObservation struct {
 	BlocksAtTS     map[eth.ChainID]eth.BlockID
 	L1Heads        map[eth.ChainID]eth.BlockID
 	L1Consistent   bool
+	L1NeedsRewind  bool
 	Paused         bool
 }
 
@@ -416,8 +417,12 @@ func checkPreconditions(obs RoundObservation) *StepOutput {
 		output := StepOutput{Decision: DecisionWait}
 		return &output
 	}
-	if !obs.L1Consistent {
+	if obs.L1NeedsRewind {
 		output := StepOutput{Decision: DecisionRewind}
+		return &output
+	}
+	if !obs.L1Consistent {
+		output := StepOutput{Decision: DecisionWait}
 		return &output
 	}
 	return nil
@@ -547,11 +552,22 @@ func (i *Interop) observeRound() (RoundObservation, error) {
 	obs.BlocksAtTS = ready.blocks
 	obs.L1Heads = ready.l1Heads
 
-	// Check that all frontier L1 heads AND the accepted L1 head are on the same canonical fork.
-	heads := make([]eth.BlockID, 0, len(obs.L1Heads)+1)
 	if obs.LastVerified != nil {
-		heads = append(heads, obs.LastVerified.L1Inclusion)
+		same, err := i.l1Checker.SameL1Chain(i.ctx, []eth.BlockID{obs.LastVerified.L1Inclusion})
+		if err != nil {
+			return obs, fmt.Errorf("L1 consistency check: %w", err)
+		}
+		if !same {
+			obs.L1Consistent = false
+			obs.L1NeedsRewind = true
+			return obs, nil
+		}
 	}
+
+	// Check the new frontier independently from the accepted L1 head. If the
+	// accepted head is still canonical but a frontier L1 head is stale, waiting
+	// gives the L2 nodes time to catch up to the L1 reorg.
+	heads := make([]eth.BlockID, 0, len(obs.L1Heads))
 	for _, l1 := range obs.L1Heads {
 		heads = append(heads, l1)
 	}

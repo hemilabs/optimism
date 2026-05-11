@@ -1691,6 +1691,50 @@ func TestInterop_ProgressAndRecord_L1InconsistencyTriggersRewind(t *testing.T) {
 	require.Empty(t, mock.rewindEngineCalls, "L1 drift rewinds accepted Supernode state only")
 }
 
+func TestInterop_ProgressAndRecord_StaleFrontierL1Waits(t *testing.T) {
+	h := newInteropTestHarness(t). // newInteropTestHarness calls t.Parallel()
+					WithActivation(100).
+					WithChain(10, func(m *mockChainContainer) {
+			m.currentL1 = eth.BlockRef{Number: 1000, Hash: common.HexToHash("0xL1")}
+			m.blockAtTimestamp = eth.L2BlockRef{Number: 500, Hash: common.HexToHash("0xL2")}
+		}).
+		Build()
+
+	mock := h.Mock(10)
+	h.interop.verifyFn = func(ts uint64, blocks map[eth.ChainID]eth.BlockID, _ map[eth.ChainID]eth.BlockID, _ *frontierVerificationView) (Result, error) {
+		return Result{Timestamp: ts, L1Inclusion: eth.BlockID{Number: 100, Hash: common.HexToHash("0xL1")}, L2Heads: blocks}, nil
+	}
+	h.interop.cycleVerifyFn = func(ts uint64, blocks map[eth.ChainID]eth.BlockID, _ *frontierVerificationView) (Result, error) {
+		return Result{}, nil
+	}
+
+	made, err := h.interop.progressAndRecord()
+	require.NoError(t, err)
+	require.True(t, made)
+
+	lastTS, ok := h.interop.verifiedDB.LastTimestamp()
+	require.True(t, ok)
+	require.Equal(t, uint64(101), lastTS)
+
+	// The accepted L1 head is still canonical, but the frontier L1 heads are
+	// stale. This should wait for the L2 node to catch up instead of rewinding
+	// already accepted Supernode state.
+	h.interop.l1Checker = &staleFrontierL1Checker{}
+
+	made, err = h.interop.progressAndRecord()
+	require.NoError(t, err)
+	require.False(t, made)
+
+	lastTS, ok = h.interop.verifiedDB.LastTimestamp()
+	require.True(t, ok)
+	require.Equal(t, uint64(101), lastTS)
+
+	pending, err := h.interop.verifiedDB.GetPendingTransition()
+	require.NoError(t, err)
+	require.Nil(t, pending)
+	require.Empty(t, mock.rewindEngineCalls)
+}
+
 // =============================================================================
 // TestResult_IsEmpty
 // =============================================================================
