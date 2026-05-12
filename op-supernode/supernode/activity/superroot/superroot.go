@@ -10,6 +10,11 @@ import (
 	gethlog "github.com/ethereum/go-ethereum/log"
 )
 
+// ErrInconsistentSnapshot is returned when a chain's Generation() changed
+// during atTimestamp's per-chain reads. Callers should treat it as a
+// transient retryable signal.
+var ErrInconsistentSnapshot = errors.New("chain state changed during superroot gather")
+
 // Superroot satisfies the RPC Activity interface
 // it provides the superroot at a given timestamp for all chains
 // along with the current L1s and the verified and optimistic L1:L2 pairs
@@ -38,58 +43,17 @@ type OutputWithSource struct {
 	SourceL1 eth.BlockID
 }
 
-// L2WithRequiredL1 is a verified L2 block and the minimum L1 block at which the verification is possible
-type L2WithRequiredL1 struct {
-	L2            eth.BlockID
-	MinRequiredL1 eth.BlockID
-}
-
-// atTimestampResponse is the response superroot_atTimestamp
-// it contains:
-// - CurrentL1Derived: the current L1 block that each chain has derived up to (without any verification)
-// - CurrentL1Verified: the current L1 block that each verifier has processed up to
-// - VerifiedAtTimestamp: the L2 blocks which are fully verified at the given timestamp, and the minimum L1 block at which verification is possible
-// - OptimisticAtTimestamp: the L2 blocks which would be applied if verification were assumed to be successful, and their L1 sources
-// - SuperRoot: the superroot at the given timestamp using verified L2 blocks
-type atTimestampResponse struct {
-	CurrentL1Derived      map[eth.ChainID]eth.BlockID
-	CurrentL1Verified     map[string]eth.BlockID
-	VerifiedAtTimestamp   map[eth.ChainID]L2WithRequiredL1
-	OptimisticAtTimestamp map[eth.ChainID]OutputWithSource
-	MinCurrentL1          eth.BlockID
-	MinVerifiedRequiredL1 eth.BlockID
-	SuperRoot             eth.Bytes32
-}
-
-// AtTimestamp computes the super-root at the given timestamp, plus additional information about the current L1s, verified L2s, and optimistic L2s
-func (api *superrootAPI) AtTimestamp(ctx context.Context, timestamp uint64) (atTimestampResponse, error) {
-	return api.s.atTimestamp(ctx, timestamp)
-}
-
-func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (atTimestampResponse, error) {
-	currentL1Derived := map[eth.ChainID]eth.BlockID{}
-	// there are no Verification Activities yet, so there is no call to make to collect their CurrentL1
-	// this will be replaced with a call to the Verification Activities when they are implemented
-	currentL1Verified := map[string]eth.BlockID{}
-	verified := map[eth.ChainID]L2WithRequiredL1{}
-	optimistic := map[eth.ChainID]OutputWithSource{}
-	minCurrentL1 := eth.BlockID{}
-	minVerifiedRequiredL1 := eth.BlockID{}
-	chainOutputs := make([]eth.ChainIDAndOutput, 0, len(s.chains))
-
-	// get current l1s
-	// this informs callers that the chains local views have considered at least up to this L1 block
-	// but does not guarantee verifiers have processed this L1 block yet. This field is likely unhelpful, but I await feedback to confirm
+func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (eth.SuperRootAtTimestampResponse, error) {
+	// Capture each chain's Generation; re-checked at the end to discard
+	// data gathered across a state-mutating event.
+	startGens := make(map[eth.ChainID]uint64, len(s.chains))
 	for chainID, chain := range s.chains {
-		currentL1, err := chain.CurrentL1(ctx)
-		if err != nil {
-			s.log.Warn("failed to get current L1", "chain_id", chainID.String(), "err", err)
-			return atTimestampResponse{}, err
-		}
-		currentL1Derived[chainID] = currentL1.ID()
-		if currentL1.ID().Number < minCurrentL1.Number || minCurrentL1 == (eth.BlockID{}) {
-			minCurrentL1 = currentL1.ID()
-		}
+		startGens[chainID] = chain.Generation()
+	}
+
+	aggregate, err := syncstatus.Aggregate(ctx, s.log, s.chains)
+	if err != nil {
+		return eth.SuperRootAtTimestampResponse{}, err
 	}
 
 	var (
@@ -139,6 +103,12 @@ func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (atTimest
 			Output:     optimisticOut,
 			OutputRoot: eth.OutputRoot(optimisticOut),
 			RequiredL1: optimisticL1,
+		}
+	}
+
+	for chainID, chain := range s.chains {
+		if endGen := chain.Generation(); endGen != startGens[chainID] {
+			return eth.SuperRootAtTimestampResponse{}, fmt.Errorf("chain %v gen %d → %d: %w", chainID, startGens[chainID], endGen, ErrInconsistentSnapshot)
 		}
 	}
 

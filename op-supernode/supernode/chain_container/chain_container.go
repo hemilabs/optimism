@@ -51,6 +51,13 @@ type ChainContainer interface {
 	OptimisticAt(ctx context.Context, ts uint64) (l2, l1 eth.BlockID, err error)
 	OutputRootAtL2BlockNumber(ctx context.Context, l2BlockNum uint64) (eth.Bytes32, error)
 	OptimisticOutputAtTimestamp(ctx context.Context, ts uint64) (*eth.OutputV0, error)
+	// Generation is bumped on every state-mutating event that could make
+	// data gathered earlier inconsistent with state observed later: VN
+	// restart, RewindEngine entry, and inner-pipeline rollup.ResetEvent.
+	// Callers that perform multiple per-chain reads capture this before the
+	// first read and re-read it after the last; a change between the two
+	// means the reads straddle a mutation and must be discarded.
+	Generation() uint64
 	RegisterVerifier(v activity.VerificationActivity)
 	// VerifierCurrentL1s returns the CurrentL1 from each registered verifier.
 	// This allows callers to determine the minimum L1 block that all verifiers have processed.
@@ -112,14 +119,19 @@ type simpleChainContainer struct {
 	// unsynchronized access produces a torn interface read: non-nil type with
 	// nil data pointer, which slips past a plain `vn == nil` check and panics
 	// on the next method dispatch.
-	vnMu               sync.RWMutex
-	vn                 virtual_node.VirtualNode
-	vncfg              *opnodecfg.Config
-	cfg                config.CLIConfig
-	engine             engine_controller.EngineController
-	pause              atomic.Bool
-	stop               atomic.Bool
-	stopped            chan struct{}
+	vnMu      sync.RWMutex
+	vn        virtual_node.VirtualNode
+	vncfg     *opnodecfg.Config
+	cfg       config.CLIConfig
+	engine    engine_controller.EngineController
+	denyList  *DenyList
+	pause     atomic.Bool
+	stop      atomic.Bool
+	resetting atomic.Bool
+	stopped   chan struct{}
+	// gen backs Generation(). See the ChainContainer interface for the
+	// invariant; bump sites are setVN, RewindEngine, and NotifyPipelineReset.
+	gen                atomic.Uint64
 	log                gethlog.Logger
 	chainID            eth.ChainID
 	initOverload       *rollupNode.InitializationOverrides  // Base shared resources for all virtual nodes
@@ -248,12 +260,13 @@ func (c *simpleChainContainer) getVN() virtual_node.VirtualNode {
 	return c.vn
 }
 
-// setVN writes c.vn under the lock. Used by the restart loop when it installs
-// a new virtual node on each iteration.
+// setVN writes c.vn under the lock and bumps gen. Used by the restart loop
+// when it installs a new virtual node on each iteration.
 func (c *simpleChainContainer) setVN(vn virtual_node.VirtualNode) {
 	c.vnMu.Lock()
 	defer c.vnMu.Unlock()
 	c.vn = vn
+	c.gen.Add(1)
 }
 
 func (c *simpleChainContainer) subPath(path string) string {
@@ -289,6 +302,9 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 					c.setMetricsHandler(chainID, handler)
 				}
 			}
+			// Pass the chain container as SuperAuthority for payload denylist
+			// and pipeline-reset notification.
+			c.initOverload.SuperAuthority = c
 		}
 		// Pass in the chain container as a SuperAuthority
 		vn := c.virtualNodeFactory(c.vncfg, c.log, c.initOverload, c.appVersion, c)
@@ -547,6 +563,28 @@ func (c *simpleChainContainer) OptimisticOutputAtTimestamp(ctx context.Context, 
 	return c.OutputV0AtBlockNumber(ctx, blockNum)
 }
 
+// Generation implements ChainContainer. See the interface doc comment for the
+// invariants that callers rely on.
+func (c *simpleChainContainer) Generation() uint64 {
+	return c.gen.Load()
+}
+
+// FetchReceipts fetches the receipts for a given block by hash.
+func (c *simpleChainContainer) FetchReceipts(ctx context.Context, blockID eth.BlockID) (eth.BlockInfo, types.Receipts, error) {
+	if c.engine == nil {
+		return nil, nil, engine_controller.ErrNoEngineClient
+	}
+	return c.engine.FetchReceipts(ctx, blockID.Hash)
+}
+
+// BlockTime returns the block time in seconds for this chain from the rollup config.
+func (c *simpleChainContainer) BlockTime() uint64 {
+	if c.vncfg == nil {
+		return 0
+	}
+	return c.vncfg.Rollup.BlockTime
+}
+
 // attachInProcRollupClient creates a new in-proc rollup RPC client bound to the current rpcHandler.
 // It will close any existing client before replacing it.
 func (c *simpleChainContainer) attachInProcRollupClient() error {
@@ -582,6 +620,8 @@ func (c *simpleChainContainer) RewindEngine(ctx context.Context, timestamp uint6
 		return fmt.Errorf("reset already in progress")
 	}
 	defer c.resetting.Store(false)
+	// Bump up-front so the gen change precedes any engine mutation below.
+	c.gen.Add(1)
 
 	vn := c.getVN()
 	if vn == nil {
