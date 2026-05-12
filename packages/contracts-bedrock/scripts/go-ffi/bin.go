@@ -13,6 +13,10 @@ func main() {
 		FuzzTrie()
 	case "merkle":
 		DiffMerkle()
+	case "opcm":
+		GetOPCMs()
+	case "nut-bundles":
+		GetNUTBundles()
 	default:
 		log.Fatal("Must pass a subcommand")
 	}
