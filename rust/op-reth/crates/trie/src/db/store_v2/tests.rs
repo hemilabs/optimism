@@ -4,10 +4,10 @@ use super::*;
 use crate::db::models;
 use alloy_eips::NumHash;
 use reth_db::{
-    Database, DatabaseEnv,
-    cursor::DbDupCursorRO,
+    BlockNumberList, Database, DatabaseEnv,
+    cursor::{DbCursorRW, DbDupCursorRO},
     mdbx::{DatabaseArguments, init_db_for},
-    transaction::DbTx,
+    transaction::{DbTx, DbTxMut},
 };
 use reth_trie::{
     HashedStorage,
@@ -21,9 +21,11 @@ use crate::{
     db::{
         ProofWindowKey, V2ProofWindow,
         models::{
-            BlockNumberHashedAddress, HashedAccountShardedKey, V2AccountTrieChangeSets,
-            V2AccountsTrie, V2HashedAccountChangeSets, V2HashedAccounts, V2HashedAccountsHistory,
+            AccountTrieShardedKey, BlockNumberHashedAddress, HashedAccountShardedKey,
+            StorageTrieShardedKey, V2AccountTrieChangeSets, V2AccountsTrie, V2AccountsTrieHistory,
+            V2HashedAccountChangeSets, V2HashedAccounts, V2HashedAccountsHistory,
             V2HashedStorageChangeSets, V2HashedStorages, V2StorageTrieChangeSets, V2StoragesTrie,
+            V2StoragesTrieHistory,
         },
     },
 };
@@ -1889,4 +1891,89 @@ fn hashed_storages_batch_no_duplicates() {
     let slots = collect_hashed_storage_slots(&db, addr);
     assert_eq!(slots.len(), 1, "batch: exactly 1 entry, no duplicates");
     assert_eq!(slots[0], (slot, U256::from(300u64)));
+}
+
+// ========================== Sharded-key sort order regression ==========================
+//
+// End-to-end check that round-tripping `AccountTrieShardedKey` / `StorageTrieShardedKey`
+// through a real MDBX env preserves `Nibbles`' lex-by-nibble order. Under the old
+// length-prefixed encoding, the length byte at position 0 dominated MDBX's byte-wise sort
+// and `[0x05]` walked before `[0x01, 0x05]` even though logically `[0x01, ...]` must
+// come first.
+
+#[test]
+fn account_trie_history_cursor_walk_returns_lex_by_nibble_order() {
+    let db = setup_db();
+
+    let short = StoredNibbles::from(Nibbles::from_nibbles_unchecked([0x05]));
+    let long = StoredNibbles::from(Nibbles::from_nibbles_unchecked([0x01, 0x05]));
+
+    // Insert in the order that *would* have been wrong under the old encoding.
+    {
+        let wtx = db.tx_mut().expect("rw");
+        let mut cur = wtx.cursor_write::<V2AccountsTrieHistory>().expect("cursor");
+        cur.upsert(
+            AccountTrieShardedKey::new(short.clone(), u64::MAX),
+            &BlockNumberList::new_pre_sorted([0]),
+        )
+        .expect("upsert short");
+        cur.upsert(
+            AccountTrieShardedKey::new(long.clone(), u64::MAX),
+            &BlockNumberList::new_pre_sorted([0]),
+        )
+        .expect("upsert long");
+        wtx.commit().expect("commit");
+    }
+
+    // Walk the table; MDBX returns entries in encoded-byte order.
+    let tx = db.tx().expect("ro");
+    let mut cur = tx.cursor_read::<V2AccountsTrieHistory>().expect("cursor");
+    let mut walked = Vec::new();
+    let mut entry = cur.first().expect("first");
+    while let Some((k, _)) = entry {
+        walked.push(k.key);
+        entry = cur.next().expect("next");
+    }
+
+    assert_eq!(
+        walked,
+        vec![long, short],
+        "[0x01, 0x05] must precede [0x05]: nibble 0x01 < 0x05 dominates lex order",
+    );
+}
+
+#[test]
+fn storage_trie_history_cursor_walk_returns_lex_by_nibble_order() {
+    let db = setup_db();
+
+    let addr = B256::repeat_byte(0x11);
+    let short = StoredNibbles::from(Nibbles::from_nibbles_unchecked([0x05]));
+    let long = StoredNibbles::from(Nibbles::from_nibbles_unchecked([0x01, 0x05]));
+
+    {
+        let wtx = db.tx_mut().expect("rw");
+        let mut cur = wtx.cursor_write::<V2StoragesTrieHistory>().expect("cursor");
+        cur.upsert(
+            StorageTrieShardedKey::new(addr, short.clone(), u64::MAX),
+            &BlockNumberList::new_pre_sorted([0]),
+        )
+        .expect("upsert short");
+        cur.upsert(
+            StorageTrieShardedKey::new(addr, long.clone(), u64::MAX),
+            &BlockNumberList::new_pre_sorted([0]),
+        )
+        .expect("upsert long");
+        wtx.commit().expect("commit");
+    }
+
+    let tx = db.tx().expect("ro");
+    let mut cur = tx.cursor_read::<V2StoragesTrieHistory>().expect("cursor");
+    let mut walked = Vec::new();
+    let mut entry = cur.first().expect("first");
+    while let Some((k, _)) = entry {
+        walked.push(k.key);
+        entry = cur.next().expect("next");
+    }
+
+    assert_eq!(walked, vec![long, short], "within an address, [0x01, 0x05] must precede [0x05]",);
 }
