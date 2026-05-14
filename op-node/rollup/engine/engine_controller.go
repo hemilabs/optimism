@@ -222,7 +222,20 @@ func (e *EngineController) SafeL2Head() eth.L2BlockRef {
 		}
 		br, err := e.engine.L2BlockRefByHash(e.ctx, fvshid.Hash)
 		if err != nil {
-			panic("superAuthority supplied an identifier for the safe head which is not known to the engine")
+			finalized := e.FinalizedHead()
+			e.log.Warn("superAuthority safe head is not known to the engine, using finalized head", "super_authority_safe", fvshid, "finalized", finalized, "err", err)
+			return finalized
+		}
+		canonical, err := e.engine.L2BlockRefByNumber(e.ctx, br.Number)
+		if err != nil {
+			finalized := e.FinalizedHead()
+			e.log.Warn("cannot verify superAuthority safe head canonicality, using finalized head", "super_authority_safe", br, "finalized", finalized, "err", err)
+			return finalized
+		}
+		if canonical.Hash != br.Hash {
+			finalized := e.FinalizedHead()
+			e.log.Warn("superAuthority safe head is not canonical, using finalized head", "super_authority_safe", br, "canonical", canonical, "finalized", finalized)
+			return finalized
 		}
 		return br
 	} else if e.supervisorEnabled || e.syncCfg.FollowSourceEnabled() {
