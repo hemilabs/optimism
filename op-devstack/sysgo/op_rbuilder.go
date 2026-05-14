@@ -401,8 +401,8 @@ func (b *OPRBuilderNode) Start() {
 
 	b.sub = NewSubProcess(b.p, stdOut, stdErr)
 
-	execPath, err := EnsureRustBinary(b.p, RustBinarySpec{
-		SrcDir:  "op-rbuilder",
+	execPath, err := rustbin.Spec{
+		SrcDir:  "rust/op-rbuilder",
 		Package: "op-rbuilder",
 		Binary:  "op-rbuilder",
 	})
