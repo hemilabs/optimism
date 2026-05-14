@@ -35,6 +35,9 @@ type Backend struct {
 	// Passthrough mode: all transactions pass without filtering
 	passthrough bool
 
+	// Compatibility mode for legacy clients that omit executing chainID.
+	legacyCheckAccessListFormat bool
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -44,11 +47,12 @@ type Backend struct {
 
 // BackendParams contains parameters for creating a Backend.
 type BackendParams struct {
-	Logger         log.Logger
-	Metrics        metrics.Metricer
-	Chains         map[eth.ChainID]ChainIngester
-	CrossValidator CrossValidator
-	Passthrough    bool
+	Logger                      log.Logger
+	Metrics                     metrics.Metricer
+	Chains                      map[eth.ChainID]ChainIngester
+	CrossValidator              CrossValidator
+	Passthrough                 bool
+	LegacyCheckAccessListFormat bool
 
 	ReorgRecoveryEnabled bool
 }
@@ -58,14 +62,15 @@ func NewBackend(parentCtx context.Context, params BackendParams) *Backend {
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	return &Backend{
-		log:                  params.Logger,
-		metrics:              params.Metrics,
-		chains:               params.Chains,
-		crossValidator:       params.CrossValidator,
-		passthrough:          params.Passthrough,
-		ctx:                  ctx,
-		cancel:               cancel,
-		reorgRecoveryEnabled: params.ReorgRecoveryEnabled,
+		log:                         params.Logger,
+		metrics:                     params.Metrics,
+		chains:                      params.Chains,
+		crossValidator:              params.CrossValidator,
+		passthrough:                 params.Passthrough,
+		legacyCheckAccessListFormat: params.LegacyCheckAccessListFormat,
+		ctx:                         ctx,
+		cancel:                      cancel,
+		reorgRecoveryEnabled:        params.ReorgRecoveryEnabled,
 	}
 	logger.Info("Created backend", "chains", len(cfg.L2RPCs))
 	return b, nil
@@ -170,9 +175,12 @@ func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Has
 	}
 
 	if _, ok := b.chains[execDescriptor.ChainID]; !ok {
-		b.metrics.RecordCheckAccessList(false)
-		b.metrics.RecordCheckAccessListRejection("unknown_chain")
-		return fmt.Errorf("executing chain %s: %w", execDescriptor.ChainID, types.ErrUnknownChain)
+		if !b.legacyCheckAccessListFormat {
+			b.metrics.RecordCheckAccessList(false)
+			b.metrics.RecordCheckAccessListRejection("unknown_chain")
+			return fmt.Errorf("executing chain %s: %w", execDescriptor.ChainID, types.ErrUnknownChain)
+		}
+		b.log.Debug("Supporting legacy check access list format", "executing_chain", execDescriptor.ChainID)
 	}
 
 	remaining := inboxEntries
