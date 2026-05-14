@@ -197,8 +197,55 @@ func NewEngineController(ctx context.Context, engine ExecEngine, log log.Logger,
 		opgethNotifierCh: make(chan *opgethNotification),
 	}
 
-	// XXX see if there is a better place to start this goroutine.
-	go e.opgethNotifier()
+// SafeL2Head returns the safe L2 head.
+// If the super authority is enabled, it returns the fully verified L2 head
+// else it returns the local safe L2 head.
+func (e *EngineController) SafeL2Head() eth.L2BlockRef {
+	if e.superAuthority != nil {
+		fvshid, useLocalSafe := e.superAuthority.FullyVerifiedL2Head()
+		// If SuperAuthority signals to use local-safe (e.g., no verifiers or pre-interop)
+		if useLocalSafe {
+			e.log.Debug("super authority signaled to use local-safe fallback")
+			return e.localSafeHead
+		}
+		// SuperAuthority provided a cross-verified safe head
+		if (fvshid == eth.BlockID{}) {
+			// Fallback to genesis block (safe by consensus) if possible
+			br, err := e.engine.L2BlockRefByNumber(e.ctx, 0)
+			if err != nil {
+				e.log.Warn("cannot get genesis block from engine")
+				return eth.L2BlockRef{}
+			}
+			return br
+		}
+		if fvshid.Number > e.localSafeHead.Number {
+			e.log.Debug("super authority fully verified l2 head is ahead of local safe head, using local safe head as SafeL2Head")
+			return e.localSafeHead
+		}
+		br, err := e.engine.L2BlockRefByHash(e.ctx, fvshid.Hash)
+		if err != nil {
+			finalized := e.FinalizedHead()
+			e.log.Warn("superAuthority safe head is not known to the engine, using finalized head", "super_authority_safe", fvshid, "finalized", finalized, "err", err)
+			return finalized
+		}
+		canonical, err := e.engine.L2BlockRefByNumber(e.ctx, br.Number)
+		if err != nil {
+			finalized := e.FinalizedHead()
+			e.log.Warn("cannot verify superAuthority safe head canonicality, using finalized head", "super_authority_safe", br, "finalized", finalized, "err", err)
+			return finalized
+		}
+		if canonical.Hash != br.Hash {
+			finalized := e.FinalizedHead()
+			e.log.Warn("superAuthority safe head is not canonical, using finalized head", "super_authority_safe", br, "canonical", canonical, "finalized", finalized)
+			return finalized
+		}
+		return br
+	} else if e.supervisorEnabled || e.syncCfg.FollowSourceEnabled() {
+		return e.deprecatedSafeHead
+	} else {
+		return e.localSafeHead
+	}
+}
 
 	return e
 }
