@@ -1085,6 +1085,9 @@ func (m *algoMockChain) VerifierCurrentL1s() []eth.BlockID                { retu
 func (m *algoMockChain) LocalSafeBlockAtTimestamp(ctx context.Context, ts uint64) (eth.L2BlockRef, error) {
 	return eth.L2BlockRef{}, nil
 }
+func (m *algoMockChain) ELFinalizedHead(ctx context.Context) (eth.L2BlockRef, error) {
+	return eth.L2BlockRef{}, nil
+}
 func (m *algoMockChain) L1ForL2(ctx context.Context, l2Block eth.BlockID) (eth.BlockID, error) {
 	return eth.BlockID{}, nil
 }
