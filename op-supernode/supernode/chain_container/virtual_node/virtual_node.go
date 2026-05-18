@@ -3,7 +3,6 @@ package virtual_node
 import (
 	"context"
 	"errors"
-	"math"
 	"sync"
 
 	opnodecfg "github.com/ethereum-optimism/optimism/op-node/config"
@@ -205,17 +204,14 @@ func (v *simpleVirtualNode) SafeHeadAtL1(ctx context.Context, l1BlockNum uint64)
 	return db.SafeHeadAtL1(ctx, l1BlockNum)
 }
 
-// ErrL1AtSafeHeadNotFound: transient — SafeDB hasn't observed the answer yet
-// (target ahead of latest, or DB empty at startup). Retry.
-var ErrL1AtSafeHeadNotFound = errors.New("l1 at safe head not found")
+// Re-exported from safedb for callers that still reference these via virtual_node.
+var (
+	ErrL1AtSafeHeadNotFound    = safedb.ErrL1AtSafeHeadNotFound
+	ErrL1AtSafeHeadUnavailable = safedb.ErrL1AtSafeHeadUnavailable
+)
 
-// ErrL1AtSafeHeadUnavailable: permanent on this node — the crossing happened
-// before SafeDB started recording (snap/CL-sync bootstrap), or the walkback
-// reached the genesis bound. Retrying won't help; operator must intervene.
-var ErrL1AtSafeHeadUnavailable = errors.New("l1 at safe head history unavailable")
-
-// L1AtSafeHead finds the earliest L1 block at which the provided L2 block became local safe,
-// using the monotonicity of SafeDB (L2 safe head number is non-decreasing over L1).
+// L1AtSafeHead returns the earliest L1 block at which the provided L2 block
+// became local-safe, delegating the lookup to SafeDB.
 func (v *simpleVirtualNode) L1AtSafeHead(ctx context.Context, target eth.BlockID) (eth.BlockID, error) {
 	v.mu.Lock()
 	inner := v.inner
@@ -227,82 +223,23 @@ func (v *simpleVirtualNode) L1AtSafeHead(ctx context.Context, target eth.BlockID
 	if db == nil {
 		return eth.BlockID{}, ErrVirtualNodeNotRunning
 	}
-	// Get the latest entry to start the walkback
-	latestL1, latestL2, err := db.SafeHeadAtL1(ctx, math.MaxUint64-1)
+
+	// Genesis L2 is trivially safe at L1 block 0. Use 0 rather than
+	// cfg.Genesis.L1 because contracts may pre-date cfg.Genesis.L1, allowing
+	// dispute games anchored to earlier L1 heads.
+	if target == v.cfg.Rollup.Genesis.L2 {
+		return eth.BlockID{Number: 0}, nil
+	}
+
+	l1, _, err := db.L1AtSafeHead(ctx, target.Number)
 	if err != nil {
-		// Empty DB on startup is transient; anything else is a real failure.
-		if errors.Is(err, safedb.ErrNotFound) {
-			v.log.Debug("L1AtSafeHead: SafeDB empty, no entries yet",
-				"target_l2_num", target.Number, "target_l2_hash", target.Hash)
-			return eth.BlockID{}, ErrL1AtSafeHeadNotFound
-		}
-		v.log.Debug("L1AtSafeHead: latest lookup failed", "err", err)
+		v.log.Debug("L1AtSafeHead: lookup failed",
+			"target_l2_num", target.Number, "target_l2_hash", target.Hash, "err", err)
 		return eth.BlockID{}, err
 	}
-	v.log.Debug("L1AtSafeHead: latest bounds", "latest_l1", latestL1.Number, "latest_l2_num", latestL2.Number, "latest_l2_hash", latestL2.Hash)
-	if latestL2.Number < target.Number {
-		v.log.Debug("L1AtSafeHead: target beyond latest", "latest_l2", latestL2.Number)
-		return eth.BlockID{}, ErrL1AtSafeHeadNotFound
-	}
-	v.log.Debug("L1AtSafeHead: target within latest", "latest_l2", latestL2.Number, "target", target.Number)
-	// Walk back until the cursor would drop below the target. cursor tracks
-	// the earliest entry we've successfully resolved; on failure it is the
-	// first (earliest) recorded SafeDB entry, which is the most useful piece
-	// of diagnostic context for the operator.
-	cursor := latestL1
-	cursorL2 := latestL2
-	genesisL1 := v.cfg.Rollup.Genesis.L1.Number
-	for {
-		if cursor.Number <= 0 || cursor.Number <= genesisL1 {
-			// Walkback crossed the genesis bound without ever dropping below
-			// target: the crossing is older than anything we have. Permanent.
-			v.log.Warn("L1AtSafeHead: reached genesis bound without crossing target",
-				"target_l2_num", target.Number, "target_l2_hash", target.Hash,
-				"earliest_l1", cursor.Number, "earliest_l2", cursorL2.Number,
-				"genesis_l1", genesisL1)
-			return eth.BlockID{}, ErrL1AtSafeHeadUnavailable
-		}
-		prev := cursor.Number - 1
-		v.log.Debug("L1AtSafeHead: checking previous l1 block", "l1_num", prev)
-		l1Prev, l2Prev, err := db.SafeHeadAtL1(ctx, prev)
-		if err != nil {
-			// Probed below the earliest SafeDB entry: snap/CL-sync bootstrap
-			// gap. If the earliest entry is the exact target, it is still a
-			// valid lower bound because SafeDB recorded that L2 at cursor L1.
-			// Otherwise the target predates available history.
-			// cursor is the earliest entry in the DB (nothing exists at
-			// or below cursor.Number - 1, which is what we just probed).
-			if errors.Is(err, safedb.ErrNotFound) {
-				if cursorL2 == target {
-					v.log.Debug("L1AtSafeHead: target matches earliest SafeDB entry",
-						"target_l2_num", target.Number, "target_l2_hash", target.Hash,
-						"earliest_l1", cursor.Number)
-					return cursor, nil
-				}
-				v.log.Warn("L1AtSafeHead: walkback ran past earliest SafeDB entry",
-					"target_l2_num", target.Number, "target_l2_hash", target.Hash,
-					"earliest_l1", cursor.Number, "earliest_l2", cursorL2.Number,
-					"probe_l1", prev, "genesis_l1", genesisL1)
-				return eth.BlockID{}, ErrL1AtSafeHeadUnavailable
-			}
-			v.log.Error("L1AtSafeHead: walkback lookup failed, stopping",
-				"target_l2_num", target.Number, "target_l2_hash", target.Hash,
-				"earliest_l1", cursor.Number, "earliest_l2", cursorL2.Number,
-				"probe_l1", prev, "err", err)
-			return eth.BlockID{}, err
-		}
-		v.log.Debug("L1AtSafeHead: walkback result", "l1_prev", l1Prev.Number, "l2_prev_num", l2Prev.Number, "l2_prev_hash", l2Prev.Hash)
-		if l2Prev.Number >= target.Number {
-			// Still meets or exceeds target; continue walking back
-			cursor = l1Prev
-			cursorL2 = l2Prev
-			continue
-		}
-		// Dropped below target; current cursor is the first that meets/exceeds
-		break
-	}
-	v.log.Debug("L1AtSafeHead: result", "l1", cursor)
-	return cursor, nil
+	v.log.Debug("L1AtSafeHead: result",
+		"target_l2_num", target.Number, "target_l2_hash", target.Hash, "l1", l1)
+	return l1, nil
 }
 
 // CurrentL1 returns the current processed L1 block based on derivation pipeline sync status.
