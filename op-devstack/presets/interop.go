@@ -21,7 +21,6 @@ type SingleChainInterop struct {
 	T          devtest.T
 	timeTravel *clock.AdvancingClock
 
-	Supervisor    *dsl.Supervisor
 	SuperRoots    *dsl.Supernode
 	TestSequencer *dsl.TestSequencer
 
@@ -43,16 +42,6 @@ type SingleChainInterop struct {
 
 	// May be nil if not using sysgo
 	challengerConfig *challengerConfig.Config
-}
-
-// NewSingleChainInterop creates a fresh SingleChainInterop target for the current test.
-//
-// The target is created from the single-chain interop runtime plus any additional preset options.
-func NewSingleChainInterop(t devtest.T, opts ...Option) *SingleChainInterop {
-	presetCfg, presetOpts := collectSupportedPresetConfig(t, "NewSingleChainInterop", opts, singleChainInteropPresetSupportedOptionKinds)
-	out := singleChainInteropFromRuntime(t, sysgo.NewSingleChainInteropRuntimeWithConfig(t, presetCfg))
-	presetOpts.applyPreset(out)
-	return out
 }
 
 func (s *SingleChainInterop) L2Networks() []*dsl.L2Network {
@@ -101,24 +90,17 @@ func (s *SingleChainInterop) StandardBridge(l2Chain *dsl.L2Network) *dsl.Standar
 	return dsl.NewStandardBridge(s.T, l2Chain, s.L1EL)
 }
 
-// NewSimpleInteropSuperProofs creates a fresh SimpleInterop target for the current test
-// using the default super-root proofs system.
-func NewSimpleInteropSuperProofs(t devtest.T, opts ...Option) *SimpleInterop {
-	presetCfg, _ := collectSupportedPresetConfig(t, "NewSimpleInteropSuperProofs", opts, simpleInteropSuperProofsPresetSupportedOptionKinds)
-	return simpleInteropFromRuntime(t, sysgo.NewSimpleInteropSuperProofsRuntimeWithConfig(t, presetCfg))
-}
-
-// NewSimpleInteropSupernodeProofs creates a fresh SimpleInterop target for the current
+// NewSimpleInterop creates a fresh SimpleInterop target for the current
 // test using the super-root proofs system backed by op-supernode.
-func NewSimpleInteropSupernodeProofs(t devtest.T, opts ...Option) *SimpleInterop {
-	presetCfg, _ := collectSupportedPresetConfig(t, "NewSimpleInteropSupernodeProofs", opts, supernodeProofsPresetSupportedOptionKinds)
+func NewSimpleInterop(t devtest.T, opts ...Option) *SimpleInterop {
+	presetCfg, _ := collectSupportedPresetConfig(t, "NewSimpleInterop", opts, twoL2SupernodeProofsPresetSupportedOptionKinds)
 	return simpleInteropFromSupernodeProofsRuntime(t, sysgo.NewTwoL2SupernodeProofsRuntimeWithConfig(t, true, presetCfg))
 }
 
-// NewSingleChainInteropSupernodeProofs creates a fresh SingleChainInterop target for the
+// NewSingleChainInterop creates a fresh SingleChainInterop target for the
 // current test using the single-chain super-root proofs system backed by op-supernode.
-func NewSingleChainInteropSupernodeProofs(t devtest.T, opts ...Option) *SingleChainInterop {
-	presetCfg, _ := collectSupportedPresetConfig(t, "NewSingleChainInteropSupernodeProofs", opts, supernodeProofsPresetSupportedOptionKinds)
+func NewSingleChainInterop(t devtest.T, opts ...Option) *SingleChainInterop {
+	presetCfg, _ := collectSupportedPresetConfig(t, "NewSingleChainInterop", opts, supernodeProofsPresetSupportedOptionKinds)
 	return singleChainInteropFromSupernodeProofsRuntime(t, sysgo.NewSingleChainSupernodeProofsRuntimeWithConfig(t, true, presetCfg))
 }
 
@@ -136,14 +118,14 @@ func NewSingleChainInteropIsthmusSuper(t devtest.T, opts ...Option) *SingleChain
 	return singleChainInteropFromSupernodeProofsRuntime(t, sysgo.NewSingleChainSupernodeProofsRuntimeWithConfig(t, false, presetCfg))
 }
 
-// NewSimpleInterop creates a fresh SimpleInterop target for the current test.
-//
-// The target is created from the interop runtime plus any additional preset options.
-func NewSimpleInterop(t devtest.T, opts ...Option) *SimpleInterop {
-	presetCfg, presetOpts := collectSupportedPresetConfig(t, "NewSimpleInterop", opts, singleChainInteropPresetSupportedOptionKinds)
-	out := simpleInteropFromRuntime(t, sysgo.NewSimpleInteropRuntimeWithConfig(t, presetCfg))
-	presetOpts.applyPreset(out)
-	return out
+// NewSingleChainInteropSuperRootAtGenesis creates a fresh SingleChainInterop
+// target where SuperPermissionedDisputeGame is installed in the permissioned
+// slot as part of the initial op-deployer apply - no post-deploy OPCMv2
+// migration runs. This exercises the initial-deploy path for super-root
+// dispute games tracked by ethereum-optimism/optimism#18729.
+func NewSingleChainInteropSuperRootAtGenesis(t devtest.T, opts ...Option) *SingleChainInterop {
+	presetCfg, _ := collectSupportedPresetConfig(t, "NewSingleChainInteropSuperRootAtGenesis", opts, supernodeProofsPresetSupportedOptionKinds)
+	return singleChainInteropFromSupernodeProofsRuntime(t, sysgo.NewSingleChainSuperRootAtGenesisRuntimeWithConfig(t, presetCfg))
 }
 
 // WithSuggestedInteropActivationOffset suggests a hardfork time offset to use.
