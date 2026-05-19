@@ -64,7 +64,7 @@ func Main(version string) cliapp.LifecycleAction {
 			l.Warn("PASSTHROUGH MODE ENABLED: all transactions will bypass interop filtering")
 		}
 		if cfg.LegacyCheckAccessListFormat {
-			l.Warn("LEGACY CHECK ACCESS LIST FORMAT ENABLED: supervisor_checkAccessList will not reject missing executing chain IDs")
+			l.Warn("LEGACY CHECK ACCESS LIST FORMAT ENABLED: interop_checkAccessList will not reject missing executing chain IDs")
 		}
 
 		if !cfg.MessageExpiryWindowExplicit {
@@ -251,9 +251,8 @@ func (s *Service) initRPCServer(cfg *Config) error {
 		opts...,
 	)
 
-	// Register supervisor query API
 	server.AddAPI(rpc.API{
-		Namespace:     "supervisor",
+		Namespace:     "interop",
 		Service:       &QueryFrontend{backend: s.backend},
 		Authenticated: false,
 	})
