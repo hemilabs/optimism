@@ -378,6 +378,11 @@ contract L2Genesis is Script {
         } else {
             _setImplementationCode(Predeploys.L1_BLOCK_ATTRIBUTES);
         }
+        // Only set the runtime INTEROP feature flag at genesis if the chain is being born at or
+        // beyond the Interop fork.
+        if (_input.useInterop && _input.fork >= uint256(Fork.INTEROP)) {
+            IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).setFeature(Features.INTEROP);
+        }
     }
 
     /// @notice This predeploy is following the safety invariant #1.
