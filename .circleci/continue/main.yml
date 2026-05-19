@@ -665,7 +665,8 @@ jobs:
                   - "<< parameters.directory >>/target/<< parameters.profile >>/rollup-boost"
 
   # Build a single Rust binary from a submodule.
-  rust-build-submodule:
+  # Build a single Rust binary from a vendored (non-submodule) directory.
+  rust-build-vendored:
     docker:
       - image: <<pipeline.parameters.c-rust_base_image>>
     resource_class: xlarge
@@ -687,20 +688,11 @@ jobs:
       - utils/checkout-with-mise:
           checkout-method: blobless
       - run:
-          name: Get << parameters.directory >> submodule HASH
+          name: Get << parameters.directory >> content HASH
           command: |
             mkdir -p .circleci-cache
-            # Verify the path is a git submodule (gitlink). For submodules, ls-tree prints:
-            # 160000 commit <sha> <path>
-            MODE_AND_TYPE="$(git ls-tree HEAD << parameters.directory >> | awk '{print $1 " " $2}')"
-            if [ "$MODE_AND_TYPE" != "160000 commit" ]; then
-              echo "ERROR: << parameters.directory >> is not a submodule path (expected '160000 commit', got '$MODE_AND_TYPE')" >&2
-              git ls-tree HEAD << parameters.directory >> >&2 || true
-              exit 1
-            fi
-
-            git ls-tree HEAD << parameters.directory >> | awk '{print $3}' > .circleci-cache/expected-submod-sha.txt
-            echo "Expected submodule HASH: $(cat .circleci-cache/expected-submod-sha.txt)"
+            git ls-tree -r HEAD << parameters.directory >> | sha256sum | awk '{print $1}' > .circleci-cache/expected-submod-sha.txt
+            echo "Content HASH: $(cat .circleci-cache/expected-submod-sha.txt)"
             echo "<< parameters.binaries >>" | tr ' ' '\n' | awk 'NF' | sort -u > .circleci-cache/expected-binaries.txt
             echo "Expected binaries: $(tr '\n' ' ' < .circleci-cache/expected-binaries.txt)"
       - restore_cache:
@@ -708,7 +700,7 @@ jobs:
           keys:
             - rust-<< parameters.directory >>-v8-{{ checksum ".circleci-cache/expected-submod-sha.txt" }}-{{ checksum ".circleci-cache/expected-binaries.txt" }}
       - run:
-          name: Build << parameters.directory >> submodule (if needed)
+          name: Build << parameters.directory >> (if needed)
           command: |
             ROOT_DIR="$(pwd)"
             BIN_CACHE_DIR="$ROOT_DIR/.circleci-cache/rust-binaries"
@@ -726,9 +718,6 @@ jobs:
             fi
 
             echo "Cache miss - will build"
-            # Only run on cache miss. We intentionally do not cache into the submodule directory so that cache
-            # restore cannot make the submodule path non-empty (which breaks `git submodule update --init`).
-            git submodule update --init --recursive --depth 1 -j 8 --single-branch << parameters.directory >>
 
             if [ "<< parameters.needs_clang >>" = "true" ] && ! command -v clang >/dev/null; then
               for i in 1 2 3; do
@@ -861,6 +850,30 @@ jobs:
           root: .
           paths:
             - ".circleci-cache/rust-binaries"
+
+  # Lint a vendored (non-submodule) Rust directory.
+  rust-lint-vendored:
+    docker:
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge
+    parameters:
+      directory:
+        description: "Directory containing the Cargo workspace"
+        type: string
+      lint_command:
+        description: "Lint command to run inside the directory"
+        type: string
+      needs_clang:
+        description: "Whether to install clang (needed by bindgen for reth-mdbx-sys)"
+        type: boolean
+        default: false
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+      - run:
+          name: Lint << parameters.directory >>
+          command: cd << parameters.directory >> && << parameters.lint_command >>
+          no_output_timeout: 20m
 
   initialize:
     docker:
@@ -2686,6 +2699,19 @@ workflows:
           directory: rust/rollup-boost
           binaries: "rollup-boost"
           build_command: cargo build --release -p rollup-boost --bin rollup-boost
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - rust-lint-vendored:
+          name: rust-lint-op-rbuilder
+          directory: rust/op-rbuilder
+          lint_command: cargo +nightly fmt -- --check && cargo clippy --all-features -- -D warnings
+          needs_clang: true
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - rust-lint-vendored:
+          name: rust-lint-rollup-boost
+          directory: rust/rollup-boost
+          lint_command: cargo +nightly fmt -- --check && cargo clippy -- -D warnings
           context:
             - circleci-repo-readonly-authenticated-github-token
       - rust-binaries-for-sysgo:
