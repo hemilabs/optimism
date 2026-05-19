@@ -59,6 +59,20 @@ func Main(version string) cliapp.LifecycleAction {
 		opservice.ValidateEnvVars(flags.EnvVarPrefix, flags.Flags, l)
 
 		l.Info("Initializing op-interop-filter", "version", version)
+
+		if cfg.Passthrough {
+			l.Warn("PASSTHROUGH MODE ENABLED: all transactions will bypass interop filtering")
+		}
+		if cfg.LegacyCheckAccessListFormat {
+			l.Warn("LEGACY CHECK ACCESS LIST FORMAT ENABLED: interop_checkAccessList will not reject missing executing chain IDs")
+		}
+
+		if !cfg.MessageExpiryWindowExplicit {
+			l.Debug("Using default message expiry window", "window", DefaultMessageExpiryWindow)
+		} else {
+			l.Debug("Message expiry window configured", "window", time.Duration(cfg.MessageExpiryWindow)*time.Second)
+		}
+
 		return NewService(cliCtx.Context, cfg, l)
 	}
 }
@@ -165,9 +179,8 @@ func (s *Service) initRPCServer(cfg *Config) error {
 		opts...,
 	)
 
-	// Register supervisor query API
 	server.AddAPI(rpc.API{
-		Namespace:     "supervisor",
+		Namespace:     "interop",
 		Service:       &QueryFrontend{backend: s.backend},
 		Authenticated: false,
 	})
