@@ -16,7 +16,7 @@ import {
 import { AggregationOutputs, OP_SUCCINCT_FAULT_DISPUTE_GAME_TYPE } from "src/dispute/lib/Types.sol";
 import {
     AlreadyInitialized,
-    BadAuth,
+    AnchorRootNotFound,
     BondTransferFailed,
     ClaimAlreadyResolved,
     GameNotFinalized,
@@ -146,8 +146,8 @@ contract OPSuccinctFaultDisputeGame is Clone, ISemver, IDisputeGame {
     AccessManager internal immutable ACCESS_MANAGER;
 
     /// @notice Semantic version.
-    /// @custom:semver 1.1.0
-    string public constant version = "1.1.0";
+    /// @custom:semver 1.2.0
+    string public constant version = "1.2.0";
 
     /// @notice The starting timestamp of the game.
     Timestamp public createdAt;
@@ -214,6 +214,115 @@ contract OPSuccinctFaultDisputeGame is Clone, ISemver, IDisputeGame {
         ANCHOR_STATE_REGISTRY = _anchorStateRegistry;
         ACCESS_MANAGER = _accessManager;
     }
+
+    /// @notice Getter for the root claim.
+    /// @return rootClaim_ The root claim of the DisputeGame.
+    function rootClaim() public pure returns (Claim rootClaim_) {
+        rootClaim_ = Claim.wrap(_getArgBytes32(0x14));
+    }
+
+    /// @notice Getter for the parent hash of the L1 block when the dispute game was created.
+    /// @return l1Head_ The parent hash of the L1 block when the dispute game was created.
+    function l1Head() public pure returns (Hash l1Head_) {
+        l1Head_ = Hash.wrap(_getArgBytes32(0x34));
+    }
+
+    /// @notice Getter for the game type.
+    /// @return gameType_ The type of proof system being used.
+    function gameType() public pure returns (GameType gameType_) {
+        gameType_ = GameType.wrap(_getArgUint32(0x54));
+    }
+
+    /// @notice The L2 sequence number for which this game proposes an output root.
+    /// @dev Per spec, this value must fit within a uint64.
+    function l2SequenceNumber() public pure returns (uint256 l2SequenceNumber_) {
+        l2SequenceNumber_ = _getArgUint256(0x58);
+    }
+
+    /// @notice The parent index of the game.
+    function parentIndex() public pure returns (uint32 parentIndex_) {
+        parentIndex_ = _getArgUint32(0x78);
+    }
+
+    /// @notice Returns the absolute prestate commitment (ZK circuit identity).
+    function absolutePrestate() public pure returns (bytes32 absolutePrestate_) {
+        absolutePrestate_ = _getArgBytes32(0x7C);
+    }
+
+    /// @notice Returns the ZK verifier contract.
+    function verifier() public pure returns (IZKVerifier verifier_) {
+        verifier_ = IZKVerifier(_getArgAddress(0x9C));
+    }
+
+    /// @notice Returns the max challenge duration.
+    function maxChallengeDuration() public pure returns (Duration maxChallengeDuration_) {
+        maxChallengeDuration_ = Duration.wrap(_getArgUint64(0xB0));
+    }
+
+    /// @notice Returns the max prove duration.
+    function maxProveDuration() public pure returns (Duration maxProveDuration_) {
+        maxProveDuration_ = Duration.wrap(_getArgUint64(0xB8));
+    }
+
+    /// @notice Returns the challenger bond amount.
+    function challengerBond() public pure returns (uint256 challengerBond_) {
+        challengerBond_ = _getArgUint256(0xC0);
+    }
+
+    /// @notice Returns the anchor state registry contract.
+    function anchorStateRegistry() public pure returns (IAnchorStateRegistry registry_) {
+        registry_ = IAnchorStateRegistry(_getArgAddress(0xE0));
+    }
+
+    /// @notice Returns the DelayedWETH contract used for bond custody.
+    function weth() public pure returns (IDelayedWETH weth_) {
+        weth_ = IDelayedWETH(payable(_getArgAddress(0xF4)));
+    }
+
+    /// @notice Returns the L2 chain ID.
+    function l2ChainId() public pure returns (uint256 l2ChainId_) {
+        l2ChainId_ = _getArgUint256(0x108);
+    }
+
+    /// @notice Getter for the extra data.
+    /// @return extraData_ Any extra data supplied to the dispute game contract by the creator.
+    function extraData() public pure returns (bytes memory extraData_) {
+        // The extra data starts at the second word within the cwia calldata and
+        // is 36 bytes long. 32 bytes are for the l2SequenceNumber, 4 bytes are for the parentIndex.
+        extraData_ = _getArgBytes(0x58, 0x24);
+    }
+
+    /// @notice Only the starting block number of the game.
+    function startingBlockNumber() external view returns (uint256 startingBlockNumber_) {
+        startingBlockNumber_ = startingProposal.l2SequenceNumber;
+    }
+
+    /// @notice Starting output root of the game.
+    function startingRootHash() external view returns (Hash startingRootHash_) {
+        startingRootHash_ = startingProposal.root;
+    }
+
+    /// @notice Getter for the root claim for a given L2 chain ID.
+    /// @param _chainId The L2 chain ID to get the root claim for.
+    /// @return rootClaim_ The root claim of the DisputeGame.
+    function rootClaimByChainId(uint256 _chainId) public pure returns (Claim rootClaim_) {
+        if (_chainId != l2ChainId()) revert UnknownChainId();
+        rootClaim_ = rootClaim();
+    }
+
+    /// @notice Returns the components of the game UUID's preimage provided in the cwia payload.
+    /// @return gameType_ The type of proof system being used.
+    /// @return rootClaim_ The root claim of the DisputeGame.
+    /// @return extraData_ Any extra data supplied to the dispute game contract by the creator.
+    function gameData() external pure returns (GameType gameType_, Claim rootClaim_, bytes memory extraData_) {
+        gameType_ = gameType();
+        rootClaim_ = rootClaim();
+        extraData_ = extraData();
+    }
+
+    ////////////////////////////////////////////////////////////////
+    //                    INITIALIZATION                          //
+    ////////////////////////////////////////////////////////////////
 
     /// @notice Initializes the contract.
     /// @dev This function may only be called once.
@@ -284,8 +393,8 @@ contract OPSuccinctFaultDisputeGame is Clone, ISemver, IDisputeGame {
             if (parent.status() == GameStatus.CHALLENGER_WINS) revert InvalidParentGame();
         } else {
             // When there is no parent game, the starting output root is the anchor state for the game type.
-            (startingProposal.root, startingProposal.l2SequenceNumber) =
-                IAnchorStateRegistry(ANCHOR_STATE_REGISTRY).anchors(GAME_TYPE);
+            (startingProposal.root, startingProposal.l2SequenceNumber) = anchorStateRegistry().getAnchorRoot();
+            if (startingProposal.root.raw() == bytes32(0)) revert AnchorRootNotFound();
         }
 
         // Do not allow the game to be initialized if the root claim corresponds to a block at or before the
