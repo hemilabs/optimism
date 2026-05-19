@@ -45,6 +45,69 @@ var (
 		Value:     "",
 		TakesFile: true,
 	}
+	AdminRPCAddrFlag = &cli.StringFlag{
+		Name:    "admin.rpc.addr",
+		Usage:   "Address to bind admin RPC server. If empty, admin RPC is disabled.",
+		EnvVars: prefixEnvVars("ADMIN_RPC_ADDR"),
+		Value:   "",
+	}
+	AdminRPCPortFlag = &cli.IntFlag{
+		Name:    "admin.rpc.port",
+		Usage:   "Port to bind admin RPC server.",
+		EnvVars: prefixEnvVars("ADMIN_RPC_PORT"),
+		Value:   8546,
+	}
+	RPCAddrFlag = &cli.StringFlag{
+		Name:    "rpc.addr",
+		Usage:   "RPC listening address",
+		EnvVars: prefixEnvVars("RPC_ADDR"),
+		Value:   "0.0.0.0",
+	}
+	RPCPortFlag = &cli.IntFlag{
+		Name:    "rpc.port",
+		Usage:   "RPC listening port",
+		EnvVars: prefixEnvVars("RPC_PORT"),
+		Value:   8545,
+	}
+	PollIntervalFlag = &cli.DurationFlag{
+		Name:    "poll-interval",
+		Usage:   "Interval for polling new blocks from L2 RPCs (e.g., 2s, 500ms)",
+		EnvVars: prefixEnvVars("POLL_INTERVAL"),
+		Value:   2 * time.Second,
+	}
+	ValidationIntervalFlag = &cli.DurationFlag{
+		Name:    "validation-interval",
+		Usage:   "Interval for cross-chain validation loop (e.g., 500ms, 1s)",
+		EnvVars: prefixEnvVars("VALIDATION_INTERVAL"),
+		Value:   500 * time.Millisecond,
+	}
+	ReorgRecoveryEnabledFlag = &cli.BoolFlag{
+		Name:    "reorg-recovery-enabled",
+		Usage:   "Automatically resolve reorg-triggered failsafe by rewinding logs DBs to finalized.",
+		EnvVars: prefixEnvVars("REORG_RECOVERY_ENABLED"),
+	}
+	RPCConcurrencyFlag = &cli.IntFlag{
+		Name:    "rpc-concurrency",
+		Usage:   "Maximum number of concurrent RPC requests per chain",
+		EnvVars: prefixEnvVars("RPC_CONCURRENCY"),
+		Value:   DefaultRPCConcurrency,
+	}
+	FetchConcurrencyFlag = &cli.IntFlag{
+		Name:    "fetch-concurrency",
+		Usage:   "Number of blocks to fetch concurrently during ingestion. Must be <= rpc-concurrency.",
+		EnvVars: prefixEnvVars("FETCH_CONCURRENCY"),
+		Value:   DefaultFetchConcurrency,
+	}
+	SupportLegacyCheckAccessListFormatFlag = &cli.BoolFlag{
+		Name:    "support-legacy-check-access-list-format",
+		Usage:   "Support legacy interop_checkAccessList requests that omit executing chainID. DANGEROUS: intended only for compatibility with legacy clients; access-list source-chain validation still runs.",
+		EnvVars: prefixEnvVars("SUPPORT_LEGACY_CHECK_ACCESS_LIST_FORMAT"),
+	}
+	DangerouslyEnablePassthroughFlag = &cli.BoolFlag{
+		Name:    "dangerously-enable-passthrough",
+		Usage:   "Allow all transactions through without interop filtering. DANGEROUS: disables all executing message validation.",
+		EnvVars: prefixEnvVars("DANGEROUSLY_ENABLE_PASSTHROUGH"),
+	}
 )
 
 var requiredFlags = []cli.Flag{
