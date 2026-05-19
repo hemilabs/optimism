@@ -781,6 +781,17 @@
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "GameType",
+        "name": "_gameType",
+        "type": "uint32"
+      }
+    ],
+    "name": "OPContractsManagerV2_ZeroGameImplementation",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "OPContractsManagerV2_UnsupportedGameType",
     "type": "error"
