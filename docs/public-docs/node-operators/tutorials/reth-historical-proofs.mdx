@@ -11,7 +11,7 @@ Use historical proofs storage format v2 by setting `--proofs-history.storage-ver
 
 ## Problem
 
-Reth's default `eth_getProof` implementation works by reverting in-memory state diffs backward from the current tip. For blocks older than ~7 days, this causes unbounded memory growth and out-of-memory (OOM) crashes — a critical issue for infrastructure serving rollup fault proofs and indexers that query historical state.
+Reth's default eth_getProof implementation works by reverting in-memory state diffs backward from the current tip. The --rpc.eth-proof-window <num_blocks> flag (default 0) controls how far back from the current tip the node can serve eth_getProof responses. For withdrawal proving to work, the window must reach back to the block referenced by any dispute game created after the withdrawal was submitted on L2.
 
 ## Solution
 
@@ -42,7 +42,7 @@ A `BlockChangeSet` reverse index enables efficient pruning: given a block number
 
 ## Prerequisites
 
-*   op-reth v2.1.0 or above.
+*   [op-reth v2.2.3 or later](https://github.com/ethereum-optimism/optimism/releases/tag/op-reth%2Fv2.2.3) — required to enable historical proofs v2 (`--proofs-history.storage-version=v2`).
 *   An op-reth datadir, either initialized from genesis or restored from a [snapshot](https://datadirs.optimism.io/) (covered in the next two sections).
 *   Basic understanding of [execution client configuration](/node-operators/guides/configuration/execution-clients).
 *   Sufficient disk: estimate `chain_size + 20% buffer` for the proofs database (e.g., ~1 TB for 4 weeks on Base at 2s block time).
@@ -134,6 +134,10 @@ Once initialized, you can start the execution client with the `--proofs-history`
 Make sure to include all other standard flags required for your network (e.g., specific bootnodes). See the configuration reference for details.
 </Info>
 
+<Info>
+The default `--proofs-history.window` is **1,296,000 blocks**, corresponding to ~30 days at 2s block times. For chains with a different block time, set `--proofs-history.window=<num_blocks>` explicitly using `target_retention_seconds / block_time_seconds`.
+</Info>
+
 ## Running Consensus Node
 
 Start the consensus client to drive the execution client. You can use either `op-node` or `kona-node`.
@@ -222,6 +226,7 @@ When this happens, op-reth exits with an error indicating the number of blocks t
 op-reth proofs prune \
   --datadir /path/to/reth-datadir \
   --proofs-history.storage-path /path/to/proofs-db \
+  --proofs-history.storage-version v2 \
   --proofs-history.window 1296000
 ```
 
@@ -233,6 +238,7 @@ Recover from corruption by reverting the proofs database to a specific block:
 op-reth proofs unwind \
   --datadir /path/to/reth-datadir \
   --proofs-history.storage-path /path/to/proofs-db \
+  --proofs-history.storage-version v2 \
   --target <BLOCK_NUMBER>
 ```
 
@@ -253,5 +259,6 @@ Benchmarked on Base Sepolia (~700k block window, WETH contract):
 
 ## Next steps
 
+*   See the [op-reth v2.2.3 release notes](https://github.com/ethereum-optimism/optimism/releases/tag/op-reth%2Fv2.2.3) for the change that introduced the historical proof store (v2).
 *   See the [op-reth historical proof configuration reference](/node-operators/reference/op-reth-historical-proof-config) for the full set of `--proofs-history.*` flags, management commands, RPC endpoints, and Prometheus metrics.
 *   See the [op-reth configuration reference](/node-operators/reference/op-reth-config) for all standard op-reth flags inherited by this fork.
