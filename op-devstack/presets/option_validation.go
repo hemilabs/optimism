@@ -130,20 +130,7 @@ const minimalWithConductorsPresetSupportedOptionKinds = optionKindDeployer |
 const simpleWithSyncTesterPresetSupportedOptionKinds = minimalPresetSupportedOptionKinds |
 	optionKindGlobalSyncTesterEL
 
-const singleChainInteropPresetSupportedOptionKinds = optionKindDeployer |
-	optionKindBatcher |
-	optionKindProposer |
-	optionKindGlobalL2CL |
-	optionKindL1EL |
-	optionKindAddedGameType |
-	optionKindRespectedGameType |
-	optionKindTimeTravel |
-	optionKindMaxSequencingWindow |
-	optionKindRequireInteropNotAtGen |
-	optionKindAfterBuild |
-	optionKindProofValidation
-
-const simpleInteropSuperProofsPresetSupportedOptionKinds = optionKindDeployer |
+const supernodeProofsPresetSupportedOptionKinds = optionKindDeployer |
 	optionKindBatcher |
 	optionKindProposer |
 	optionKindGlobalL2CL |
