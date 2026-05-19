@@ -82,9 +82,9 @@ type Config struct {
 
 	GameTypes []gameTypes.GameType // Type of games supported
 
-	RollupRpc     string   // L2 Rollup RPC Url
-	SupervisorRPC string   // L2 supervisor RPC URL
-	L2Rpcs        []string // L2 RPC Url
+	RollupRpc string   // L2 Rollup RPC Url
+	SuperRPC  string   // L2 RPC URL for op-supernode super roots
+	L2Rpcs    []string // L2 RPC Url
 
 	// Specific to the cannon trace provider
 	Cannon                            vm.Config

@@ -52,8 +52,8 @@ type RegisterTask struct {
 		poststateBlock uint64) (*trace.Accessor, error)
 }
 
-func NewSuperCannonKonaRegisterTask(gameType gameTypes.GameType, cfg *config.Config, m caching.Metrics, serverExecutor vm.OracleServerExecutor, rootProvider *sources.SupervisorClient, superNodeProvider *sources.SuperNodeClient, syncValidator gameTypes.SyncValidator) *RegisterTask {
-	return newSuperCannonVMRegisterTaskWithConfig(gameType, cfg, m, serverExecutor, rootProvider, superNodeProvider, syncValidator, cfg.CannonKona, cfg.CannonKonaAbsolutePreStateBaseURL, cfg.CannonKonaAbsolutePreState)
+func NewSuperCannonKonaRegisterTask(gameType gameTypes.GameType, cfg *config.Config, m caching.Metrics, serverExecutor vm.OracleServerExecutor, superNodeProvider *sources.SuperNodeClient, syncValidator gameTypes.SyncValidator) *RegisterTask {
+	return newSuperCannonVMRegisterTaskWithConfig(gameType, cfg, m, serverExecutor, superNodeProvider, syncValidator, cfg.CannonKona, cfg.CannonKonaAbsolutePreStateBaseURL, cfg.CannonKonaAbsolutePreState)
 }
 
 func newSuperCannonVMRegisterTaskWithConfig(
@@ -61,8 +61,8 @@ func newSuperCannonVMRegisterTaskWithConfig(
 	cfg *config.Config,
 	m caching.Metrics,
 	serverExecutor vm.OracleServerExecutor,
-	rootProvider super.RootProvider,
-	syncValidator generic.SyncValidator,
+	superNodeProvider *sources.SuperNodeClient,
+	syncValidator gameTypes.SyncValidator,
 	vmCfg vm.Config,
 	preStateBaseURL *url.URL,
 	preState string,
@@ -73,7 +73,7 @@ func newSuperCannonVMRegisterTaskWithConfig(
 		syncValidator:          syncValidator,
 		skipPrestateValidation: gameType == gameTypes.SuperPermissionedGameType,
 		getTopPrestateProvider: func(ctx context.Context, prestateTimestamp uint64) (faultTypes.PrestateProvider, error) {
-			return super.NewSuperRootPrestateProvider(rootProvider, prestateTimestamp), nil
+			return super.NewSuperNodePrestateProvider(superNodeProvider, prestateTimestamp), nil
 		},
 		getBottomPrestateProvider: cachePrestates(
 			gameType,
@@ -97,7 +97,7 @@ func newSuperCannonVMRegisterTaskWithConfig(
 			poststateBlock uint64) (*trace.Accessor, error) {
 			provider := vmPrestateProvider.(*vm.PrestateProvider)
 			preimagePrestateProvider := prestateProvider.(super.PreimagePrestateProvider)
-			return super.NewSuperCannonTraceAccessor(logger, m, vmCfg, serverExecutor, preimagePrestateProvider, rootProvider, provider.PrestatePath(), dir, l1Head, splitDepth, prestateBlock, poststateBlock)
+			return super.NewSuperCannonTraceAccessor(logger, m, vmCfg, serverExecutor, preimagePrestateProvider, superNodeProvider, provider.PrestatePath(), dir, l1Head, splitDepth, prestateBlock, poststateBlock)
 		},
 	}
 }
