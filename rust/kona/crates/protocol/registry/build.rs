@@ -13,17 +13,24 @@ use kona_genesis::{
 use serde::de::DeserializeOwned;
 
 fn main() {
-    // Always reset `etc/depsets.json` to the empty list before deriving the embedded
-    // depsets from KONA_BIND / KONA_CUSTOM_CONFIGS, so the file content is deterministic
-    // for the configured inputs and never carries stale entries from a prior build.
+    // The three committed snapshots under `etc/` are `include_str!`d at compile time,
+    // but `include_str!` does not register file dependencies with cargo. Declare them
+    // here so a hand-edit, a `KONA_BIND=true` regeneration, or a custom-config merge
+    // busts the cache instead of silently reusing a stale compilation of `lib.rs`.
+    println!("cargo:rerun-if-changed=etc/chainList.json");
+    println!("cargo:rerun-if-changed=etc/configs.json");
+    println!("cargo:rerun-if-changed=etc/depsets.json");
+
     let etc_dir = std::path::Path::new("etc");
     if !etc_dir.exists() {
         std::fs::create_dir_all(etc_dir).unwrap();
     }
     let depsets_path = std::path::Path::new("etc/depsets.json");
-    write_depsets(depsets_path, &[]);
 
     // If the `KONA_BIND` environment variable is _not_ set, then return early.
+    // The committed `etc/depsets.json` snapshot is the authoritative input in this
+    // mode; do not touch it. (Custom-config merges, if enabled, additively layer
+    // on top of the committed snapshot.)
     let kona_bind: bool =
         std::env::var("KONA_BIND").unwrap_or_else(|_| "false".to_string()) == "true";
     println!("cargo:rerun-if-env-changed=KONA_BIND");
@@ -32,8 +39,20 @@ fn main() {
         return;
     }
 
-    // Get the directory of this file from the environment
-    let src_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    // Reset `etc/depsets.json` to the empty list before re-deriving from the
+    // superchain-registry submodule, so the file content is deterministic for the
+    // configured inputs and never carries stale entries from a prior build.
+    write_depsets(depsets_path, &[]);
+
+    // Resolve the monorepo root via `git rev-parse --show-toplevel` so we don't
+    // depend on this crate's location inside the workspace.
+    let repo_root = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .expect("failed to run `git rev-parse --show-toplevel`");
+    assert!(repo_root.status.success(), "`git rev-parse --show-toplevel` failed");
+    let repo_root = String::from_utf8(repo_root.stdout).unwrap();
+    let repo_root = repo_root.trim_end();
 
     // Check if the `superchain-registry` directory exists
     let superchain_registry = format!("{src_dir}/superchain-registry");
@@ -119,14 +138,6 @@ fn merge_custom_configs() {
         std::env::var("KONA_CUSTOM_CONFIGS").unwrap_or_else(|_| "false".to_string()) == "true";
     println!("cargo:rerun-if-env-changed=KONA_CUSTOM_CONFIGS");
     println!("cargo:rerun-if-env-changed=KONA_CUSTOM_CONFIGS_TEST");
-
-    // if we're running tests, bust the cache if the base etc configs are updated. This ensures that
-    // the test build can be repeated after modifying the base configs
-    if std::env::var("KONA_CUSTOM_CONFIGS_TEST") == Ok("true".to_string()) {
-        println!("cargo:rerun-if-changed=etc/chainList.json");
-        println!("cargo:rerun-if-changed=etc/configs.json");
-        println!("cargo:rerun-if-changed=etc/depsets.json");
-    }
 
     if !kona_custom_configs {
         return;

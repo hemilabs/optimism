@@ -3013,7 +3013,7 @@
         "name": "rehearsal-0-bn",
         "l1": {
           "chain_id": 11155111,
-          "public_rpc": "https://ethereum-sepolia-rpc.publicnode.com",
+          "public_rpc": "https://ci-sepolia-l1-archive.optimism.io",
           "explorer": ""
         },
         "hardforks": {
@@ -3107,6 +3107,12 @@
             "PermissionedDisputeGame": null,
             "PreimageOracle": null,
             "DataAvailabilityChallenge": null
+          },
+          "interop": {
+            "dependencies": {
+              "420120009": {},
+              "420120010": {}
+            }
           }
         },
         {
@@ -3193,6 +3199,12 @@
             "PermissionedDisputeGame": null,
             "PreimageOracle": null,
             "DataAvailabilityChallenge": null
+          },
+          "interop": {
+            "dependencies": {
+              "420120009": {},
+              "420120010": {}
+            }
           }
         }
       ]
