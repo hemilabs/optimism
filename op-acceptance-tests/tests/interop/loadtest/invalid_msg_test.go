@@ -9,13 +9,12 @@ import (
 	"sync"
 	"testing"
 
+	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/txinclude"
 	"github.com/ethereum-optimism/optimism/op-service/txintent"
 	"github.com/ethereum-optimism/optimism/op-service/txplan"
-	suptypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 )
 
@@ -60,15 +59,15 @@ func makeInvalidPayloadHash(msg suptypes.Message) suptypes.Message {
 type InvalidExecMsgSpammer struct {
 	l2             *L2
 	eoa            *SyncEOA
-	validInitMsg   suptypes.Message
-	makeInvalidFns *RoundRobin[makeInvalidInitMsgFn]
+	validInitMsg   messages.Message
+	makeInvalidFns *RoundRobin[dsl.InvalidMsgFn]
 }
 
 var _ Spammer = (*InvalidExecMsgSpammer)(nil)
 
 // NewInvalidExecMsgSpammer returns an InvalidExecutor. It assumes  validInitMsg is a valid
 // initiating message on a source chain.
-func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg suptypes.Message) *InvalidExecMsgSpammer {
+func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg messages.Message) *InvalidExecMsgSpammer {
 	// Fund an EOA that will be spamming the invalid transactions. It should never need to spend
 	// any wei, but we don't want to trigger mempool balance checks.
 	eoa := l2.Wallet.NewEOA(l2.EL)

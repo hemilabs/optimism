@@ -15,6 +15,8 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-interop-filter/metrics"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
 )
 
 // Backend coordinates chain ingesters and handles the failsafe state.
@@ -142,7 +144,7 @@ func classifyRejectionReason(err error) string {
 // CheckAccessList validates the given access list entries.
 // This is a stub implementation that always returns ErrUninitialized.
 func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Hash,
-	minSafety types.SafetyLevel, execDescriptor types.ExecutingDescriptor) error {
+	minSafety types.SafetyLevel, execDescriptor messages.ExecutingDescriptor) error {
 
 	start := time.Now()
 	defer func() {
@@ -185,9 +187,9 @@ func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Has
 
 	remaining := inboxEntries
 	for len(remaining) > 0 {
-		var access types.Access
+		var access messages.Access
 		var err error
-		remaining, access, err = types.ParseAccess(remaining)
+		remaining, access, err = messages.ParseAccess(remaining)
 		if err != nil {
 			b.metrics.RecordCheckAccessList(false)
 			b.metrics.RecordCheckAccessListRejection("parse_error")
