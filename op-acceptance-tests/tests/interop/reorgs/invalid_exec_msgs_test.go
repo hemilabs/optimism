@@ -186,7 +186,6 @@ func testReorgInvalidExecMsg(gt *testing.T, txModifierFn func(msg *suptypes.Mess
 			L1Origin: nil,
 		})
 		require.NoError(t, err, "Expected to be able to create a new block job for sequencing on op-test-sequencer, but got error")
-		time.Sleep(2 * time.Second)
 
 		// include simple transfer tx in opened block
 		{
@@ -204,7 +203,15 @@ func testReorgInvalidExecMsg(gt *testing.T, txModifierFn func(msg *suptypes.Mess
 
 		err = ia.Next(ctx)
 		require.NoError(t, err, "Expected to be able to call Next() after New() on op-test-sequencer, but got error")
-		time.Sleep(2 * time.Second)
+		// Wait for the op-node to observe the block the test-sequencer just committed
+		// before handing sequencing back to it via StartSequencer.
+		expectedUnsafe := sys.L2ELA.BlockRefByLabel(eth.Unsafe)
+		waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+		err = wait.For(waitCtx, 100*time.Millisecond, func() (bool, error) {
+			return sys.L2ACL.SyncStatus().UnsafeL2.Hash == expectedUnsafe.Hash, nil
+		})
+		waitCancel()
+		require.NoError(t, err, "op-node never observed test-sequencer's committed unsafe head %s", expectedUnsafe.Hash)
 	}
 
 	// continue sequencing with op-node
