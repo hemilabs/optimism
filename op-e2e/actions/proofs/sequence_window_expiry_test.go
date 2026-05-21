@@ -44,8 +44,112 @@ func runSequenceWindowExpireTest(gt *testing.T, testCfg *helpers.TestCfg[any]) {
 	l2SafeHead = env.Engine.L2Chain().CurrentSafeBlock()
 	require.Greater(t, l2SafeHead.Number.Uint64(), uint64(0))
 
-	// Run the FPP on one of the auto-derived blocks.
-	env.RunFaultProofProgram(t, l2SafeHead.Number.Uint64()/2, testCfg.CheckResult, testCfg.InputParams...)
+	env.RunFaultProofProgram(t, bigs.Uint64Strict(l2SafeHead.Number)/2, testCfg.CheckResult, testCfg.InputParams...)
+
+	// Set recover mode on the sequencer:
+	env.Sequencer.ActSetRecoverMode(t, true)
+	// Since recover mode only affects the L2 CL (op-node),
+	// it won't stop the test environment injecting transactions
+	// directly into the engine. So we will force the engine
+	// to ignore such injections if recover mode is enabled.
+	env.Engine.EngineApi.SetForceEmpty(true)
+
+	// Define "lag" as the difference between the current L1 block number and the safe L2 block's L1 origin number.
+	computeLag := func() int {
+		ss := env.Sequencer.SyncStatus()
+		return int(ss.CurrentL1.Number - ss.SafeL2.L1Origin.Number)
+	}
+
+	// Define "drift" as the difference between the current L2 block's timestamp and the unsafe L2 block's L1 origin's timestamp.
+	computeDrift := func() int {
+		ss := env.Sequencer.SyncStatus()
+		l2header, err := env.Engine.EthClient().HeaderByHash(t.Ctx(), ss.UnsafeL2.Hash)
+		require.NoError(t, err)
+		l1header, err := env.Miner.EthClient().HeaderByHash(t.Ctx(), ss.UnsafeL2.L1Origin.Hash)
+		require.NoError(t, err)
+		t.Log("l2header.Time", l2header.Time)
+		t.Log("l1header.Time", l1header.Time)
+		return int(l2header.Time) - int(l1header.Time)
+	}
+
+	// Build both chains and assert the L1 origin catches back up with the tip of the L1 chain.
+	lag := computeLag()
+	t.Log("lag", lag)
+	drift := computeDrift()
+	t.Log("drift", drift)
+	require.GreaterOrEqual(t, uint64(lag), tp.SequencerWindowSize, "Lag is less than sequencing window size")
+	numL1Blocks := 0
+	timeout := tp.SequencerWindowSize * 50
+
+	// Track Bob's nonce locally. RecoverMode means his txs are never included,
+	// so the on-chain nonce never advances; relying on PendingNonceAt across
+	// chain-head events has been observed to flake with "already known".
+	bobL2PoolNonce, err := env.Engine.EthClient().PendingNonceAt(t.Ctx(), env.Bob.Address())
+	require.NoError(t, err, "must read Bob's initial L2 pool nonce")
+
+	for numL1Blocks < int(timeout) {
+		for range 100 * tp.L1BlockTime / env.Sd.RollupCfg.BlockTime { // go at 100x real time
+			err := env.Sequencer.ActMaybeL2StartBlock(t)
+			if err != nil {
+				break
+			}
+			env.Bob.L2.ActResetTxOpts(t)
+			env.Bob.L2.ActSetTxNonce(bobL2PoolNonce)(t)
+			env.Bob.L2.ActMakeTx(t)
+			bobL2PoolNonce++
+			env.Engine.ActL2IncludeTx(env.Bob.Address())(t)
+			// RecoverMode (enabled above) should prevent this
+			// transaction from being included in the block, which
+			// is critical for recover mode to work.
+			env.Sequencer.ActL2EndBlock(t)
+			drift = computeDrift()
+			t.Log("drift", drift)
+		}
+		env.BatchMineAndSync(t) // Mines 1 block on L1
+		numL1Blocks++
+		lag = computeLag()
+		t.Log("lag", lag)
+		drift = computeDrift()
+		t.Log("drift", drift)
+		if lag == 1 { // A lag of 1 is the minimum possible.
+			break
+		}
+	}
+
+	if uint64(numL1Blocks) >= timeout {
+		t.Fatal("L1 Origin did not catch up to tip within %d L1 blocks (lag is %d)", numL1Blocks, lag)
+	} else {
+		t.Logf("L1 Origin caught up to within %d blocks of the tip within %d L1 blocks (sequencing window size %d)",
+			lag, numL1Blocks, tp.SequencerWindowSize)
+	}
+
+	switch {
+	case drift == 0:
+		t.Fatal("drift is zero, this implies the unsafe l2 head is pinned to the l1 head")
+	case drift > int(tp.MaxSequencerDrift):
+		t.Fatal("drift is too high")
+	default:
+		t.Log("drift", drift)
+	}
+
+	// Disable recover mode so we can get some user transactions in again.
+	env.Sequencer.ActSetRecoverMode(t, false)
+	env.Engine.EngineApi.SetForceEmpty(false)
+	l2SafeBefore := env.Sequencer.L2Safe()
+	env.Sequencer.ActL2StartBlock(t)
+	env.Bob.L2.ActResetTxOpts(t)
+	env.Bob.L2.ActMakeTx(t)
+	env.Engine.ActL2IncludeTx(env.Bob.Address())(t)
+	env.Sequencer.ActL2EndBlock(t)
+	env.BatchMineAndSync(t)
+	l2Safe := env.Sequencer.L2Safe()
+	require.Equal(t, l2Safe.Number, l2SafeBefore.Number+1, "safe chain did not progress with user transactions")
+	l2SafeBlock, err := env.Engine.EthClient().BlockByHash(t.Ctx(), l2Safe.Hash)
+	require.NoError(t, err)
+	// Assert safe block has at least two transactions
+	require.GreaterOrEqual(t, len(l2SafeBlock.Transactions()), 2, "safe block did not have at least two transactions")
+
+	env.RunFaultProofProgram(t, l2Safe.Number, testCfg.CheckResult, testCfg.InputParams...)
 }
 
 // Runs a that proves a block in a chain where the batcher opens a channel, the sequence window expires, and then the
