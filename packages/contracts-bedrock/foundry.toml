@@ -33,7 +33,8 @@ compilation_restrictions = [
   { paths = "src/L1/opcm/OPContractsManagerV2.sol", optimizer_runs = 5000 },
   { paths = "src/L1/opcm/OPContractsManagerContainer.sol", optimizer_runs = 5000 },
   { paths = "src/L1/OptimismPortal2.sol", optimizer_runs = 5000 },
-  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 5000 }
+  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 5000 },
+  { paths = "src/L2/L2ContractsManager.sol", optimizer_runs = 5000 }
 ]
 
 extra_output = ['devdoc', 'userdoc', 'metadata', 'storageLayout']
@@ -143,7 +144,8 @@ compilation_restrictions = [
   { paths = "src/L1/opcm/OPContractsManagerUtils.sol", optimizer_runs = 0 },
   { paths = "src/L1/opcm/OPContractsManagerUtilsCaller.sol", optimizer_runs = 0 },
   { paths = "src/L1/OptimismPortal2.sol", optimizer_runs = 0 },
-  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 0 }
+  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 0 },
+  { paths = "src/L2/L2ContractsManager.sol", optimizer_runs = 0 }
 ]
 
 [profile.ciheavy.fuzz]
@@ -183,7 +185,8 @@ compilation_restrictions = [
   { paths = "src/L1/opcm/OPContractsManagerUtils.sol", optimizer_runs = 0 },
   { paths = "src/L1/opcm/OPContractsManagerUtilsCaller.sol", optimizer_runs = 0 },
   { paths = "src/L1/OptimismPortal2.sol", optimizer_runs = 0 },
-  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 0 }
+  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 0 },
+  { paths = "src/L2/L2ContractsManager.sol", optimizer_runs = 0 }
 ]
 
 [profile.liteci.fuzz]
@@ -225,7 +228,8 @@ compilation_restrictions = [
   { paths = "src/L1/opcm/OPContractsManagerV2.sol", optimizer_runs = 0 },
   { paths = "src/L1/opcm/OPContractsManagerContainer.sol", optimizer_runs = 0 },
   { paths = "src/L1/OptimismPortal2.sol", optimizer_runs = 0 },
-  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 0 }
+  { paths = "src/universal/StorageSetter.sol", optimizer_runs = 0 },
+  { paths = "src/L2/L2ContractsManager.sol", optimizer_runs = 0 }
 ]
 
 ################################################################
