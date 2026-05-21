@@ -12,7 +12,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/bindings"
 	"github.com/ethereum-optimism/optimism/op-service/txplan"
-	supervisorTypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 func TestL1ToL2Deposit(gt *testing.T) {
@@ -63,8 +64,8 @@ func TestL1ToL2Deposit(gt *testing.T) {
 
 	// Wait for the sequencer to process the deposit
 	t.Require().Eventually(func() bool {
-		head := sys.L2CL.HeadBlockRef(supervisorTypes.LocalUnsafe)
-		return head.L1Origin.Number >= receipt.BlockNumber.Uint64()
+		head := sys.L2CL.HeadBlockRef(safety.LocalUnsafe)
+		return head.L1Origin.Number >= bigs.Uint64Strict(receipt.BlockNumber)
 	}, sys.L1EL.TransactionTimeout(), time.Second, "awaiting deposit to be processed by L2")
 
 	alicel2.WaitForBalance(initialL2Balance.Add(depositAmount))

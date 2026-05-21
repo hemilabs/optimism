@@ -6,7 +6,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/stack"
 	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 func singleChainMultiNodeFromRuntime(t devtest.T, runtime *sysgo.SingleChainRuntime, runSyncChecks bool) *SingleChainMultiNode {
@@ -48,9 +49,30 @@ func singleChainMultiNodeFromRuntime(t devtest.T, runtime *sysgo.SingleChainRunt
 	}
 	if runSyncChecks {
 		// Ensure the follower node is in sync with the sequencer before starting tests.
-		dsl.CheckAll(t,
-			preset.L2CLB.MatchedFn(preset.L2CL, types.CrossSafe, 30),
-			preset.L2CLB.MatchedFn(preset.L2CL, types.LocalUnsafe, 30),
+		// CrossSafe requires derivation to run, which under ELSync can only begin
+		// after the EL completes P2P sync and the node emits its first forkchoice
+		// update — so the wait strategy depends on the follower's sync mode.
+		var crossSafeCheck dsl.CheckFunc
+		opNode, hasOpNode := nodeB.CL.(*sysgo.OpNode)
+		isELSync := hasOpNode && opNode.SyncMode() == nodeSync.ELSync
+		if isELSync {
+			// EL-sync's CrossSafe wait has unpredictable duration in CI. Wait
+			// up to initialSyncCrossSafeELSyncMaxWait, but only as long as the
+			// follower's LocalUnsafe head keeps advancing — if gossip stalls
+			// for initialSyncCrossSafeELSyncStallTimeout we fail fast rather
+			// than burn the whole budget. See #20649.
+			crossSafeCheck = preset.L2CLB.MatchedWithProgressFn(
+				preset.L2CL,
+				safety.CrossSafe, safety.LocalUnsafe,
+				initialSyncCrossSafeELSyncMaxWait,
+				initialSyncCrossSafeELSyncStallTimeout,
+			)
+		} else {
+			crossSafeCheck = preset.L2CLB.MatchedFn(preset.L2CL, safety.CrossSafe, initialSyncCheckAttemptsCrossSafe)
+		}
+		runInitialSyncChecks(t, preset.L2ELB, isELSync,
+			crossSafeCheck,
+			preset.L2CLB.MatchedFn(preset.L2CL, safety.LocalUnsafe, initialSyncCheckAttemptsLocalUnsafe),
 		)
 	}
 	return preset

@@ -14,7 +14,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 // TestSequencingWindowExpiry tests that the sequencing window may expire,
@@ -145,8 +146,8 @@ func TestSequencingWindowExpiry(gt *testing.T) {
 
 	// Build the missing blocks, catch up on local-safe chain
 	dsl.CheckAll(t,
-		sys.L2CLA.AdvancedFn(types.LocalSafe, 20, 100),
-		sys.L2CLA.AdvancedFn(types.LocalUnsafe, 20, 100),
+		sys.L2ACL.AdvancedFn(safety.LocalSafe, 20, 100),
+		sys.L2ACL.AdvancedFn(safety.LocalUnsafe, 20, 100),
 	)
 
 	syncStatus := sys.L2CLA.SyncStatus()

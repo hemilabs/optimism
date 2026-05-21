@@ -16,7 +16,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/txintent"
-	stypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 // This test is known to be flaky
@@ -44,9 +45,20 @@ func TestPreNoInbox(gt *testing.T) {
 		require.Equal(common.Address{}, common.BytesToAddress(implAddrBytes[:]))
 	})
 
-	// try access the sync-status of the supervisor, assert that the sync-status returns the expected error
-	devtest.RunParallel(t, sys.L2Networks(), func(t devtest.T, net *dsl.L2Network) {
-		interopTime := net.Escape().ChainConfig().InteropTime
+	// Phase 2: Verify the derivation pipeline works pre-interop by checking
+	// that both chains advance their local-safe heads (batcher submits to L1,
+	// supernode derives from it), and that CrossSafe and Finalized heads also
+	// advance. Pre-activation, the supernode must not gate these heads on the
+	// interop verifier and must instead fall through to local-safe /
+	// local-finalized. See issue #20191.
+	dsl.CheckAll(t,
+		sys.L2ACL.AdvancedFn(safety.LocalSafe, 5, 100),
+		sys.L2BCL.AdvancedFn(safety.LocalSafe, 5, 100),
+		sys.L2ACL.AdvancedFn(safety.CrossSafe, 5, 100),
+		sys.L2BCL.AdvancedFn(safety.CrossSafe, 5, 100),
+		sys.L2ACL.AdvancedFn(safety.Finalized, 1, 100),
+		sys.L2BCL.AdvancedFn(safety.Finalized, 1, 100),
+	)
 
 		_, err := sys.Supervisor.Escape().QueryAPI().SyncStatus(t.Ctx())
 		require.ErrorContains(err, "supervisor status tracker not ready")
