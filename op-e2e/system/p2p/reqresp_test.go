@@ -24,7 +24,6 @@ import (
 	rollupNode "github.com/ethereum-optimism/optimism/op-node/node"
 	"github.com/ethereum-optimism/optimism/op-node/p2p"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/endpoint"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -51,7 +50,6 @@ func TestSystemP2PAltSync(t *testing.T) {
 			SequencerConfDepth: 0,
 			SequencerEnabled:   false,
 		},
-		InteropConfig:       &interop.Config{},
 		L1EpochPollInterval: time.Second * 4,
 		Sync: sync.Config{
 			SyncModeReqResp: true,
@@ -63,7 +61,6 @@ func TestSystemP2PAltSync(t *testing.T) {
 			SequencerConfDepth: 0,
 			SequencerEnabled:   false,
 		},
-		InteropConfig:       &interop.Config{},
 		L1EpochPollInterval: time.Second * 4,
 		Sync: sync.Config{
 			SyncModeReqResp: true,
@@ -133,7 +130,6 @@ func TestSystemP2PAltSync(t *testing.T) {
 			ListenPort:  0,
 			EnableAdmin: true,
 		},
-		InteropConfig:       &interop.Config{},
 		P2P:                 &p2p.Prepared{HostP2P: h, EnableReqRespSync: true},
 		Metrics:             opmetrics.CLIConfig{Enabled: false}, // no metrics server
 		Pprof:               oppprof.CLIConfig{},
