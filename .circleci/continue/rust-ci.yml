@@ -248,7 +248,7 @@ commands:
     description: "Install zstd compression utility"
     steps:
       - apt-install:
-          packages: "zstd=1.4.8*"
+          packages: "zstd"
 
   gcp-oidc-authenticate:
     description: "Authenticate with GCP using a CircleCI OIDC token."
@@ -698,7 +698,7 @@ jobs:
     docker:
       - image: <<pipeline.parameters.c-rust_base_image>>
     # This job frequently gets killed for smaller resource_class
-    resource_class: xlarge
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -739,7 +739,7 @@ jobs:
     machine:
       image: <<pipeline.parameters.c-base_image>>
       docker_layer_caching: true
-    resource_class: xlarge
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -790,7 +790,7 @@ jobs:
     machine:
       image: <<pipeline.parameters.c-base_image>>
       docker_layer_caching: true
-    resource_class: xlarge
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -816,7 +816,7 @@ jobs:
     machine:
       image: <<pipeline.parameters.c-base_image>>
       docker_layer_caching: true
-    resource_class: xlarge
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -858,7 +858,7 @@ jobs:
     machine:
       image: <<pipeline.parameters.c-base_image>>
       docker_layer_caching: true
-    resource_class: xlarge
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
