@@ -48,8 +48,7 @@ func NewDriver(
 	syncCfg *sync.Config,
 	sequencerConductor conductor.SequencerConductor,
 	altDA AltDAIface,
-	indexingMode bool,
-	hemitrapEnabled bool,
+	superAuthority rollup.SuperAuthority,
 ) *Driver {
 	driverCtx, driverCancel := context.WithCancel(context.Background())
 
@@ -61,7 +60,7 @@ func NewDriver(
 	l1 = metered.NewMeteredL1Fetcher(l1Tracker, metrics)
 	verifConfDepth := confdepth.NewConfDepth(driverCfg.VerifierConfDepth, statusTracker.L1Head, l1)
 
-	ec := engine.NewEngineController(driverCtx, l2, log, metrics, cfg, syncCfg, l1, sys.Register("engine-controller", nil))
+	ec := engine.NewEngineController(driverCtx, l2, log, metrics, cfg, syncCfg, l1, sys.Register("engine-controller", nil), superAuthority)
 	// TODO(#17115): Refactor dependency cycles
 	ec.SetCrossUpdateHandler(statusTracker)
 
@@ -76,7 +75,7 @@ func NewDriver(
 	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec, hemitrapEnabled)
 	sys.Register("attributes-handler", attrHandler)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, indexingMode, l1ChainConfig, hemitrapEnabled)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, l1ChainConfig)
 
 	pipelineDeriver := derive.NewPipelineDeriver(driverCtx, derivationPipeline)
 	sys.Register("pipeline", pipelineDeriver)
@@ -89,18 +88,17 @@ func NewDriver(
 	sys.Register("step-scheduler", schedDeriv)
 
 	syncDeriver := &SyncDeriver{
-		Derivation:          derivationPipeline,
-		SafeHeadNotifs:      safeHeadListener,
-		Engine:              ec,
-		SyncCfg:             syncCfg,
-		Config:              cfg,
-		L1:                  l1,
-		L1Tracker:           l1Tracker,
-		L2:                  l2,
-		Log:                 log,
-		Ctx:                 driverCtx,
-		ManagedBySupervisor: indexingMode,
-		StepDeriver:         schedDeriv,
+		Derivation:     derivationPipeline,
+		SafeHeadNotifs: safeHeadListener,
+		Engine:         ec,
+		SyncCfg:        syncCfg,
+		Config:         cfg,
+		L1:             l1,
+		L1Tracker:      l1Tracker,
+		L2:             l2,
+		Log:            log,
+		Ctx:            driverCtx,
+		StepDeriver:    schedDeriv,
 	}
 	// TODO(#16917) Remove Event System Refactor Comments
 	//  Couple SyncDeriver and EngineController for event refactoring
