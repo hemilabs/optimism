@@ -7,7 +7,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +65,13 @@ func testL2ReorgAfterL1Reorg(gt *testing.T, n int, preChecks, postChecks checksF
 	sys := presets.NewSimpleInterop(t)
 
 	sys.L1Network.WaitForBlock()
+
+	// Build a stable cross-safe foundation before we stop the L1 CL and manually sequence.
+	// This ensures the supernode has verified state that references canonical L1 blocks,
+	// so after the reorg it doesn't need to rewind all the way back to genesis.
+	sys.L2ACL.Advanced(safety.CrossSafe, 20, 100)
+
+	preEarlyChecks(t, sys)
 
 	sys.L1CL.Stop()
 

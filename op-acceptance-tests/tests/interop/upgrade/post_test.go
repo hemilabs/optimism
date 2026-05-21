@@ -15,7 +15,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	stypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -96,7 +97,14 @@ func testSupervisorAnchorBlock(t devtest.T, sys *presets.SimpleInterop) {
 		activationBlock := net.AwaitActivation(t, forks.Interop)
 		sys.Supervisor.WaitForL2HeadToAdvanceTo(net.ChainID(), stypes.CrossSafe, activationBlock)
 
-		logger.Info("Validating anchor block timing",
+		// Wait for the corresponding CL to reach cross-safe past activation
+		if net.ChainID() == sys.L2A.ChainID() {
+			sys.L2ACL.Reached(safety.CrossSafe, activationBlock.Number, 60)
+		} else {
+			sys.L2BCL.Reached(safety.CrossSafe, activationBlock.Number, 60)
+		}
+
+		logger.Info("Validating activation block timing",
 			"chainID", net.ChainID(),
 			"derivedBlockNumber", activationBlock.Number,
 			"interopTime", *forkTimestamp)
@@ -112,17 +120,17 @@ func testSupervisorSafetyProgression(t devtest.T, sys *presets.SimpleInterop) {
 
 	delta := uint64(3) // Minimum blocks of progression expected
 	dsl.CheckAll(t,
-		sys.L2CLA.AdvancedFn(stypes.LocalUnsafe, delta, 30),
-		sys.L2CLB.AdvancedFn(stypes.LocalUnsafe, delta, 30),
+		sys.L2ACL.AdvancedFn(safety.LocalUnsafe, delta, 30),
+		sys.L2BCL.AdvancedFn(safety.LocalUnsafe, delta, 30),
 
-		sys.L2CLA.AdvancedFn(stypes.LocalSafe, delta, 30),
-		sys.L2CLB.AdvancedFn(stypes.LocalSafe, delta, 30),
+		sys.L2ACL.AdvancedFn(safety.LocalSafe, delta, 30),
+		sys.L2BCL.AdvancedFn(safety.LocalSafe, delta, 30),
 
-		sys.L2CLA.AdvancedFn(stypes.CrossUnsafe, delta, 30),
-		sys.L2CLB.AdvancedFn(stypes.CrossUnsafe, delta, 30),
+		sys.L2ACL.AdvancedFn(safety.CrossUnsafe, delta, 30),
+		sys.L2BCL.AdvancedFn(safety.CrossUnsafe, delta, 30),
 
-		sys.L2CLA.AdvancedFn(stypes.CrossSafe, delta, 60),
-		sys.L2CLB.AdvancedFn(stypes.CrossSafe, delta, 60),
+		sys.L2ACL.AdvancedFn(safety.CrossSafe, delta, 60),
+		sys.L2BCL.AdvancedFn(safety.CrossSafe, delta, 60),
 	)
 
 	logger.Info("Supervisor safety progression validation completed successfully")
@@ -146,8 +154,11 @@ func testInteropMessageInclusion(t devtest.T, sys *presets.SimpleInterop) {
 	// Single event in tx so index is 0
 	execMsg := bob.SendExecMessage(initMsg)
 
-	// Phase 5: Verify cross-safe progression
-	verifyInteropMessagesProgression(t, sys, initMsg, execMsg)
+	// Verify cross-safe progression for both messages
+	dsl.CheckAll(t,
+		sys.L2ACL.ReachedRefFn(safety.CrossSafe, initMsg.BlockID(), 60),
+		sys.L2BCL.ReachedRefFn(safety.CrossSafe, execMsg.BlockID(), 60),
+	)
 
 	logger.Info("Interop message inclusion test completed successfully")
 }
