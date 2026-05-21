@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 
 	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 // Backend coordinates chain ingesters and handles the failsafe state.
@@ -124,7 +125,40 @@ func (b *Backend) Stop(ctx context.Context) error {
 
 // FailsafeEnabled returns whether failsafe is enabled
 func (b *Backend) FailsafeEnabled() bool {
-	return false
+	return b.manualFailsafe.Load() || len(b.GetChainErrors()) > 0 || b.crossValidator.Error() != nil
+}
+
+// SetFailsafeEnabled sets the manual failsafe override.
+func (b *Backend) SetFailsafeEnabled(enabled bool) {
+	b.manualFailsafe.Store(enabled)
+	b.metrics.RecordFailsafeEnabled(b.FailsafeEnabled())
+}
+
+// GetChainErrors returns all chains that are in an error state
+func (b *Backend) GetChainErrors() map[eth.ChainID]*IngesterError {
+	errs := make(map[eth.ChainID]*IngesterError)
+	for chainID, ingester := range b.chains {
+		if err := ingester.Error(); err != nil {
+			errs[chainID] = err
+		}
+	}
+	return errs
+}
+
+// Ready returns true if all chains have completed backfill
+func (b *Backend) Ready() bool {
+	for _, ingester := range b.chains {
+		if !ingester.Ready() {
+			return false
+		}
+	}
+
+	return len(b.chains) > 0
+}
+
+// supportedSafetyLevel returns true if the safety level is supported for access list checks.
+func supportedSafetyLevel(level safety.Level) bool {
+	return level == safety.LocalUnsafe || level == safety.CrossUnsafe
 }
 
 // classifyRejectionReason categorizes an error from CheckAccessList into a rejection reason label.
@@ -144,7 +178,7 @@ func classifyRejectionReason(err error) string {
 // CheckAccessList validates the given access list entries.
 // This is a stub implementation that always returns ErrUninitialized.
 func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Hash,
-	minSafety types.SafetyLevel, execDescriptor messages.ExecutingDescriptor) error {
+	minSafety safety.Level, execDescriptor messages.ExecutingDescriptor) error {
 
 	start := time.Now()
 	defer func() {
@@ -173,7 +207,7 @@ func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Has
 		b.metrics.RecordCheckAccessList(false)
 		b.metrics.RecordCheckAccessListRejection("invalid_executing_message")
 		return fmt.Errorf("unsupported safety level %s: only %s and %s are supported",
-			minSafety, types.LocalUnsafe, types.CrossUnsafe)
+			minSafety, safety.LocalUnsafe, safety.CrossUnsafe)
 	}
 
 	if _, ok := b.chains[execDescriptor.ChainID]; !ok {
