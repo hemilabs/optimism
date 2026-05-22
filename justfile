@@ -282,7 +282,7 @@ _go-tests-ci-internal go_test_flags="":
               --rerun-fails=3 \
               --rerun-fails-max-failures=50 \
               --packages="$PARALLEL_PACKAGES" \
-              -- -parallel="$PARALLEL" -coverprofile=coverage-"$NODE_INDEX".out {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
+              -- -p=4 -parallel="$PARALLEL" {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
       else
           echo "ERROR: Node $NODE_INDEX/$NODE_TOTAL has no packages to run! Perhaps parallelism is set too high? (ALL_TEST_PACKAGES has $(echo "$ALL_PACKAGES" | wc -w) packages)"
           exit 1
@@ -294,7 +294,7 @@ _go-tests-ci-internal go_test_flags="":
           --rerun-fails=3 \
           --rerun-fails-max-failures=50 \
           --packages="$ALL_PACKAGES" \
-          -- -parallel="$PARALLEL" -coverprofile=coverage.out {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
+          -- -p=4 -parallel="$PARALLEL" {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
   fi
 
 # Runs short Go tests with gotestsum for CI.
@@ -327,7 +327,7 @@ go-tests-fraud-proofs-ci:
       --rerun-fails=3 \
       --rerun-fails-max-failures=50 \
       --packages="{{FRAUD_PROOF_TEST_PKGS}}" \
-      -- -parallel="$PARALLEL" -coverprofile=coverage.out -timeout={{TEST_TIMEOUT}}
+      -- -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}}
 
 # Runs comprehensive Go tests (alias for go-tests).
 test: go-tests
