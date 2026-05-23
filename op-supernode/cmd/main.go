@@ -135,6 +135,9 @@ func createVirtualNodeConfigs(cliCtx *cli.Context, cfg *config.CLIConfig, l log.
 		}
 		vnCfgs[eth.ChainIDFromUInt64(chainID)] = cfg
 	}
+	if err := applySupernodeDependencySet(cfg, vnCfgs); err != nil {
+		return nil, err
+	}
 	return vnCfgs, nil
 }
 
