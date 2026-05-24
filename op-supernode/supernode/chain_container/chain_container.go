@@ -198,17 +198,12 @@ func NewChainContainer(
 			log.Warn("failed to attach in-proc rollup client (initial)", "err", err)
 		}
 	}
-	// Initialize engine controller (separate connection, not an op-node override) with a short setup timeout
-	if vncfg.L2 != nil {
-		setupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		// Provide contextual logger to engine controller
-		engLog := log.New("chain_id", chainID.String(), "component", "engine_controller")
-		if eng, err := engine_controller.NewEngineControllerFromConfig(setupCtx, engLog, vncfg); err != nil {
-			log.Error("failed to setup engine controller", "err", err)
-		} else {
-			c.engine = eng
-		}
+	// Initialize the deny list for block invalidation
+	denyListPath := c.subPath("denylist")
+	if denyList, err := OpenDenyList(denyListPath); err != nil {
+		log.Error("failed to open deny list", "err", err)
+	} else {
+		c.denyList = denyList
 	}
 	return c
 }
@@ -305,6 +300,18 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 		}
 		if c.stop.Load() {
 			break
+		}
+
+		// Initialize engine controller if not yet connected (retries on each VN restart)
+		if c.engine == nil && c.vncfg.L2 != nil {
+			setupCtx, setupCancel := context.WithTimeout(ctx, 10*time.Second)
+			engLog := c.log.New("chain_id", c.chainID.String(), "component", "engine_controller")
+			if eng, engErr := engine_controller.NewEngineControllerFromConfig(setupCtx, engLog, c.vncfg); engErr != nil {
+				c.log.Error("failed to setup engine controller", "err", engErr)
+			} else {
+				c.engine = eng
+			}
+			setupCancel()
 		}
 
 		// start the virtual node
