@@ -5,6 +5,7 @@ KONA_REPO_URL=https://github.com/op-rs/kona
 
 TMP_DIR=$(mktemp -d)
 function cleanup() {
+  git -C "${REPO_ROOT}" worktree remove "${WORKTREE_DIR}" --force 2> /dev/null || true
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
@@ -80,22 +81,19 @@ function build_op_program_prestate() {
   # use --force to overwrite any mise.toml changes
   git checkout --force "${VERSION}" > "${LOG_FILE}" 2>&1
   if [ -f mise.toml ]; then
-    echo "Install dependencies with mise" >> "${LOG_FILE}"
-    # we rely only on go and jq for the reproducible-prestate build.
-    # The mise cache should already have jq preinstalled
-    # But we need to ensure that this ${VERSION} has the correct go version
-    # So we replace the mise.toml with a minimal one that only specifies go
-    # Otherwise, `mise install` fails as it conflicts with other preinstalled dependencies
-    GO_VERSION=$(mise config get tools.go)
-    cat > mise.toml << EOF
-[tools]
-go = "${GO_VERSION}"
-EOF
-    mise install -v -y >> "${LOG_FILE}" 2>&1
+    echo "Install dependencies with mise" >> "${log_file}"
+    # Install only the host-side tools: go (for op-program), just (for kona), jq
+    # (for extracting hashes).
+    mise trust
+    mise install -v -y go just jq >> "${log_file}" 2>&1
   fi
   rm -rf "${BIN_DIR}"
   rm -rf rust/kona/prestate-artifacts-*
-  make reproducible-prestate >> "${log_file}" 2>&1
+  if [ -f justfile ] && just --show reproducible-prestate &> /dev/null; then
+    just reproducible-prestate >> "${log_file}" 2>&1
+  else
+    make reproducible-prestate >> "${log_file}" 2>&1
+  fi
 
   if [ -f "${BIN_DIR}/prestate-proof.json" ]; then
     local HASH
@@ -136,14 +134,30 @@ for i in "${!VERSIONS[@]}"; do
   pushd .
   build_op_program_prestate "${VERSIONS[i]}"
   popd
-  # after every 10 builds, cleanup docker artifacts to reclaim disk space
-  if [ "$CIRCLECI" = "true" ]; then
-    if (( (i + 1) % 10 == 0 )); then
+  if [ "${CIRCLECI:-}" = "true" ]; then
+    if (((i + 1) % 10 == 0)); then
       echo "Pruning docker build artifacts after ${i} builds"
       docker system prune -f
     fi
   fi
 done
+
+# Build legacy kona prestates from the old op-rs/kona repo.
+for i in "${!LEGACY_KONA_VERSIONS[@]}"; do
+  tag="${LEGACY_KONA_VERSIONS[i]}"
+  log_file="${LOGS_DIR}/build-legacy-${tag//\//-}.txt"
+
+  pushd .
+  build_legacy_kona_prestate "${tag}" "${log_file}"
+  popd
+  if [ "${CIRCLECI:-}" = "true" ]; then
+    if (((i + 1) % 10 == 0)); then
+      echo "Pruning docker build artifacts after ${i} builds"
+      docker system prune -f
+    fi
+  fi
+done
+
 echo "${VERSIONS_JSON}" > "${VERSIONS_FILE}"
 
 # ignore alpha, beta, and older kona-client releases. The cannon prestate builds are not well supported on these versions
