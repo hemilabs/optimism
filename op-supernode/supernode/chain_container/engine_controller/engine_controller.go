@@ -24,8 +24,16 @@ type EngineController interface {
 	// hash. Returns ethereum.NotFound if the EL no longer has the block at
 	// that hash on its canonical chain.
 	OutputV0ByBlockHash(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error)
-	// RewindToTimestamp rewinds the L2 execution layer to block at or before the given timestamp.
-	RewindToTimestamp(ctx context.Context, timestamp uint64) error
+	// PayloadByHash returns the execution payload envelope for the given block hash. Used by
+	// build paths to capture the canonical target payload before recording a rewind operation
+	// in the WAL.
+	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
+	// PayloadByNumber returns the canonical execution payload envelope for the given block number.
+	PayloadByNumber(ctx context.Context, number uint64) (*eth.ExecutionPayloadEnvelope, error)
+	// Rewind rewinds the L2 execution layer to the supplied target block. The target payload
+	// must come from durable storage (the supernode WAL) — the engine controller does not
+	// consult the live EL to discover the target.
+	Rewind(ctx context.Context, target *eth.ExecutionPayloadEnvelope) error
 	// FetchReceipts fetches the receipts for a given block by hash.
 	FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error)
 	// Close releases any underlying RPC resources.
@@ -77,7 +85,9 @@ var (
 	ErrNotFound       = errors.New("not found")
 )
 
-func (e *simpleEngineController) SafeBlockAtTimestamp(ctx context.Context, ts uint64) (eth.L2BlockRef, error) {
+// BlockAtTimestamp returns the L2 block ref for the block at or before the given timestamp,
+// clamped to the head of the specified label. Must return ethereum.NotFound if no block is available at the timestamp.
+func (e *simpleEngineController) BlockAtTimestamp(ctx context.Context, ts uint64, label eth.BlockLabel) (eth.L2BlockRef, error) {
 	if e.l2 == nil {
 		return eth.L2BlockRef{}, ErrNoEngineClient
 	}
@@ -153,6 +163,20 @@ func (e *simpleEngineController) OutputV0ByBlockHash(ctx context.Context, blockH
 		}, nil
 	}
 	return e.l2.OutputV0AtBlock(ctx, blockHash)
+}
+
+func (e *simpleEngineController) PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error) {
+	if e.l2 == nil {
+		return nil, ErrNoEngineClient
+	}
+	return e.l2.PayloadByHash(ctx, hash)
+}
+
+func (e *simpleEngineController) PayloadByNumber(ctx context.Context, number uint64) (*eth.ExecutionPayloadEnvelope, error) {
+	if e.l2 == nil {
+		return nil, ErrNoEngineClient
+	}
+	return e.l2.PayloadByNumber(ctx, number)
 }
 
 func (e *simpleEngineController) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {

@@ -142,6 +142,33 @@ type mockL2 struct {
 	outputErr    error
 	payloadCalls int
 	outputCalls  int
+
+	// Block ref by label support
+	refsByLabel    map[eth.BlockLabel]eth.L2BlockRef
+	refByLabelErr  error
+	labelCallCount int
+	// labelOverrides, when set, overrides the label response for specific labels.
+	// Used by tests to simulate incorrect engine state for specific heads.
+	labelOverrides map[eth.BlockLabel]eth.L2BlockRef
+
+	// Block ref by number support (map for multiple blocks)
+	refsByNumber map[uint64]eth.L2BlockRef
+
+	// Payload by number support (map for multiple blocks)
+	payloadsByNumber map[uint64]*eth.ExecutionPayloadEnvelope
+
+	// NewPayload tracking
+	newPayloadCalls    int
+	newPayloadStatus   *eth.PayloadStatusV1
+	newPayloadStatuses []*eth.PayloadStatusV1 // per-call status overrides; entry i is used for the i-th call (1-indexed) when present and non-nil
+	newPayloadErr      error
+	lastNewPayload     *eth.ExecutionPayload
+
+	// ForkchoiceUpdate tracking
+	fcuCalls     int
+	fcuResult    *eth.ForkchoiceUpdatedResult
+	fcuErr       error
+	lastFCUState *eth.ForkchoiceState
 }
 
 func (m *mockL2) L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error) {
@@ -183,21 +210,19 @@ func (m *mockL2) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.
 }
 func (m *mockL2) Close() {
 }
-
-func TestEngineController_TargetBlockNumber(t *testing.T) {
-	t.Parallel()
-	rcfg := &rollup.Config{Genesis: rollup.Genesis{L2: eth.BlockID{Number: 0}, L2Time: 1_000}, BlockTime: 2, L2ChainID: big.NewInt(420)}
-	m := &mockL2{ref: eth.L2BlockRef{Number: 0, Time: 0}}
-	ec := &simpleEngineController{l2: m, rollup: rcfg, log: gethlog.New()}
-
-	// ts = genesis + 2*3 => block #3, with safe head above target
-	numRef, err := ec.SafeBlockAtTimestamp(context.Background(), 1_000+2*3)
-	require.NoError(t, err)
-	require.Equal(t, uint64(3), m.lastNum)
-	require.Equal(t, m.ref, numRef)
-	// ts = genesis + 2*1000 => block #1000, with safe head now below target
-	_, err = ec.SafeBlockAtTimestamp(context.Background(), 1_000+2*1000)
-	require.ErrorIs(t, err, ErrNotFound)
+func (m *mockL2) NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error) {
+	m.newPayloadCalls++
+	m.lastNewPayload = payload
+	if m.newPayloadErr != nil {
+		return nil, m.newPayloadErr
+	}
+	if idx := m.newPayloadCalls - 1; idx < len(m.newPayloadStatuses) && m.newPayloadStatuses[idx] != nil {
+		return m.newPayloadStatuses[idx], nil
+	}
+	if m.newPayloadStatus != nil {
+		return m.newPayloadStatus, nil
+	}
+	return &eth.PayloadStatusV1{Status: eth.ExecutionValid}, nil
 }
 
 func TestEngineController_SentinelErrors(t *testing.T) {
