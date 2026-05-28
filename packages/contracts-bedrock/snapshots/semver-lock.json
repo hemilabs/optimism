@@ -80,8 +80,12 @@
     "sourceCodeHash": "0x4eaf830a1ccfc0e7426fbf21c4c284a81f49b16aa392b213c9894479d51a4a24"
   },
   "src/L2/L2ERC721Bridge.sol:L2ERC721Bridge": {
-    "initCodeHash": "0x863f0f5b410983f3e51cd97c60a3a42915141b7452864d0e176571d640002b81",
-    "sourceCodeHash": "0xc05bfcfadfd09a56cfea68e7c1853faa36d114d9a54cd307348be143e442c35a"
+    "initCodeHash": "0x6a93ded273dc3c1b0ea3f351412e97f0c22efd89c9760e74258c8d4c315d1b5c",
+    "sourceCodeHash": "0x0a29792f3226dac84fdb44150b622a165fe65da3b678f6540acecdfe440772bb"
+  },
+  "src/L2/L2ProxyAdmin.sol:L2ProxyAdmin": {
+    "initCodeHash": "0xd9d6f7850ca2f14376b4a9c8b7693edd820803baddf42da91c0d452c207914a8",
+    "sourceCodeHash": "0x43379a0ceae81d693c0fb50d3b7e8b1836e7a2cae0b7931593d2324d09e59ba3"
   },
   "src/L2/L2StandardBridge.sol:L2StandardBridge": {
     "initCodeHash": "0x55978fe836e10ad86d87400a0e95059fcbfc64936c76917f1f9d2215cb4aaa73",
