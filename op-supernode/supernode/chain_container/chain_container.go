@@ -128,6 +128,15 @@ type InteropChain interface {
 
 type virtualNodeFactory func(cfg *opnodecfg.Config, log gethlog.Logger, initOverrides *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode
 
+// RPCRouterGate is the chain container's narrow view of the shared RPC router.
+// It lets containers swap per-chain handlers while also controlling when the
+// router may dispatch requests to them.
+type RPCRouterGate interface {
+	SetHandler(chainID string, h http.Handler)
+	SetReadinessCheck(chainID string, fn func() bool)
+	RemoveHandler(chainID string)
+}
+
 // ResetCallback is called when the chain container resets due to an invalidated block.
 // The supernode uses this to notify activities about the reset.
 // invalidatedBlock is the block that was invalidated and triggered the reset.
@@ -151,10 +160,10 @@ type simpleChainContainer struct {
 	stopped            chan struct{}
 	log                gethlog.Logger
 	chainID            eth.ChainID
-	initOverload       *rollupNode.InitializationOverrides  // Base shared resources for all virtual nodes
-	rpcHandler         *oprpc.Handler                       // Current per-chain RPC handler instance
-	setHandler         func(chainID string, h http.Handler) // Set the RPC handler on the router for the chain
-	setMetricsHandler  func(chainID string, h http.Handler) // Set the metrics handler on the router for the chain
+	initOverload       *rollupNode.InitializationOverrides     // Base shared resources for all virtual nodes
+	rpcHandler         *oprpc.Handler                          // Current per-chain RPC handler instance
+	rpcRouter          RPCRouterGate                           // Gates and dispatches RPC traffic for this chain
+	addMetricsRegistry func(key string, g prometheus.Gatherer) // Set the metrics registry on the global metrics server
 	appVersion         string
 	virtualNodeFactory virtualNodeFactory    // Factory function to create virtual node (for testing)
 	rollupClient       *sources.RollupClient // In-proc rollup RPC client bound to rpcHandler
@@ -180,7 +189,7 @@ func NewChainContainer(
 	cfg config.CLIConfig,
 	initOverload *rollupNode.InitializationOverrides,
 	rpcHandler *oprpc.Handler,
-	setHandler func(chainID string, h http.Handler),
+	rpcRouter RPCRouterGate,
 	addMetricsRegistry func(key string, g prometheus.Gatherer),
 	metrics *resources.SupernodeMetrics,
 ) InteropChain {
@@ -195,8 +204,8 @@ func NewChainContainer(
 		stopped:            make(chan struct{}, 1),
 		initOverload:       initOverload,
 		rpcHandler:         rpcHandler,
-		setHandler:         setHandler,
-		setMetricsHandler:  setMetricsHandler,
+		rpcRouter:          rpcRouter,
+		addMetricsRegistry: addMetricsRegistry,
 		appVersion:         virtualNodeVersion,
 		virtualNodeFactory: defaultVirtualNodeFactory,
 		metrics:            metrics,
@@ -270,20 +279,34 @@ func (c *simpleChainContainer) setVN(vn virtual_node.VirtualNode) {
 	c.vn = vn
 }
 
+// IsRPCReady reports whether the chain's router handler may serve requests.
+// Pause and stop close the gate immediately; otherwise the current virtual node
+// must be installed and running.
+func (c *simpleChainContainer) IsRPCReady() bool {
+	if c.pause.Load() || c.stop.Load() {
+		return false
+	}
+	vn := c.getVN()
+	return vn != nil && vn.State() == virtual_node.VNStateRunning
+}
+
 func (c *simpleChainContainer) subPath(path string) string {
 	return filepath.Join(c.cfg.DataDir, c.chainID.String(), path)
 }
 
 func (c *simpleChainContainer) Start(ctx context.Context) error {
 	defer func() { c.stopped <- struct{}{} }()
+	if c.rpcRouter != nil {
+		c.rpcRouter.SetReadinessCheck(c.chainID.String(), c.IsRPCReady)
+	}
 	for {
 		// Refresh per-start derived fields
 		c.vncfg.SafeDBPath = c.subPath("safe_db")
 		c.vncfg.RPC = c.cfg.RPCConfig
 		// create a fresh handler per (re)start, swap it into the router, and inject into overload
 		h := oprpc.NewHandler("", oprpc.WithLogger(c.log.New("chain_id", c.chainID.String())))
-		if c.setHandler != nil {
-			c.setHandler(c.chainID.String(), h)
+		if c.rpcRouter != nil {
+			c.rpcRouter.SetHandler(c.chainID.String(), h)
 		}
 		c.initOverload.RPCHandler = h
 		c.rpcHandler = h
@@ -311,6 +334,7 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 		if vn == nil {
 			return virtual_node.ErrVirtualNodeNotRunning
 		}
+		// Install before Start so the RPC gate can observe this VN entering running state.
 		c.setVN(vn)
 		if c.pause.Load() {
 			c.log.Info("chain container paused")
@@ -368,6 +392,10 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 
 func (c *simpleChainContainer) Stop(ctx context.Context) error {
 	c.stop.Store(true)
+	if c.rpcRouter != nil {
+		defer c.rpcRouter.RemoveHandler(c.chainID.String())
+	}
+
 	stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

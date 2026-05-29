@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	opnodecfg "github.com/ethereum-optimism/optimism/op-node/config"
 	opmetrics "github.com/ethereum-optimism/optimism/op-node/metrics"
@@ -41,6 +43,7 @@ type VirtualNode interface {
 	// Returns safedb.ErrNotFound when SafeDB has no entries yet.
 	FirstSafeHeadEntry(ctx context.Context) (eth.BlockID, eth.BlockID, error)
 	SyncStatus(ctx context.Context) (*eth.SyncStatus, error)
+	State() VNState
 }
 
 type innerNode interface {
@@ -52,7 +55,7 @@ type innerNode interface {
 
 type innerNodeFactory func(ctx context.Context, cfg *opnodecfg.Config, log gethlog.Logger, appVersion string, m *opmetrics.Metrics, initOverload *rollupNode.InitializationOverrides) (innerNode, error)
 
-type VNState int
+type VNState int32
 
 const (
 	VNStateNotStarted VNState = iota
@@ -70,9 +73,9 @@ type simpleVirtualNode struct {
 	initOverload     *rollupNode.InitializationOverrides // Shared resources which are overridden by the supernode
 	innerNodeFactory innerNodeFactory                    // Factory function to create inner node (overloadable for testing)
 
-	mu     sync.Mutex         // Protects state transitions
-	state  VNState            // Current lifecycle state
-	cancel context.CancelFunc // Cancels the running context
+	mu     sync.Mutex   // Coordinates Start/Stop transitions and protects cancel.
+	state  atomic.Int32 // Current lifecycle state; stores VNState values.
+	cancel context.CancelFunc
 }
 
 func generateVirtualNodeID() string {
@@ -82,23 +85,24 @@ func generateVirtualNodeID() string {
 func NewVirtualNode(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) *simpleVirtualNode {
 	vnID := generateVirtualNodeID()
 	l := log.New("chain_id", cfg.Rollup.L2ChainID.String(), "vn_id", vnID)
-	return &simpleVirtualNode{
+	vn := &simpleVirtualNode{
 		vnID:             vnID,
 		cfg:              cfg,
 		log:              l,
 		initOverload:     initOverload,
 		appVersion:       appVersion,
 		innerNodeFactory: defaultInnerNodeFactory,
-		state:            VNStateNotStarted,
 	}
+	vn.setState(VNStateNotStarted)
+	return vn
 }
 
 func (v *simpleVirtualNode) Start(ctx context.Context) error {
 	// Accquire lock while setting up inner node
 	v.mu.Lock()
-	if v.state != VNStateNotStarted {
+	if state := v.State(); state != VNStateNotStarted {
 		v.mu.Unlock()
-		v.log.Debug("virtual node not in a valid state to start", "state", v.state)
+		v.log.Debug("virtual node not in a valid state to start", "state", state)
 		return ErrVirtualNodeCantStart
 	}
 	if v.cfg == nil {
@@ -120,13 +124,12 @@ func (v *simpleVirtualNode) Start(ctx context.Context) error {
 	m := opmetrics.NewMetrics("supernode")
 	n, err := v.innerNodeFactory(runCtx, v.cfg, v.log, v.appVersion, m, v.initOverload)
 	if err != nil {
-		v.state = VNStateStopped
+		v.setState(VNStateStopped)
 		v.mu.Unlock()
 		return err
 	}
 	v.inner = n
-	// Release the lock once the inner node is created
-	v.state = VNStateRunning
+	v.setState(VNStateRunning)
 	v.mu.Unlock()
 	// Don't hold the lock while running or waiting for inner node to stop
 
@@ -140,8 +143,7 @@ func (v *simpleVirtualNode) Start(ctx context.Context) error {
 
 	// Clean up with lock to end of function
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.state = VNStateStopped
+	v.setState(VNStateStopped)
 	v.cancel = nil
 
 	// Stop the inner node if it's still running
@@ -173,9 +175,16 @@ func (v *simpleVirtualNode) Stop(ctx context.Context) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	if v.state != VNStateRunning {
+	if v.State() != VNStateRunning {
 		return nil // Already stopped or not started
 	}
+
+	// Keep this setState before the cancel() below; do not reorder them.
+	// The per-chain RPC route gate reads this state to decide readiness, and it
+	// must observe VNStateStopped ("not ready") before the run context starts
+	// unwinding. If the cancel ran first, a request could still be routed to a
+	// chain handler that is already tearing down.
+	v.setState(VNStateStopped)
 
 	// Cancel the run context to trigger shutdown
 	if v.cancel != nil {
@@ -187,9 +196,11 @@ func (v *simpleVirtualNode) Stop(ctx context.Context) error {
 
 // State returns the current state of the virtual node (for testing and monitoring)
 func (v *simpleVirtualNode) State() VNState {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.state
+	return VNState(v.state.Load())
+}
+
+func (v *simpleVirtualNode) setState(state VNState) {
+	v.state.Store(int32(state))
 }
 
 // SafeHeadAtL1 returns the recorded mapping of L1 block -> L2 safe head at or before the given L1 block number.
