@@ -1,3 +1,4 @@
+//! Interop message primitives.
 // Source: https://github.com/ethereum-optimism/optimism/tree/develop/rust/kona
 // Copyright © 2023 kona contributors Copyright © 2024 Optimism
 //
@@ -15,27 +16,22 @@
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-use crate::supervisor::CROSS_L2_INBOX_ADDRESS;
-use alloy_eips::eip2930::AccessListItem;
-use alloy_primitives::B256;
-
-/// Parses [`AccessListItem`]s to inbox entries.
-///
-/// Return flattened iterator with all inbox entries.
-pub fn parse_access_list_items_to_inbox_entries<'a>(
-    access_list_items: impl Iterator<Item = &'a AccessListItem>,
-) -> impl Iterator<Item = &'a B256> {
-    access_list_items.filter_map(parse_access_list_item_to_inbox_entries).flatten()
+/// An [`ExecutingDescriptor`] is a part of the payload to `interop_checkAccessList`
+/// Interop RPC request descriptor.
+#[derive(Default, Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExecutingDescriptor {
+    /// The timestamp used to enforce timestamp [invariant](https://github.com/ethereum-optimism/specs/blob/main/specs/interop/derivation.md#invariants)
+    #[serde(with = "alloy_serde::quantity")]
+    timestamp: u64,
+    /// The timeout that requests verification to still hold at `timestamp+timeout`
+    /// (message expiry may drop previously valid messages).
+    #[serde(skip_serializing_if = "Option::is_none", with = "alloy_serde::quantity::opt")]
+    timeout: Option<u64>,
 }
 
-/// Parse [`AccessListItem`] to inbox entries, if any.
-/// Max 3 inbox entries can exist per [`AccessListItem`] that points to [`CROSS_L2_INBOX_ADDRESS`].
-///
-/// Returns `Vec::new()` if [`AccessListItem`] address doesn't point to [`CROSS_L2_INBOX_ADDRESS`].
-// Access-list spec: <https://github.com/ethereum-optimism/specs/blob/main/specs/interop/supervisor.md#access-list-contents>
-fn parse_access_list_item_to_inbox_entries(
-    access_list_item: &AccessListItem,
-) -> Option<impl Iterator<Item = &B256>> {
-    (access_list_item.address == CROSS_L2_INBOX_ADDRESS)
-        .then(|| access_list_item.storage_keys.iter())
+impl ExecutingDescriptor {
+    /// Create a new [`ExecutingDescriptor`] from the timestamp and timeout
+    pub const fn new(timestamp: u64, timeout: Option<u64>) -> Self {
+        Self { timestamp, timeout }
+    }
 }

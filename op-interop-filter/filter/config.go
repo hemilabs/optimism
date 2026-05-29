@@ -14,6 +14,9 @@ import (
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 )
 
+// DefaultMessageExpiryWindow is 7 days, matching the interop message expiry default.
+const DefaultMessageExpiryWindow = 7 * 24 * time.Hour
+
 type Config struct {
 	L2RPCs                      []string
 	RollupConfigs               map[eth.ChainID]*rollup.Config // Rollup configs keyed by chain ID

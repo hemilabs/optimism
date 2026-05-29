@@ -28,9 +28,10 @@ type Service struct {
 	metrics metrics.Metricer
 	version string
 
-	pprofService *oppprof.Service
-	metricsSrv   *httputil.HTTPServer
-	rpcServer    *oprpc.Server
+	pprofService   *oppprof.Service
+	metricsSrv     *httputil.HTTPServer
+	rpcServer      *oprpc.Server // Main RPC server (public interop API)
+	adminRPCServer *oprpc.Server // Admin RPC server (JWT-protected, separate port)
 
 	backend *Backend
 
@@ -231,7 +232,11 @@ func (s *Service) initBackend(ctx context.Context, cfg *Config) error {
 }
 
 func (s *Service) initRPCServer(cfg *Config) error {
-	opts := []oprpc.Option{
+	// Create server without JWT - public interop API
+	server := oprpc.NewServer(
+		cfg.RPCAddr,
+		cfg.RPCPort,
+		s.version,
 		oprpc.WithLogger(s.log),
 	}
 
@@ -280,7 +285,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start backend: %w", err)
 	}
 
-	// Start RPC server
+	// Start main RPC server (interop API)
 	if err := s.rpcServer.Start(); err != nil {
 		return fmt.Errorf("failed to start RPC server: %w", err)
 	}
