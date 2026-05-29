@@ -39,9 +39,7 @@ var SupportedGameTypes = []GameType{
 	AsteriscKonaGameType,
 	FastGameType,
 	SuperCannonKonaGameType,
-	SuperPermissionedGameType,
-	SuperAsteriscKonaGameType,
-	OptimisticZKGameType,
+	ZKDisputeGameType,
 }
 
 // Set implements the Set method required by the [cli.Generic] interface.
