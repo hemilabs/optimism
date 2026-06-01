@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
+	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	monTypes "github.com/ethereum-optimism/optimism/op-dispute-mon/mon/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
@@ -117,4 +118,15 @@ func TestCalculateRequiredCollateral(t *testing.T) {
 	require.Equal(t, actual[weth1].Actual.Uint64(), weth1Balance.Uint64())
 	require.Equal(t, actual[weth2].Required.Uint64(), uint64(23+46))
 	require.Equal(t, actual[weth2].Actual.Uint64(), weth2Balance.Uint64())
+}
+
+func TestCalculateRequiredCollateralSkipsSuperPermissioned(t *testing.T) {
+	actual := CalculateRequiredCollateral([]*monTypes.EnrichedGameData{
+		{
+			GameMetadata: gameTypes.GameMetadata{
+				GameType: uint32(gameTypes.SuperPermissionedGameType),
+			},
+		},
+	})
+	require.Empty(t, actual)
 }
