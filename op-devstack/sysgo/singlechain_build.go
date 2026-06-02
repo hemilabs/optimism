@@ -294,6 +294,8 @@ type l2CLNodeStartConfig struct {
 	L2FollowSource string
 	DependencySet  depset.DependencySet
 	L2CLOptions    []L2CLOption
+	// SyncMode overrides the sequencer and verifier sync modes; defaults to CLSync if unset.
+	SyncMode nodeSync.Mode
 }
 
 func startL2CLNode(
@@ -322,6 +324,11 @@ func startL2CLNode(
 			}
 			opt.Apply(t, l2CLTarget, cfg)
 		}
+	}
+
+	if startCfg.SyncMode != 0 {
+		cfg.SequencerSyncMode = startCfg.SyncMode
+		cfg.VerifierSyncMode = startCfg.SyncMode
 	}
 
 	syncMode := cfg.VerifierSyncMode
@@ -418,8 +425,10 @@ func startL2CLNode(
 			SkipSyncStartCheck:             false,
 			SupportsPostFinalizationELSync: false,
 			L2FollowSourceEndpoint:         cfg.FollowSource,
-			NeedInitialResetEngine:         false,
-			OffsetELSafe:                   cfg.OffsetELSafe,
+			// Mirror op-node/service.go: a follow-mode sequencer needs a single
+			// initial engine reset to trigger block building (TryInitialResetEngineForSequencer).
+			NeedInitialResetEngine: cfg.IsSequencer && cfg.FollowSource != "",
+			OffsetELSafe:           cfg.OffsetELSafe,
 		},
 		ConfigPersistence:               config.DisabledConfigPersistence{},
 		Metrics:                         opmetrics.CLIConfig{},
