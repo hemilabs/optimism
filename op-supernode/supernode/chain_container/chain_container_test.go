@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	gethlog "github.com/ethereum/go-ethereum/log"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
@@ -219,6 +220,8 @@ type mockEngineController struct {
 	rewindFunc               func(ctx context.Context, target *eth.ExecutionPayloadEnvelope) error // optional custom behavior
 	l2BlockRefByNumberResult eth.L2BlockRef
 	l2BlockRefByNumberErr    error
+	outputV0Result           *eth.OutputV0
+	outputV0Err              error
 	payloadByHashResult      *eth.ExecutionPayloadEnvelope
 	payloadByHashErr         error
 	payloadByNumberResult    *eth.ExecutionPayloadEnvelope
@@ -238,7 +241,7 @@ func (m *mockEngineController) L2BlockRefByLabel(ctx context.Context, label eth.
 }
 
 func (m *mockEngineController) OutputV0AtBlockNumber(ctx context.Context, num uint64) (*eth.OutputV0, error) {
-	return nil, nil
+	return m.outputV0Result, m.outputV0Err
 }
 
 func (m *mockEngineController) OutputV0ByBlockHash(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error) {
@@ -304,6 +307,25 @@ func createTestLogger(t testing.TB) gethlog.Logger {
 	return testlog.Logger(t, gethlog.LevelDebug)
 }
 
+// mustNewChainContainer builds a chain container and fails the test on error.
+func mustNewChainContainer(
+	t testing.TB,
+	chainID eth.ChainID,
+	vncfg *opnodecfg.Config,
+	log gethlog.Logger,
+	cfg config.CLIConfig,
+	initOverload *rollupNode.InitializationOverrides,
+	rpcHandler *oprpc.Handler,
+	rpcRouter RPCRouterGate,
+	addMetricsRegistry func(key string, g prometheus.Gatherer),
+	metrics *resources.SupernodeMetrics,
+) InteropChain {
+	t.Helper()
+	container, err := NewChainContainer(chainID, vncfg, log, cfg, initOverload, rpcHandler, rpcRouter, addMetricsRegistry, metrics)
+	require.NoError(t, err)
+	return container
+}
+
 // TestChainContainer_Constructor tests initialization and configuration
 func TestChainContainer_Constructor(t *testing.T) {
 	t.Parallel()
@@ -316,7 +338,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 
 	t.Run("creates container with correct config", func(t *testing.T) {
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 
 		require.NotNil(t, container)
 
@@ -335,7 +357,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 		cfg := config.CLIConfig{
 			DataDir: "/tmp/datadir",
 		}
-		container := NewChainContainer(eth.ChainIDFromUInt64(420), vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, eth.ChainIDFromUInt64(420), vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
@@ -352,7 +374,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 				ListenPort: 9545,
 			},
 		}
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
@@ -362,7 +384,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 
 	t.Run("appVersion set correctly", func(t *testing.T) {
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -373,7 +395,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 		cfg := config.CLIConfig{
 			DataDir: "/data",
 		}
-		container := NewChainContainer(eth.ChainIDFromUInt64(420), vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, eth.ChainIDFromUInt64(420), vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -398,7 +420,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 		}
 
 		for _, tc := range testCases {
-			container := NewChainContainer(tc.chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+			container := mustNewChainContainer(t, tc.chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 			impl, ok := container.(*simpleChainContainer)
 			require.True(t, ok)
 
@@ -409,22 +431,75 @@ func TestChainContainer_Constructor(t *testing.T) {
 	})
 }
 
-// TestChainContainer_EngineControllerNotInitInConstructor verifies that the
-// engine controller is NOT initialized in NewChainContainer (it is deferred to
-// the Start loop so that transient EL unavailability at startup is retried).
-func TestChainContainer_EngineControllerNotInitInConstructor(t *testing.T) {
+// TestChainContainer_EngineControllerNotInitWhenNoL2 verifies that a chain with
+// no L2 engine configured leaves the engine controller nil.
+func TestChainContainer_EngineControllerNotInitWhenNoL2(t *testing.T) {
 	t.Parallel()
 
 	chainID := eth.ChainIDFromUInt64(420)
-	vncfg := createTestVNConfig()
+	vncfg := createTestVNConfig() // no L2 endpoint configured
 	log := createTestLogger(t)
 	cfg := createTestCLIConfig(t.TempDir())
 	initOverload := &rollupNode.InitializationOverrides{}
 
-	container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 	impl, ok := container.(*simpleChainContainer)
 	require.True(t, ok)
-	require.Nil(t, impl.engine, "engine should not be initialized in constructor; it is deferred to Start loop")
+	require.Nil(t, impl.engine, "engine should be nil when no L2 endpoint is configured")
+}
+
+// TestChainContainer_EngineControllerInitInConstructor verifies that, when an L2
+// endpoint is configured, the engine controller is set up eagerly in the
+// constructor. Because the dial is lazy this never blocks on a reachable EL, so
+// the controller is available immediately and usable once the EL comes up,
+// without waiting for a virtual-node restart.
+func TestChainContainer_EngineControllerInitInConstructor(t *testing.T) {
+	chainID := eth.ChainIDFromUInt64(420)
+	vncfg := createTestVNConfig()
+	vncfg.L2 = &opnodecfg.L2EndpointConfig{L2EngineAddr: "http://unused.example"}
+	log := createTestLogger(t)
+	cfg := createTestCLIConfig(t.TempDir())
+	initOverload := &rollupNode.InitializationOverrides{}
+
+	expectedOutput := &eth.OutputV0{BlockHash: common.Hash{0x42}}
+	mockEngine := &mockEngineController{outputV0Result: expectedOutput}
+
+	prevSetup := newEngineControllerFromConfig
+	newEngineControllerFromConfig = func(ctx context.Context, log gethlog.Logger, vncfg *opnodecfg.Config) (engine_controller.EngineController, error) {
+		return mockEngine, nil
+	}
+	t.Cleanup(func() { newEngineControllerFromConfig = prevSetup })
+
+	container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	impl, ok := container.(*simpleChainContainer)
+	require.True(t, ok)
+	require.NotNil(t, impl.engine, "engine should be initialized in constructor when L2 is configured")
+
+	out, err := container.OutputV0AtBlockNumber(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, expectedOutput, out, "calls should dispatch to the engine set up in the constructor")
+}
+
+// TestChainContainer_EngineControllerSetupErrorFailsConstruction verifies that a
+// fatal engine-controller setup error aborts construction rather than being
+// swallowed, since a chain that can never reach its engine must not start.
+func TestChainContainer_EngineControllerSetupErrorFailsConstruction(t *testing.T) {
+	chainID := eth.ChainIDFromUInt64(420)
+	vncfg := createTestVNConfig()
+	vncfg.L2 = &opnodecfg.L2EndpointConfig{L2EngineAddr: "http://unused.example"}
+	log := createTestLogger(t)
+	cfg := createTestCLIConfig(t.TempDir())
+	initOverload := &rollupNode.InitializationOverrides{}
+
+	setupErr := errors.New("bad engine config")
+	prevSetup := newEngineControllerFromConfig
+	newEngineControllerFromConfig = func(ctx context.Context, log gethlog.Logger, vncfg *opnodecfg.Config) (engine_controller.EngineController, error) {
+		return nil, setupErr
+	}
+	t.Cleanup(func() { newEngineControllerFromConfig = prevSetup })
+
+	_, err := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	require.ErrorIs(t, err, setupErr)
 }
 
 func TestChainContainerIsRPCReady(t *testing.T) {
@@ -455,7 +530,7 @@ func TestChainContainerIsRPCReady(t *testing.T) {
 
 			vncfg := createTestVNConfig()
 			cfg := createTestCLIConfig(t.TempDir())
-			container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+			container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 			impl, ok := container.(*simpleChainContainer)
 			require.True(t, ok)
 
@@ -485,7 +560,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 	t.Run("Start respects stop flag", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -512,7 +587,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 	t.Run("Stop sets stop flag", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -527,7 +602,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 	t.Run("signals stopped channel on exit", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -557,7 +632,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 	t.Run("context cancellation stops restart loop", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -598,7 +673,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 	t.Run("Stop flag stops restart loop", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -647,7 +722,7 @@ func TestChainContainer_PauseResume(t *testing.T) {
 	t.Run("Pause sets pause flag", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -661,7 +736,7 @@ func TestChainContainer_PauseResume(t *testing.T) {
 	t.Run("Resume clears pause flag", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -677,7 +752,7 @@ func TestChainContainer_PauseResume(t *testing.T) {
 	t.Run("paused container doesn't start VN, resumed does", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -975,7 +1050,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 	t.Run("Start creates and starts virtual node", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -1006,7 +1081,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 	t.Run("auto-restart virtual node on exit", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -1044,7 +1119,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
 		metrics := resources.NewSupernodeMetrics()
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, metrics)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, metrics)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -1076,7 +1151,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 	t.Run("Stop calls virtual node Stop", func(t *testing.T) {
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -1115,7 +1190,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 		router := &fakeRPCRouterGate{}
 		log := createTestLogger(t)
 		cfg := createTestCLIConfig(t.TempDir())
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, router, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, router, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -1185,7 +1260,7 @@ func TestChainContainer_OptimisticAt_ErrL1AtSafeHeadNotFound(t *testing.T) {
 	cfg := createTestCLIConfig(t.TempDir())
 	initOverload := &rollupNode.InitializationOverrides{}
 
-	container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 	impl, ok := container.(*simpleChainContainer)
 	require.True(t, ok)
 
@@ -1237,7 +1312,7 @@ func TestChainContainer_OptimisticAt_LocalSafeTipNotFoundLogsDebug(t *testing.T)
 	cfg := createTestCLIConfig(t.TempDir())
 	initOverload := &rollupNode.InitializationOverrides{}
 
-	container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 	impl, ok := container.(*simpleChainContainer)
 	require.True(t, ok)
 
@@ -1303,7 +1378,7 @@ func TestChainContainer_OptimisticAt_ErrL1AtSafeHeadUnavailable(t *testing.T) {
 	cfg := createTestCLIConfig(t.TempDir())
 	initOverload := &rollupNode.InitializationOverrides{}
 
-	container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 	impl, ok := container.(*simpleChainContainer)
 	require.True(t, ok)
 
@@ -1418,7 +1493,7 @@ func TestChainContainer_LocalSafeBlockAtTimestamp(t *testing.T) {
 		vncfg.Rollup.Genesis.L2Time = tc.genesisTime
 		vncfg.Rollup.BlockTime = tc.blockTime
 
-		container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+		container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
@@ -1576,7 +1651,7 @@ func TestChainContainer_SyncStatus_UninitializedVirtualNode(t *testing.T) {
 	cfg := createTestCLIConfig(t.TempDir())
 	initOverload := &rollupNode.InitializationOverrides{}
 
-	container := NewChainContainer(chainID, createTestVNConfig(), log, cfg, initOverload, nil, nil, nil, nil)
+	container := mustNewChainContainer(t, chainID, createTestVNConfig(), log, cfg, initOverload, nil, nil, nil, nil)
 
 	status, err := container.SyncStatus(context.Background())
 	require.Nil(t, status)
@@ -1596,7 +1671,7 @@ func TestChainContainer_BlockNumberToTimestamp_RespectsGenesisBlockNumber(t *tes
 	vncfg.Rollup.Genesis.L2.Number = 100
 	vncfg.Rollup.BlockTime = 2
 
-	container := NewChainContainer(chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
+	container := mustNewChainContainer(t, chainID, vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 	impl, ok := container.(*simpleChainContainer)
 	require.True(t, ok)
 
