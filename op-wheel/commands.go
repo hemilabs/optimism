@@ -259,7 +259,8 @@ func rollupFromGethConfig(cfg *params.ChainConfig) *rollup.Config {
 		HoloceneTime: cfg.HoloceneTime,
 		IsthmusTime:  cfg.IsthmusTime,
 		JovianTime:   cfg.JovianTime,
-		InteropTime:  cfg.InteropTime,
+		KarstTime:    cfg.KarstTime,
+		LagoonTime:   cfg.InteropTime,
 	}
 }
 

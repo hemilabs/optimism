@@ -129,9 +129,13 @@ type Config struct {
 	// Active if JovianTime != nil && L2 block timestamp >= *JovianTime, inactive otherwise.
 	JovianTime *uint64 `json:"jovian_time,omitempty"`
 
-	// InteropTime sets the activation time for an experimental feature-set, activated like a hardfork.
-	// Active if InteropTime != nil && L2 block timestamp >= *InteropTime, inactive otherwise.
-	InteropTime *uint64 `json:"interop_time,omitempty"`
+	// KarstTime sets the activation time of the Karst network upgrade.
+	// Active if KarstTime != nil && L2 block timestamp >= *KarstTime, inactive otherwise.
+	KarstTime *uint64 `json:"karst_time,omitempty"`
+
+	// LagoonTime sets the activation time for an experimental feature-set, activated like a hardfork.
+	// Active if LagoonTime != nil && L2 block timestamp >= *LagoonTime, inactive otherwise.
+	LagoonTime *uint64 `json:"lagoon_time,omitempty"`
 
 	// Note: below addresses are part of the block-derivation process,
 	// and required to be the same network-wide to stay in consensus.
@@ -482,9 +486,14 @@ func (c *Config) IsJovian(timestamp uint64) bool {
 	return c.IsForkActive(forks.Jovian, timestamp)
 }
 
-// IsInterop returns true if the Interop hardfork is active at or past the given timestamp.
-func (c *Config) IsInterop(timestamp uint64) bool {
-	return c.IsForkActive(forks.Interop, timestamp)
+// IsKarst returns true if the Karst hardfork is active at or past the given timestamp.
+func (c *Config) IsKarst(timestamp uint64) bool {
+	return c.IsForkActive(forks.Karst, timestamp)
+}
+
+// IsLagoon returns true if the Lagoon hardfork is active at or past the given timestamp.
+func (c *Config) IsLagoon(timestamp uint64) bool {
+	return c.IsForkActive(forks.Lagoon, timestamp)
 }
 
 func (c *Config) IsRegolithActivationBlock(l2BlockTime uint64) bool {
@@ -553,17 +562,29 @@ func (c *Config) IsJovianActivationBlock(l2BlockTime uint64) bool {
 		!c.IsJovian(l2BlockTime-c.BlockTime)
 }
 
-func (c *Config) IsInteropActivationBlock(l2BlockTime uint64) bool {
-	return c.IsInterop(l2BlockTime) &&
+// IsKarstActivationBlock returns whether the specified block is the first block subject to the
+// Karst upgrade.
+func (c *Config) IsKarstActivationBlock(l2BlockTime uint64) bool {
+	return c.IsKarst(l2BlockTime) &&
 		l2BlockTime >= c.BlockTime &&
-		!c.IsInterop(l2BlockTime-c.BlockTime)
+		!c.IsKarst(l2BlockTime-c.BlockTime)
+}
+
+// IsLagoonActivationBlock returns whether the specified block is the first block subject to the
+// Lagoon upgrade.
+func (c *Config) IsLagoonActivationBlock(l2BlockTime uint64) bool {
+	return c.IsLagoon(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsLagoon(l2BlockTime-c.BlockTime)
 }
 
 func (c *Config) ActivationTime(fork ForkName) *uint64 {
 	// NEW FORKS MUST BE ADDED HERE
 	switch fork {
-	case forks.Interop:
-		return c.InteropTime
+	case forks.Lagoon:
+		return c.LagoonTime
+	case forks.Karst:
+		return c.KarstTime
 	case forks.Jovian:
 		return c.JovianTime
 	case forks.Isthmus:
@@ -595,8 +616,10 @@ func (c *Config) ActivationTime(fork ForkName) *uint64 {
 func (c *Config) SetActivationTime(fork ForkName, timestamp *uint64) {
 	// NEW FORKS MUST BE ADDED HERE
 	switch fork {
-	case forks.Interop:
-		c.InteropTime = timestamp
+	case forks.Lagoon:
+		c.LagoonTime = timestamp
+	case forks.Karst:
+		c.KarstTime = timestamp
 	case forks.Jovian:
 		c.JovianTime = timestamp
 	case forks.Isthmus:
@@ -840,7 +863,27 @@ func (c *Config) forEachFork(callback func(name string, logName string, time *ui
 	}
 	callback("Isthmus", "isthmus_time", c.IsthmusTime)
 	callback("Jovian", "jovian_time", c.JovianTime)
-	callback("Interop", "interop_time", c.InteropTime)
+	callback("Karst", "karst_time", c.KarstTime)
+	callback("Lagoon", "lagoon_time", c.LagoonTime)
+}
+
+// UnmarshalJSON accepts the legacy `interop_time` JSON key as an alias for
+// `lagoon_time`, mirroring the Rust HardForkConfig `#[serde(alias = "interop_time")]`
+// carveout. Drop both once superchain-registry renames the TOML key to
+// `lagoon_time` — tracked in ethereum-optimism/optimism#21135.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type rawConfig Config
+	aux := struct {
+		InteropTime *uint64 `json:"interop_time,omitempty"`
+		*rawConfig
+	}{rawConfig: (*rawConfig)(c)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if c.LagoonTime == nil && aux.InteropTime != nil {
+		c.LagoonTime = aux.InteropTime
+	}
+	return nil
 }
 
 func (c *Config) ParseRollupConfig(in io.Reader) error {

@@ -585,7 +585,7 @@ mod tests {
 
         let cfg = RollupConfig {
             max_sequencer_drift: 1,
-            hardforks: HardForkConfig { interop_time: Some(0), ..Default::default() },
+            hardforks: HardForkConfig { lagoon_time: Some(0), ..Default::default() },
             ..Default::default()
         };
         let l1_blocks = vec![BlockInfo::default(), BlockInfo::default()];
@@ -695,7 +695,7 @@ mod tests {
         let cfg = RollupConfig {
             max_sequencer_drift: 1,
             block_time: 1,
-            hardforks: HardForkConfig { interop_time: Some(1), ..Default::default() },
+            hardforks: HardForkConfig { lagoon_time: Some(1), ..Default::default() },
             ..Default::default()
         };
         let l1_blocks = vec![BlockInfo::default(), BlockInfo::default()];

@@ -648,10 +648,16 @@ func (d *Sequencer) startBuildingBlock() {
 		d.log.Info("Sequencing Jovian upgrade block")
 	}
 
-	// For the Interop activation block we must not include any sequencer transactions.
+	// For the Karst activation block we must not include any sequencer transactions.
+	if d.rollupCfg.IsKarstActivationBlock(uint64(attrs.Timestamp)) {
+		attrs.NoTxPool = true
+		d.log.Info("Sequencing Karst upgrade block")
+	}
+
+	// For the Lagoon activation block we must not include any sequencer transactions.
 	if d.rollupCfg.IsInteropActivationBlock(uint64(attrs.Timestamp)) {
 		attrs.NoTxPool = true
-		d.log.Info("Sequencing Interop upgrade block")
+		d.log.Info("Sequencing Lagoon upgrade block")
 	}
 
 	if recoverMode {
@@ -789,7 +795,7 @@ func (d *Sequencer) SdmStatus(ctx context.Context, nextBlockTimestamp uint64) (a
 		PostExecOptIn:  optIn,
 		ProtocolActive: protocolActive,
 		Effective:      optIn && protocolActive,
-		ActivationTime: d.rollupCfg.InteropTime,
+		ActivationTime: d.rollupCfg.LagoonTime,
 	}, nil
 }
 
