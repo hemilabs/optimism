@@ -11232,6 +11232,7 @@ version = "1.11.3"
 dependencies = [
  "alloy-consensus",
  "alloy-eips 2.0.5",
+ "alloy-genesis",
  "alloy-primitives",
  "alloy-rlp",
  "clap",
@@ -11239,6 +11240,7 @@ dependencies = [
  "eyre",
  "futures-util",
  "op-alloy-consensus",
+ "page_size",
  "proptest",
  "reth-chainspec",
  "reth-cli",
@@ -11271,6 +11273,7 @@ dependencies = [
  "reth-tasks",
  "reth-tracing",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
