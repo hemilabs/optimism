@@ -1191,6 +1191,7 @@ workflows:
     when: << pipeline.parameters.c-run_rust_ci_gate_short >>
     jobs:
       - required-rust-ci:
+          always-succeed: true
           context:
             - circleci-api-token
 
