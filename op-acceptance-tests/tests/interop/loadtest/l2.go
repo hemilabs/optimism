@@ -6,6 +6,8 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
+	"github.com/ethereum-optimism/optimism/op-service/apis"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/txinclude"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/bindings"
 	"github.com/ethereum-optimism/optimism/op-service/txplan"
@@ -75,4 +77,50 @@ func (l2 *L2) Include(t devtest.T, opts ...txplan.Option) (*txinclude.IncludedTx
 	}
 	t.Require().Equal(ethtypes.ReceiptStatusSuccessful, includedTx.Receipt.Status)
 	return includedTx, nil
+}
+
+// FundableEL is the subset of the L1/L2 EL DSL needed to fund and spam EOAs. Both
+// *dsl.L1ELNode and *dsl.L2ELNode satisfy it, so FundEOAs works against either layer.
+type FundableEL interface {
+	dsl.ELNode
+	EthClient() apis.EthClient
+}
+
+func FundEOAs(t devtest.T, budget eth.ETH, numAccounts uint64, blockTime time.Duration, el FundableEL, wallet *dsl.HDWallet, faucet *dsl.Faucet) []*SyncEOA {
+	t.Require().Equal(faucet.Escape().ChainID(), el.ChainID())
+
+	// Fund a lot of spammer EOAs. The funder provided by the devstack isn't very reliable when
+	// funding lots of different accounts. We fund one account from the faucet and then use that
+	// account to fund all the others.
+	spammerELClient := txinclude.NewReliableEL(el.EthClient(), blockTime)
+	funderEOA := newSyncEOA(dsl.NewFunder(wallet, faucet, el).NewFundedEOA(budget), spammerELClient)
+	budget = budget.Sub(budget.Div(50)) // Reserve 2% of the balance for gas.
+	ethPerAccount := budget.Div(numAccounts)
+	var eoas []*SyncEOA
+	var mu sync.Mutex
+	var wgEOA sync.WaitGroup
+	for range numAccounts {
+		wgEOA.Add(1)
+		go func() {
+			defer wgEOA.Done()
+
+			eoa := wallet.NewEOA(el)
+			addr := eoa.Address()
+			_, err := funderEOA.Include(t, txplan.WithTo(&addr), txplan.WithValue(ethPerAccount))
+			t.Require().NoError(err)
+
+			mu.Lock()
+			defer mu.Unlock()
+			eoas = append(eoas, newSyncEOA(eoa, spammerELClient))
+		}()
+	}
+	wgEOA.Wait()
+
+	return eoas
+}
+
+func newSyncEOA(eoa *dsl.EOA, el txinclude.EL) *SyncEOA {
+	signer := txinclude.NewPkSigner(eoa.Key().Priv(), eoa.ChainID().ToBig())
+	const maxConcurrentTxs = 16 // Reth's mempool limits the number of txs per account to 16.
+	return NewSyncEOA(txinclude.NewLimit(txinclude.NewPersistent(signer, el), maxConcurrentTxs), eoa.Plan())
 }
