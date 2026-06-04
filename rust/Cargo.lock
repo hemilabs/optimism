@@ -11502,6 +11502,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-rpc-types-debug",
  "alloy-rpc-types-engine",
+ "alloy-rpc-types-eth",
  "derive_more",
  "op-alloy-consensus",
  "op-alloy-rpc-types-engine",
