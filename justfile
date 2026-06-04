@@ -474,7 +474,7 @@ release-notes component from='latest' to='latest-rc' mode='':
     if [ -z "$from_tag" ]; then echo "error: could not resolve from tag '{{ from }}' for {{ component }}"; exit 1; fi
     include_path_args=()
     case "{{ component }}" in
-        op-node|op-batcher|op-proposer|op-challenger)
+        op-node|op-batcher|op-proposer|op-challenger|op-supernode)
             include_path_args=(
                 --include-path "{{ component }}/**/*"
                 --include-path "go.*"
@@ -509,7 +509,7 @@ release-notes component from='latest' to='latest-rc' mode='':
             )
             ;;
         *)
-            echo "error: component must be one of: op-node, op-batcher, op-proposer, op-challenger, op-reth, op-deployer, op-contracts, kona-*; is {{ component }}"
+            echo "error: component must be one of: op-node, op-batcher, op-proposer, op-challenger, op-reth, op-deployer, op-contracts, op-supernode, kona-*; is {{ component }}"
             exit 1
             ;;
     esac
