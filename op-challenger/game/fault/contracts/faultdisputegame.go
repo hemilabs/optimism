@@ -54,11 +54,15 @@ var (
 	methodL2BlockNumberChallenger = "l2BlockNumberChallenger"
 	methodChallengeRootL2Block    = "challengeRootL2Block"
 	methodBondDistributionMode    = "bondDistributionMode"
+	methodCloseGame               = "closeGame"
+	methodAnchorStateRegistry     = "anchorStateRegistry"
 )
 
 var (
-	ErrSimulationFailed             = errors.New("tx simulation failed")
-	ErrChallengeL2BlockNotSupported = errors.New("contract version does not support challenging L2 block number")
+	ErrSimulationFailed                = errors.New("tx simulation failed")
+	ErrChallengeL2BlockNotSupported    = errors.New("contract version does not support challenging L2 block number")
+	ErrCloseGameNotSupported           = errors.New("contract version does not support closeGame")
+	ErrAnchorStateRegistryNotSupported = errors.New("contract version does not support anchorStateRegistry")
 )
 
 type FaultDisputeGameContractLatest struct {
@@ -289,6 +293,15 @@ func (f *FaultDisputeGameContractLatest) GetResolvedAt(ctx context.Context, bloc
 	}
 	resolvedAt := time.Unix(int64(result.GetUint64(0)), 0)
 	return resolvedAt, nil
+}
+
+func (f *FaultDisputeGameContractLatest) GetAnchorStateRegistry(ctx context.Context, block rpcblock.Block) (common.Address, error) {
+	defer f.metrics.StartContractRequest("GetAnchorStateRegistry")()
+	result, err := f.multiCaller.SingleCall(ctx, block, f.contract.Call(methodAnchorStateRegistry))
+	if err != nil {
+		return common.Address{}, fmt.Errorf("failed to retrieve anchor state registry: %w", err)
+	}
+	return result.GetAddress(0), nil
 }
 
 func (f *FaultDisputeGameContractLatest) GetStartingRootHash(ctx context.Context) (common.Hash, error) {
@@ -706,4 +719,6 @@ type FaultDisputeGameContract interface {
 	ResolveClaimTx(claimIdx uint64) (txmgr.TxCandidate, error)
 	Vm(ctx context.Context) (*VMContract, error)
 	GetBondDistributionMode(ctx context.Context, block rpcblock.Block) (types.BondDistributionMode, error)
+	CloseGameTx(ctx context.Context) (txmgr.TxCandidate, error)
+	GetAnchorStateRegistry(ctx context.Context, block rpcblock.Block) (common.Address, error)
 }
