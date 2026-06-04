@@ -479,6 +479,46 @@ pub trait OpProofsSnapshotProviderRO: OpProofsProviderRO {
     ) -> OpProofsStorageResult<Self::SnapshotStorageTrieCursor<'tx>>;
 }
 
+/// Blanket [`OpProofsSnapshotProviderRO`] for shared references — mirrors the
+/// equivalent impl on [`OpProofsProviderRO`] above. Lets callers pass `&bp` to
+/// owning cursor factories (e.g., [`crate::SnapshotTrieCursorFactory::new`])
+/// without wrapping in [`std::sync::Arc`].
+impl<'a, T: OpProofsSnapshotProviderRO + 'a> OpProofsSnapshotProviderRO for &'a T {
+    type SnapshotAccountTrieCursor<'tx>
+        = T::SnapshotAccountTrieCursor<'tx>
+    where
+        Self: 'tx,
+        T: 'tx;
+    type SnapshotStorageTrieCursor<'tx>
+        = T::SnapshotStorageTrieCursor<'tx>
+    where
+        Self: 'tx,
+        T: 'tx;
+
+    fn snapshot_anchor(&self) -> OpProofsStorageResult<BlockNumHash> {
+        T::snapshot_anchor(self)
+    }
+
+    fn snapshot_account_trie_cursor<'tx>(
+        &self,
+    ) -> OpProofsStorageResult<Self::SnapshotAccountTrieCursor<'tx>>
+    where
+        'a: 'tx,
+    {
+        T::snapshot_account_trie_cursor(self)
+    }
+
+    fn snapshot_storage_trie_cursor<'tx>(
+        &self,
+        hashed_address: B256,
+    ) -> OpProofsStorageResult<Self::SnapshotStorageTrieCursor<'tx>>
+    where
+        'a: 'tx,
+    {
+        T::snapshot_storage_trie_cursor(self, hashed_address)
+    }
+}
+
 /// Lifecycle of the snapshot init job. Mirrors [`InitialStateStatus`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SnapshotInitStatus {
