@@ -11727,6 +11727,8 @@ dependencies = [
  "c-kzg",
  "derive_more",
  "futures-util",
+ "jsonrpsee",
+ "jsonrpsee-server",
  "metrics",
  "op-alloy-consensus",
  "op-alloy-flz",
