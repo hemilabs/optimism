@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-KONA_REPO_URL=https://github.com/op-rs/kona
+# Get the repo root (two levels up from ops/prestate-reproducibility/)
+REPO_ROOT=$(cd "${SCRIPTS_DIR}/../.." && pwd)
 
 TMP_DIR=$(mktemp -d)
 function cleanup() {
@@ -16,10 +17,9 @@ cd "${TMP_DIR}"
 # contents of this script (which is checked into the repo).
 git clone https://github.com/ethereum-optimism/optimism --recurse-submodules
 
-STATES_DIR="${SCRIPTS_DIR}/../temp/states"
-LOGS_DIR="${SCRIPTS_DIR}/../temp/logs"
-REPO_DIR="${TMP_DIR}/optimism"
-BIN_DIR="${REPO_DIR}/op-program/bin/"
+STATES_DIR="${SCRIPTS_DIR}/temp/states"
+LOGS_DIR="${SCRIPTS_DIR}/temp/logs"
+BIN_DIR="${WORKTREE_DIR}/op-program/bin/"
 VERSIONS_FILE="${STATES_DIR}/versions.json"
 
 mkdir -p "${STATES_DIR}" "${LOGS_DIR}"

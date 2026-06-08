@@ -115,12 +115,6 @@ COPY --from=cannon-builder-v1-6-0 /usr/local/bin/cannon-7 ./cannon/multicannon/e
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd cannon && make cannon  \
   GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$CANNON_VERSION"
 
-FROM --platform=$BUILDPLATFORM builder AS op-program-builder
-ARG OP_PROGRAM_VERSION=v0.0.0
-# note: we only build the host, that's all the user needs. No Go MIPS cross-build in docker
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-program && make op-program-host  \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_PROGRAM_VERSION"
-
 FROM --platform=$BUILDPLATFORM builder AS op-wheel-builder
 ARG OP_WHEEL_VERSION=v0.0.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-wheel && make op-wheel  \
@@ -267,11 +261,6 @@ COPY --from=cannon-builder /app/cannon/bin/cannon /usr/local/bin/
 COPY --from=cannon-builder /app/cannon/multicannon/embeds/* /usr/local/bin/
 CMD ["cannon"]
 
-FROM $TARGET_BASE_IMAGE AS op-program-target
-USER 0
-COPY --from=op-program-builder /app/op-program/bin/op-program /usr/local/bin/
-CMD ["op-program"]
-
 FROM $TARGET_BASE_IMAGE AS op-wheel-target
 USER 0
 COPY --from=op-wheel-builder /app/op-wheel/bin/op-wheel /usr/local/bin/
@@ -289,9 +278,7 @@ FROM ghcr.io/op-rs/kona/kona-host:$KONA_VERSION AS kona
 FROM $UBUNTU_TARGET_BASE_IMAGE AS op-challenger-target
 RUN apt-get update && apt-get install -y --no-install-recommends musl openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=op-challenger-builder /app/op-challenger/bin/op-challenger /usr/local/bin/
-# Copy in op-program and cannon
-COPY --from=op-program-builder /app/op-program/bin/op-program /usr/local/bin/
-ENV OP_CHALLENGER_CANNON_SERVER=/usr/local/bin/op-program
+# Copy in cannon
 COPY --from=cannon-builder /app/cannon/bin/cannon /usr/local/bin/
 ENV OP_CHALLENGER_CANNON_BIN=/usr/local/bin/cannon
 # Copy in kona

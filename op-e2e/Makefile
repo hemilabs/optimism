@@ -1,5 +1,4 @@
-# nproc is for linux, sysctl for Mac and then fallback to 4 if neither is available
-num_cores := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+DEPRECATED_TARGETS := test test-ws test-actions test-http test-cannon test-fault-proofs pre-test clean fuzz
 
 # Generally, JUNIT_FILE is set in CI but may be specified to an arbitrary file location to emulate CI locally
 # If JUNIT_FILE is set, JSON_LOG_FILE should also be set

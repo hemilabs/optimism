@@ -7,7 +7,7 @@ import (
 	"os"
 	"slices"
 
-	"github.com/ethereum-optimism/optimism/op-program/prestates"
+	"github.com/ethereum-optimism/optimism/ops/prestate-reproducibility/prestates"
 )
 
 func main() {
