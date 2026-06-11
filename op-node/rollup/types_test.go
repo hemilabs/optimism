@@ -821,6 +821,7 @@ func TestGetPayloadVersion(t *testing.T) {
 		name           string
 		isthmusTime    uint64
 		ecotoneTime    uint64
+		karstTime      uint64
 		payloadTime    uint64
 		expectedMethod eth.EngineAPIMethod
 	}{
@@ -829,6 +830,7 @@ func TestGetPayloadVersion(t *testing.T) {
 			ecotoneTime:    10,
 			payloadTime:    5,
 			isthmusTime:    20,
+			karstTime:      30,
 			expectedMethod: eth.GetPayloadV2,
 		},
 		{
@@ -836,6 +838,7 @@ func TestGetPayloadVersion(t *testing.T) {
 			ecotoneTime:    10,
 			payloadTime:    15,
 			isthmusTime:    20,
+			karstTime:      30,
 			expectedMethod: eth.GetPayloadV3,
 		},
 		{
@@ -843,7 +846,16 @@ func TestGetPayloadVersion(t *testing.T) {
 			ecotoneTime:    10,
 			payloadTime:    25,
 			isthmusTime:    20,
+			karstTime:      30,
 			expectedMethod: eth.GetPayloadV4,
+		},
+		{
+			name:           "Karst",
+			ecotoneTime:    10,
+			payloadTime:    35,
+			isthmusTime:    20,
+			karstTime:      30,
+			expectedMethod: eth.GetPayloadV5,
 		},
 	}
 
@@ -852,6 +864,7 @@ func TestGetPayloadVersion(t *testing.T) {
 		t.Run(fmt.Sprintf("TestGetPayloadVersion_%s", test.name), func(t *testing.T) {
 			config.EcotoneTime = &test.ecotoneTime
 			config.IsthmusTime = &test.isthmusTime
+			config.KarstTime = &test.karstTime
 			assert.Equal(t, config.GetPayloadVersion(test.payloadTime), test.expectedMethod)
 		})
 	}
