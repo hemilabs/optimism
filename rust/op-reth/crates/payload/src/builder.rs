@@ -285,7 +285,12 @@ where
         let attributes = Attrs::try_new(parent.hash(), attributes, 3)?;
         let payload_id = attributes.payload_id();
 
-        let config = PayloadConfig { parent_header: Arc::new(parent), attributes, payload_id };
+        let config = PayloadConfig {
+            parent_header: Arc::new(parent),
+            parent_block_info: None,
+            attributes,
+            payload_id,
+        };
         let ctx = OpPayloadBuilderCtx {
             evm_config: self.evm_config.clone(),
             builder_config: self.config.clone(),
@@ -387,6 +392,7 @@ fn convert_build_args<N: OpPayloadPrimitives>(
     Ok(BuildArguments {
         config: PayloadConfig {
             parent_header: config.parent_header,
+            parent_block_info: config.parent_block_info,
             attributes: builder_attrs,
             payload_id,
         },
