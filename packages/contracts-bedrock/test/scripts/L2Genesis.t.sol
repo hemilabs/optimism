@@ -48,6 +48,10 @@ abstract contract L2Genesis_TestInit is Test {
             IProxyAdmin(proxyAdminImpl).owner(),
             "ProxyAdmin implementation owner should match expected"
         );
+
+        // The proxy admin owner must not leak into the genesis state dump. The pranked `create`
+        // calls in setEAS() and setGovernanceToken() bump its nonce, which L2Genesis must reset.
+        assertEq(vm.getNonce(input.opChainProxyAdminOwner), 0, "ProxyAdmin owner nonce should be reset to zero");
     }
 
     function testPredeploys() internal view {
