@@ -374,7 +374,7 @@ mod tests {
     use alloy_primitives::b256;
     use kona_genesis::HardForkConfig;
 
-    fn rollup_config_with_interop_time(lagoon_time: Option<u64>) -> RollupConfig {
+    fn rollup_config_with_lagoon_time(lagoon_time: Option<u64>) -> RollupConfig {
         RollupConfig {
             hardforks: HardForkConfig { lagoon_time, ..Default::default() },
             ..Default::default()
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_require_dependency_set_interop_scheduled_without_depset() {
         let configs: BTreeMap<u64, RollupConfig> =
-            BTreeMap::from([(10u64, rollup_config_with_interop_time(Some(42)))]);
+            BTreeMap::from([(10u64, rollup_config_with_lagoon_time(Some(42)))]);
 
         let err = require_dependency_set_for_configs(&configs, &None).unwrap_err();
         match err {
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn test_require_dependency_set_interop_scheduled_with_depset() {
         let configs: BTreeMap<u64, RollupConfig> =
-            BTreeMap::from([(10u64, rollup_config_with_interop_time(Some(42)))]);
+            BTreeMap::from([(10u64, rollup_config_with_lagoon_time(Some(42)))]);
         let depset = Some(PathBuf::from("/tmp/depset.json"));
 
         assert!(require_dependency_set_for_configs(&configs, &depset).is_ok());
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn test_require_dependency_set_no_interop_no_depset() {
         let configs: BTreeMap<u64, RollupConfig> =
-            BTreeMap::from([(10u64, rollup_config_with_interop_time(None))]);
+            BTreeMap::from([(10u64, rollup_config_with_lagoon_time(None))]);
 
         assert!(require_dependency_set_for_configs(&configs, &None).is_ok());
     }

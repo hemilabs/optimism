@@ -229,7 +229,8 @@ func NewHost(
 		GraniteTime:  nil,
 		HoloceneTime: nil,
 		JovianTime:   nil,
-		InteropTime:  nil,
+		KarstTime:    nil,
+		LagoonTime:   nil,
 		Optimism:     nil,
 	}
 
