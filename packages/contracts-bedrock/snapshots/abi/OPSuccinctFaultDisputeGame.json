@@ -516,22 +516,9 @@
     "name": "rootClaimByChainId",
     "outputs": [
       {
-        "internalType": "contract ISP1Verifier",
-        "name": "verifier_",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "startingBlockNumber",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "startingBlockNumber_",
-        "type": "uint256"
+        "internalType": "Claim",
+        "name": "outputRootClaim_",
+        "type": "bytes32"
       }
     ],
     "stateMutability": "view",
@@ -563,6 +550,19 @@
         "internalType": "Hash",
         "name": "startingRootHash_",
         "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "startingSequenceNumber",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "startingSequenceNumber_",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -671,6 +671,11 @@
   },
   {
     "inputs": [],
+    "name": "BadExtraData",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "BondTransferFailed",
     "type": "error"
   },
@@ -682,6 +687,21 @@
   {
     "inputs": [],
     "name": "ClaimAlreadyResolved",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "Encoding_EmptySuperRoot",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "Encoding_InvalidSuperRootEncoding",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "Encoding_InvalidSuperRootVersion",
     "type": "error"
   },
   {

@@ -106,7 +106,6 @@ func deployDisputeGame(
 			ChallengerBond:       zk.ChallengerBond.ToInt(),
 			AnchorStateRegistry:  thisState.OpChainContracts.AnchorStateRegistryProxy,
 			Weth:                 thisState.OpChainContracts.DelayedWethPermissionlessGameProxy,
-			L2ChainID:            new(big.Int).SetBytes(thisIntent.ID[:]),
 		}.Pack()
 		zkInput := opcm.SetDisputeGameImplInput{
 			Factory:             thisState.OpChainContracts.DisputeGameFactoryProxy,
