@@ -182,12 +182,7 @@ contract VerifyOPCM_Run_Test is VerifyOPCM_TestInit {
             for (uint256 j = 0; j < refsByType[i].length; j++) {
                 VerifyOPCM.OpcmContractRef memory ref = refsByType[i][j];
 
-                // TODO(#17262): Remove these skips once these contracts are no longer behind a feature flag
-                // This script doesn't work for features that are in-development, so skip for now
-                if (_isDisputeGameV2ContractRef(ref)) {
-                    continue;
-                }
-                if (_isSuperDisputeGameContractRef(ref)) {
+                if (_isSuperDisputeGameContractRef(ref) && !superGamesEnabled()) {
                     continue;
                 }
 
