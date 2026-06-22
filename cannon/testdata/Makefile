@@ -1,4 +1,4 @@
-all: elf
+DEPRECATED_TARGETS := diff-hello-elf clean
 
 go1-24:
 	make -C ./go-1-24 elf
