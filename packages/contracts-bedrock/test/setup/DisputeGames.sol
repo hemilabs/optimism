@@ -121,7 +121,7 @@ contract DisputeGames is FeatureFlags {
 
     function superPermissionedGameProposer(IDisputeGameFactory _dgf) internal view returns (address proposer_) {
         LibGameArgs.SuperPermissionedGameArgs memory gameArgs =
-            LibGameArgs.decodeSuperPermissioned(_dgf.gameArgs(GameTypes.SUPER_PERMISSIONED_CANNON));
+            LibGameArgs.decodeSuperPermissioned(_dgf.gameArgs(GameTypes.SUPER_PERMISSIONED));
         proposer_ = gameArgs.proposer;
     }
 
@@ -131,7 +131,7 @@ contract DisputeGames is FeatureFlags {
         returns (address anchorStateRegistry_)
     {
         LibGameArgs.SuperPermissionedGameArgs memory gameArgs =
-            LibGameArgs.decodeSuperPermissioned(_dgf.gameArgs(GameTypes.SUPER_PERMISSIONED_CANNON));
+            LibGameArgs.decodeSuperPermissioned(_dgf.gameArgs(GameTypes.SUPER_PERMISSIONED));
         anchorStateRegistry_ = gameArgs.anchorStateRegistry;
     }
 
@@ -215,25 +215,25 @@ contract DisputeGames is FeatureFlags {
     }
 
     function mockSuperPermissionedGameProposer(IDisputeGameFactory _dgf, address _proposer) internal {
-        bytes memory gameArgsData = _dgf.gameArgs(GameTypes.SUPER_PERMISSIONED_CANNON);
+        bytes memory gameArgsData = _dgf.gameArgs(GameTypes.SUPER_PERMISSIONED);
         LibGameArgs.SuperPermissionedGameArgs memory gameArgs = LibGameArgs.decodeSuperPermissioned(gameArgsData);
         gameArgs.proposer = _proposer;
 
         vm.mockCall(
             address(_dgf),
-            abi.encodeCall(IDisputeGameFactory.gameArgs, (GameTypes.SUPER_PERMISSIONED_CANNON)),
+            abi.encodeCall(IDisputeGameFactory.gameArgs, (GameTypes.SUPER_PERMISSIONED)),
             abi.encode(LibGameArgs.encodeSuperPermissioned(gameArgs))
         );
     }
 
     function mockSuperPermissionedGameASR(IDisputeGameFactory _dgf, address _asr) internal {
-        bytes memory gameArgsData = _dgf.gameArgs(GameTypes.SUPER_PERMISSIONED_CANNON);
+        bytes memory gameArgsData = _dgf.gameArgs(GameTypes.SUPER_PERMISSIONED);
         LibGameArgs.SuperPermissionedGameArgs memory gameArgs = LibGameArgs.decodeSuperPermissioned(gameArgsData);
         gameArgs.anchorStateRegistry = _asr;
 
         vm.mockCall(
             address(_dgf),
-            abi.encodeCall(IDisputeGameFactory.gameArgs, (GameTypes.SUPER_PERMISSIONED_CANNON)),
+            abi.encodeCall(IDisputeGameFactory.gameArgs, (GameTypes.SUPER_PERMISSIONED)),
             abi.encode(LibGameArgs.encodeSuperPermissioned(gameArgs))
         );
     }
