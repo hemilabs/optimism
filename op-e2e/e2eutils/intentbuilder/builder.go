@@ -96,6 +96,7 @@ type L2FeesConfigurator interface {
 type L2HardforkConfigurator interface {
 	WithForkAtGenesis(fork opforks.Name)
 	WithForkAtOffset(fork opforks.Name, offset *uint64)
+	WithKeepKarstUpgradeGas()
 }
 
 type Builder interface {
@@ -505,6 +506,10 @@ func (c *l2Configurator) WithForkAtGenesis(fork opforks.Name) {
 			future = true
 		}
 	}
+}
+
+func (c *l2Configurator) WithKeepKarstUpgradeGas() {
+	c.builder.intent.Chains[c.chainIndex].DeployOverrides["keepKarstUpgradeGas"] = true
 }
 
 func (c *l2Configurator) WithForkAtOffset(fork opforks.Name, offset *uint64) {
