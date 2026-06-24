@@ -193,7 +193,6 @@ func startL2CLForKey(
 			IsSequencer:    isSequencer,
 			NoDiscovery:    true,
 			EnableReqResp:  true,
-			UseReqResp:     true,
 			L2FollowSource: followSource,
 			L2CLOptions:    l2CLOpts,
 		})
@@ -297,7 +296,6 @@ type l2CLNodeStartConfig struct {
 	IsSequencer    bool
 	NoDiscovery    bool
 	EnableReqResp  bool
-	UseReqResp     bool
 	L2FollowSource string
 	DependencySet  depset.DependencySet
 	L2CLOptions    []L2CLOption
@@ -324,7 +322,6 @@ func startL2CLNode(
 	cfg.IsSequencer = startCfg.IsSequencer
 	cfg.NoDiscovery = startCfg.NoDiscovery
 	cfg.EnableReqRespSync = startCfg.EnableReqResp
-	cfg.UseReqRespSync = startCfg.UseReqResp
 	cfg.FollowSource = startCfg.L2FollowSource
 	if len(startCfg.L2CLOptions) > 0 {
 		l2CLTarget := NewComponentTarget(startCfg.Key, l2Net.ChainID())
@@ -432,7 +429,6 @@ func startL2CLNode(
 		Tracer:                      nil,
 		Sync: nodeSync.Config{
 			SyncMode:                       syncMode,
-			SyncModeReqResp:                cfg.UseReqRespSync,
 			SkipSyncStartCheck:             false,
 			SupportsPostFinalizationELSync: false,
 			L2FollowSourceEndpoint:         cfg.FollowSource,

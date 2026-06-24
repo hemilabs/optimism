@@ -132,10 +132,12 @@ var (
 	}
 	SyncModeReqRespFlag = &cli.BoolFlag{
 		Name:     "syncmode.req-resp",
+		Usage:    "Deprecated, no-op flag. The Req/Resp CL P2P sync protocol has been removed; this is always disabled.",
 		Required: false,
 		Value:    false,
 		EnvVars:  prefixEnvVars("SYNCMODE_REQ_RESP"),
 		Category: RollupCategory,
+		Hidden:   true,
 	}
 	SyncModeOffsetELSafeFlag = &cli.DurationFlag{
 		Name: "syncmode.offset-el-safe",
@@ -451,7 +453,6 @@ var optionalFlags = []cli.Flag{
 	BeaconFetchAllSidecars,
 	BeaconSlotDurationOverride,
 	SyncModeFlag,
-	SyncModeReqRespFlag,
 	SyncModeOffsetELSafeFlag,
 	FetchWithdrawalRootFromState,
 	L1TrustRPC,
@@ -496,6 +497,7 @@ var DeprecatedFlags = []cli.Flag{
 	BetaExtraNetworks,
 	BackupL2UnsafeSyncRPC,
 	BackupL2UnsafeSyncRPCTrustRPC,
+	SyncModeReqRespFlag,
 	// Deprecated P2P Flags are added at the init step
 }
 
