@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	opnodecfg "github.com/ethereum-optimism/optimism/op-node/config"
@@ -30,7 +31,7 @@ type Supernode struct {
 	log         gethlog.Logger
 	version     string
 	requestStop context.CancelCauseFunc
-	stopped     bool
+	stopped     atomic.Bool
 	cfg         *config.CLIConfig
 	chains      map[eth.ChainID]cc.InteropChain
 	// activitiesMu guards reads and writes of the activities slice.
@@ -272,7 +273,7 @@ func (s *Supernode) Start(ctx context.Context) error {
 
 func (s *Supernode) Stop(ctx context.Context) error {
 	s.log.Info("supernode stopping")
-	s.stopped = true
+	s.stopped.Store(false)
 
 	// Stop RPC server first, then close router resources
 	if s.httpServer != nil {
@@ -318,7 +319,21 @@ func (s *Supernode) Stop(ctx context.Context) error {
 		}
 	}
 
-	s.wg.Wait()
+	s.log.Info("all chain containers stopped, waiting for goroutines to finish")
+	wgDone := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(wgDone)
+	}()
+	select {
+	case <-wgDone:
+		s.log.Info("goroutines finished, closing l1 client")
+		s.stopped.Store(true)
+	case <-ctx.Done():
+		s.log.Error("context canceled while waiting for chain goroutines to finish, proceeding with cleanup", "err", ctx.Err())
+	case <-time.After(60 * time.Second):
+		s.log.Error("timed out waiting for chain goroutines to finish after 60s, proceeding with cleanup")
+	}
 
 	if s.l1Client != nil {
 		s.l1Client.Close()
@@ -343,7 +358,7 @@ func (s *Supernode) onChainReset(chainID eth.ChainID, timestamp uint64, invalida
 	}
 }
 
-func (s *Supernode) Stopped() bool { return s.stopped }
+func (s *Supernode) Stopped() bool { return s.stopped.Load() }
 
 // RPCAddr returns the bound RPC address (host:port) if the server is listening.
 // ok is false if the listener has not been created yet.
