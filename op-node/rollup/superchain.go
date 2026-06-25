@@ -101,4 +101,6 @@ func applyHardforks(cfg *Config, hardforks superchain.HardforkConfig) {
 	cfg.IsthmusTime = hardforks.IsthmusTime
 	cfg.LagoonTime = hardforks.LagoonTime
 	cfg.JovianTime = hardforks.JovianTime
+	cfg.KarstTime = hardforks.KarstTime
+	cfg.KeepKarstUpgradeGas = hardforks.KeepKarstUpgradeGas
 }
