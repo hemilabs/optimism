@@ -30,10 +30,8 @@ const (
 	L2toL2CrossDomainMessenger    = "0x4200000000000000000000000000000000000023"
 	SuperchainETHBridge           = "0x4200000000000000000000000000000000000024"
 	ETHLiquidity                  = "0x4200000000000000000000000000000000000025"
-	SuperchainTokenBridge         = "0x4200000000000000000000000000000000000028"
 	NativeAssetLiquidity          = "0x4200000000000000000000000000000000000029"
 	LiquidityController           = "0x420000000000000000000000000000000000002a"
-	FeeSplitter                   = "0x420000000000000000000000000000000000002b"
 	Create2Deployer               = "0x13b0D85CcB8bf860b6b79AF3029fCA081AE9beF2"
 	MultiCall3                    = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	Safe_v130                     = "0x69f4D1788e39c87893C980c06EdF4b7f686e2938"
@@ -43,9 +41,6 @@ const (
 	DeterministicDeploymentProxy  = "0x4e59b44847b379578588920cA78FbF26c0B4956C"
 	MultiSend_v130                = "0x998739BFdAAdde7C933B942a68053933098f9EDa"
 	Permit2                       = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
-	SenderCreator                 = "0x7fc98430eaedbb6070b35b39d798725049088348"
-	EntryPoint                    = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"
-	PoPPoints                     = "0x455f8F0B8dF5399873700f60aa931D6b89Ac9c79"
 	SenderCreator_v060            = "0x7fc98430eaedbb6070b35b39d798725049088348"
 	EntryPoint_v060               = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"
 	SenderCreator_v070            = "0xEFC2c1444eBCC4Db75e7613d20C6a62fF67A167C"
@@ -77,10 +72,8 @@ var (
 	L2toL2CrossDomainMessengerAddr    = common.HexToAddress(L2toL2CrossDomainMessenger)
 	SuperchainETHBridgeAddr           = common.HexToAddress(SuperchainETHBridge)
 	ETHLiquidityAddr                  = common.HexToAddress(ETHLiquidity)
-	SuperchainTokenBridgeAddr         = common.HexToAddress(SuperchainTokenBridge)
 	NativeAssetLiquidityAddr          = common.HexToAddress(NativeAssetLiquidity)
 	LiquidityControllerAddr           = common.HexToAddress(LiquidityController)
-	FeeSplitterAddr                   = common.HexToAddress(FeeSplitter)
 	Create2DeployerAddr               = common.HexToAddress(Create2Deployer)
 	MultiCall3Addr                    = common.HexToAddress(MultiCall3)
 	Safe_v130Addr                     = common.HexToAddress(Safe_v130)
@@ -90,9 +83,6 @@ var (
 	DeterministicDeploymentProxyAddr  = common.HexToAddress(DeterministicDeploymentProxy)
 	MultiSend_v130Addr                = common.HexToAddress(MultiSend_v130)
 	Permit2Addr                       = common.HexToAddress(Permit2)
-	SenderCreatorAddr                 = common.HexToAddress(SenderCreator)
-	EntryPointAddr                    = common.HexToAddress(EntryPoint)
-	PoPPointsAddr                     = common.HexToAddress(PoPPoints)
 	SenderCreator_v060Addr            = common.HexToAddress(SenderCreator_v060)
 	EntryPoint_v060Addr               = common.HexToAddress(EntryPoint_v060)
 	SenderCreator_v070Addr            = common.HexToAddress(SenderCreator_v070)
@@ -117,8 +107,6 @@ func init() {
 	Predeploys["L2toL2CrossDomainMessenger"] = &Predeploy{Address: L2toL2CrossDomainMessengerAddr}
 	Predeploys["SuperchainETHBridge"] = &Predeploy{Address: SuperchainETHBridgeAddr}
 	Predeploys["ETHLiquidity"] = &Predeploy{Address: ETHLiquidityAddr}
-	Predeploys["SuperchainTokenBridge"] = &Predeploy{Address: SuperchainTokenBridgeAddr}
-	Predeploys["FeeSplitter"] = &Predeploy{Address: FeeSplitterAddr}
 	Predeploys["GovernanceToken"] = &Predeploy{
 		Address:       GovernanceTokenAddr,
 		ProxyDisabled: true,
