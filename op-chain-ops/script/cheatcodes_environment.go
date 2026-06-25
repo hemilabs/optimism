@@ -6,6 +6,7 @@ import (
 
 	"github.com/holiman/uint256"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -14,7 +15,7 @@ import (
 
 // Warp implements https://book.getfoundry.sh/cheatcodes/warp
 func (c *CheatCodesPrecompile) Warp(timestamp *big.Int) {
-	c.h.env.Context().Time = timestamp.Uint64()
+	c.h.env.Context().Time = bigs.Uint64Strict(timestamp)
 }
 
 // Roll implements https://book.getfoundry.sh/cheatcodes/roll
@@ -66,7 +67,7 @@ func (c *CheatCodesPrecompile) Load(account common.Address, slot [32]byte) [32]b
 
 // Etch implements https://book.getfoundry.sh/cheatcodes/etch
 func (c *CheatCodesPrecompile) Etch(who common.Address, code []byte) {
-	c.h.state.SetCode(who, bytes.Clone(code)) // important to clone; geth EVM will reuse the calldata memory.
+	c.h.state.SetCode(who, bytes.Clone(code), tracing.CodeChangeUnspecified) // important to clone; geth EVM will reuse the calldata memory.
 	if len(code) > 0 {
 		// if we're not just zeroing out the account: allow it to access cheatcodes
 		c.h.AllowCheatcodes(who)
@@ -221,7 +222,7 @@ func (c *CheatCodesPrecompile) ResumeGasMetering() error {
 }
 
 // TxGasPrice implements https://book.getfoundry.sh/cheatcodes/tx-gas-price
-func (c *CheatCodesPrecompile) TxGasPrice(newGasPrice *big.Int) {
+func (c *CheatCodesPrecompile) TxGasPrice(newGasPrice *uint256.Int) {
 	c.h.env.TxContext().GasPrice = newGasPrice
 }
 

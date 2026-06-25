@@ -19,27 +19,19 @@ type SuperchainContracts struct {
 	SuperchainProxyAdminImpl common.Address
 	SuperchainConfigProxy    common.Address
 	SuperchainConfigImpl     common.Address
-	ProtocolVersionsProxy    common.Address
-	ProtocolVersionsImpl     common.Address
 }
 
 // ImplementationsContracts struct contains all the implementation contracts for a superchain
 //   - these contracts are shared by all OpChains that are members of the same superchain
 //   - these contracts are not upgradable, but can be replaced by new contract releases/deployments
 type ImplementationsContracts struct {
-	OpcmImpl                         common.Address
-	OpcmContractsContainerImpl       common.Address
-	OpcmGameTypeAdderImpl            common.Address
-	OpcmDeployerImpl                 common.Address
-	OpcmUpgraderImpl                 common.Address
-	OpcmInteropMigratorImpl          common.Address
 	OpcmStandardValidatorImpl        common.Address
 	OpcmUtilsImpl                    common.Address
+	OpcmMigratorImpl                 common.Address
 	OpcmV2Impl                       common.Address
 	OpcmContainerImpl                common.Address
 	DelayedWethImpl                  common.Address
 	OptimismPortalImpl               common.Address
-	OptimismPortalInteropImpl        common.Address
 	EthLockboxImpl                   common.Address
 	PreimageOracleImpl               common.Address
 	MipsImpl                         common.Address
@@ -50,9 +42,12 @@ type ImplementationsContracts struct {
 	OptimismMintableErc20FactoryImpl common.Address
 	DisputeGameFactoryImpl           common.Address
 	AnchorStateRegistryImpl          common.Address
-	FaultDisputeGameV2Impl           common.Address
-	PermissionedDisputeGameV2Impl    common.Address
+	FaultDisputeGameImpl             common.Address
+	PermissionedDisputeGameImpl      common.Address
+	ZkDisputeGameImpl                common.Address
 	StorageSetterImpl                common.Address
+	SuperFaultDisputeGameImpl        common.Address
+	SuperPermissionedDisputeGameImpl common.Address
 }
 
 // OpChainContracts struct contains all the contracts for a specific L2 OpChain

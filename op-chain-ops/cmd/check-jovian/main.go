@@ -17,7 +17,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	op_service "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
@@ -190,7 +189,7 @@ func checkBlock(ctx context.Context, env *actionEnv) error {
 			return fmt.Errorf("tx mined receipt was nil")
 		}
 
-		env.log.Info("tx mined", "txHash", receipt.TxHash.Hex(), "blockNumber", receipt.BlockNumber.Uint64(), "blobGasUsed", receipt.BlobGasUsed)
+		env.log.Info("tx mined", "txHash", receipt.TxHash.Hex(), "blockNumber", receipt.BlockNumber, "blobGasUsed", receipt.BlobGasUsed)
 
 		if receipt.BlobGasUsed == 0 {
 			return fmt.Errorf("receipt.BlobGasUsed was zero (required with Jovian)")
@@ -254,7 +253,7 @@ func checkExtraData(ctx context.Context, env *actionEnv) error {
 	}
 
 	// Decode the validated extra data using op-geth's decode function
-	denominator, elasticity, minBaseFee := rollup.DecodeJovianExtraData(extra)
+	denominator, elasticity, minBaseFee := eip1559.DecodeJovianExtraData(extra)
 
 	env.log.Info("ExtraData format test: success",
 		"blockNumber", latest.Number,

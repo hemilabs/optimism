@@ -617,7 +617,7 @@ func (p *Precompile[E]) RequiredGas(input []byte) uint64 {
 
 // Run implements the vm.PrecompiledContract interface.
 // This takes the ABI calldata, finds the applicable method by selector, and then runs that method with the data.
-func (p *Precompile[E]) Run(input []byte, blockContext common.Hash) ([]byte, error) {
+func (p *Precompile[E]) Run(input []byte) ([]byte, error) {
 	if len(input) < 4 {
 		return encodeRevert(fmt.Errorf("expected at least 4 bytes, but got '%x'", input))
 	}

@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	op_service "github.com/ethereum-optimism/optimism/op-service"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
@@ -183,7 +184,7 @@ func fetchChainConfig(ctx context.Context, cl *rpc.Client) (*params.ChainConfig,
 	// if we recognize the chain ID, we can get the chain config
 	id := (*big.Int)(&idResult)
 	if id.IsUint64() {
-		cfg, err := superutil.LoadOPStackChainConfigFromChainID(id.Uint64())
+		cfg, err := superutil.LoadOPStackChainConfigFromChainID(bigs.Uint64Strict(id))
 		if err == nil {
 			return cfg, nil
 		}
@@ -238,15 +239,35 @@ type simChainContext struct {
 	cfg  *params.ChainConfig
 }
 
+var _ core.ChainContext = (*simChainContext)(nil)
+
 func (d *simChainContext) Engine() consensus.Engine {
 	return d.eng
 }
 
 func (d *simChainContext) GetHeader(h common.Hash, n uint64) *types.Header {
-	if n == d.head.Number.Uint64() {
+	if n == bigs.Uint64Strict(d.head.Number) {
 		return d.head
 	}
 	panic(fmt.Errorf("header retrieval not supported, cannot fetch %s %d", h, n))
+}
+
+func (d *simChainContext) CurrentHeader() *types.Header {
+	return d.head
+}
+
+func (d *simChainContext) GetHeaderByHash(hash common.Hash) *types.Header {
+	if d.head.Hash() == hash {
+		return d.head
+	}
+	panic(fmt.Errorf("header retrieval not supported, cannot fetch %s", hash))
+}
+
+func (d *simChainContext) GetHeaderByNumber(number uint64) *types.Header {
+	if bigs.Uint64Strict(d.head.Number) == number {
+		return d.head
+	}
+	panic(fmt.Errorf("header retrieval not supported, cannot fetch %d", number))
 }
 
 func (d *simChainContext) Config() *params.ChainConfig {
@@ -267,14 +288,14 @@ func simulate(ctx context.Context, logger log.Logger, conf *params.ChainConfig,
 	}
 	for addr, acc := range dump {
 		state.CreateAccount(addr)
-		state.SetBalance(addr, uint256.MustFromBig((*big.Int)(&acc.Balance)))
+		state.SetBalance(addr, uint256.MustFromBig((*big.Int)(&acc.Balance)), tracing.BalanceChangeUnspecified)
 		state.SetNonce(addr, acc.Nonce, tracing.NonceChangeUnspecified)
-		state.SetCode(addr, acc.Code)
+		state.SetCode(addr, acc.Code, tracing.CodeChangeUnspecified)
 		state.SetStorage(addr, acc.Storage)
 	}
 
 	// load prestate data into memory db state
-	_, err = state.Commit(header.Number.Uint64()-1, true, conf.IsCancun(header.Number, header.Time))
+	_, err = state.Commit(bigs.Uint64Strict(header.Number)-1, true, conf.IsCancun(header.Number, header.Time))
 	if err != nil {
 		return fmt.Errorf("failed to write state data to underlying DB: %w", err)
 	}
@@ -291,8 +312,7 @@ func simulate(ctx context.Context, logger log.Logger, conf *params.ChainConfig,
 	state.SetTxContext(tx.Hash(), 0)
 
 	cCtx := &simChainContext{eng: beacon.New(ethash.NewFaker()), head: header, cfg: conf}
-	gp := core.GasPool(tx.Gas())
-	usedGas := uint64(0)
+	gp := core.NewGasPool(tx.Gas())
 	vmConfig := vm.Config{}
 
 	if doProfile {
@@ -305,7 +325,7 @@ func simulate(ctx context.Context, logger log.Logger, conf *params.ChainConfig,
 	// nil block-author, since it defaults to header.coinbase
 	blockCtx := core.NewEVMBlockContext(header, cCtx, nil, conf, state)
 	evm := vm.NewEVM(blockCtx, state, conf, vmConfig)
-	receipt, err := core.ApplyTransaction(evm, &gp, state, header, tx, &usedGas)
+	receipt, err := core.ApplyTransaction(evm, gp, state, header, tx)
 	if err != nil {
 		return fmt.Errorf("failed to apply tx: %w", err)
 	}

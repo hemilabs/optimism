@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/forking"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/srcmap"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 )
 
 // jumpHistory is the amount of successful jumps to track for debugging.
@@ -117,6 +118,9 @@ type Host struct {
 	// useCreate2Deployer uses the Create2Deployer for broadcasted
 	// create2 calls.
 	useCreate2Deployer bool
+
+	// noMaxCodeSize disables the maximum contract bytecode size check.
+	noMaxCodeSize bool
 }
 
 type HostOption func(h *Host)
@@ -158,6 +162,15 @@ func WithIsolatedBroadcasts() HostOption {
 func WithCreate2Deployer() HostOption {
 	return func(h *Host) {
 		h.useCreate2Deployer = true
+	}
+}
+
+// WithNoMaxCodeSize disables the maximum contract bytecode size check.
+// This is useful for development environments where contracts may be compiled
+// without optimizations and exceed the standard 24KB limit.
+func WithNoMaxCodeSize() HostOption {
+	return func(h *Host) {
+		h.noMaxCodeSize = true
 	}
 }
 
@@ -228,6 +241,7 @@ func NewHost(
 		GraniteTime:  nil,
 		HoloceneTime: nil,
 		JovianTime:   nil,
+		KarstTime:    nil,
 		InteropTime:  nil,
 		Optimism:     nil,
 	}
@@ -266,15 +280,13 @@ func NewHost(
 		BlobBaseFee: big.NewInt(0),
 		Random:      &executionContext.PrevRandao,
 	}
-
 	// Initialize a transaction-context for the EVM to access environment variables.
 	// The transaction context (after embedding inside of the EVM environment) may be mutated later.
 	txContext := vm.TxContext{
 		Origin:       executionContext.Origin,
-		GasPrice:     big.NewInt(0),
+		GasPrice:     uint256.NewInt(0),
 		BlobHashes:   executionContext.BlobHashes,
-		BlobFeeCap:   big.NewInt(0),
-		AccessEvents: state.NewAccessEvents(h.baseState.PointCache()),
+		AccessEvents: state.NewAccessEvents(),
 	}
 
 	// Hook up the Host to capture the EVM environment changes
@@ -297,6 +309,11 @@ func NewHost(
 
 	h.env = WrapEVM(vm.NewEVM(blockContext, h.state, h.chainCfg, vmCfg))
 	h.env.SetTxContext(txContext)
+
+	// Apply noMaxCodeSize after EVM is initialized
+	if h.noMaxCodeSize {
+		h.EnforceMaxCodeSize(false)
+	}
 
 	return h
 }
@@ -323,7 +340,7 @@ func (h *Host) EnableCheats() error {
 	// Solidity does EXTCODESIZE checks on functions without return-data.
 	// We need to insert some placeholder code to prevent it from aborting calls.
 	// Emulates Forge script: https://github.com/foundry-rs/foundry/blob/224fe9cbf76084c176dabf7d3b2edab5df1ab818/crates/evm/evm/src/executors/mod.rs#L108
-	h.state.SetCode(addresses.VMAddr, []byte{0x00})
+	h.state.SetCode(addresses.VMAddr, []byte{0x00}, tracing.CodeChangeUnspecified)
 	h.precompiles[addresses.VMAddr] = h.cheatcodes
 
 	consolePrecompile, err := NewPrecompile[*ConsolePrecompile](&ConsolePrecompile{
@@ -354,9 +371,17 @@ func (h *Host) Call(from common.Address, to common.Address, input []byte, gas ui
 
 	defer func() {
 		if r := recover(); r != nil {
-			// Cast to a string to check the error message. If it's not a string it's
-			// an unexpected panic and we should re-raise it.
-			rStr, ok := r.(string)
+			// Try to get the panic message as a string. It could be a plain string
+			// or an error type (e.g., from errors.New or fmt.Errorf).
+			var rStr string
+			var ok bool
+			if rStr, ok = r.(string); !ok {
+				// Not a string, try error interface
+				if rErr, errOk := r.(error); errOk {
+					rStr = rErr.Error()
+					ok = true
+				}
+			}
 			if !ok || !strings.Contains(strings.ToLower(rStr), "revision id 1") {
 				fmt.Println("panic", rStr)
 				panic(r)
@@ -437,7 +462,7 @@ func (h *Host) Create(from common.Address, initCode []byte) (common.Address, err
 // Note that storage is not removed.
 func (h *Host) Wipe(addr common.Address) {
 	if h.state.GetCodeSize(addr) > 0 {
-		h.state.SetCode(addr, nil)
+		h.state.SetCode(addr, nil, tracing.CodeChangeUnspecified)
 	}
 	h.state.SetNonce(addr, 0, tracing.NonceChangeUnspecified)
 	h.state.SetBalance(addr, uint256.NewInt(0), tracing.BalanceChangeUnspecified)
@@ -476,7 +501,7 @@ func (h *Host) ImportAccount(addr common.Address, account types.Account) {
 	}
 	h.state.SetBalance(addr, balance, tracing.BalanceChangeUnspecified)
 	h.state.SetNonce(addr, account.Nonce, tracing.NonceChangeUnspecified)
-	h.state.SetCode(addr, account.Code)
+	h.state.SetCode(addr, account.Code, tracing.CodeChangeUnspecified)
 	for key, value := range account.Storage {
 		h.state.SetState(addr, key, value)
 	}
@@ -506,7 +531,7 @@ func (h *Host) SetPrecompile(addr common.Address, precompile vm.PrecompiledContr
 	h.log.Debug("adding precompile", "addr", addr)
 	h.precompiles[addr] = precompile
 	// insert non-empty placeholder bytecode, so EXTCODESIZE checks pass
-	h.state.SetCode(addr, []byte{0})
+	h.state.SetCode(addr, []byte{0}, tracing.CodeChangeUnspecified)
 }
 
 // HasPrecompileOverride inspects if there exists an active precompile-override at the given address.
@@ -767,7 +792,7 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 	baseState := h.baseState
 	// We have to commit the existing state to the trie,
 	// for all the state-changes to be captured by the trie iterator.
-	root, err := baseState.Commit(h.env.Context().BlockNumber.Uint64(), true, false)
+	root, err := baseState.Commit(bigs.Uint64Strict(h.env.Context().BlockNumber), true, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit state: %w", err)
 	}
