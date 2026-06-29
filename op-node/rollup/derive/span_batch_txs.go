@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/big"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -34,7 +35,7 @@ type spanBatchTxs struct {
 }
 
 type spanBatchSignature struct {
-	v uint64
+	v *big.Int
 	r *uint256.Int
 	s *uint256.Int
 }
@@ -255,24 +256,27 @@ func (btx *spanBatchTxs) recoverV(chainID *big.Int) error {
 	}
 	protectedBitsIdx := 0
 	for idx, txType := range btx.txTypes {
-		bit := uint64(btx.yParityBits.Bit(idx))
-		var v uint64
+		bit := btx.yParityBits.Bit(idx)
+		var v *big.Int
 		switch txType {
 		case types.LegacyTxType:
 			protectedBit := btx.protectedBits.Bit(protectedBitsIdx)
 			protectedBitsIdx++
 			if protectedBit == 0 {
-				v = 27 + bit
+				// unprotected legacy: v = 27 + yParity
+				v = big.NewInt(int64(27 + bit))
 			} else {
-				// EIP-155
-				v = chainID.Uint64()*2 + 35 + bit
+				// EIP-155: v = chainID * 2 + 35 + yParity
+				v = new(big.Int).Mul(chainID, big.NewInt(2))
+				v.Add(v, big.NewInt(35))
+				v.Add(v, big.NewInt(int64(bit)))
 			}
-		case types.AccessListTxType:
-			v = bit
-		case types.DynamicFeeTxType:
-			v = bit
-		case types.SetCodeTxType:
-			v = bit
+		case types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
+			// For non-legacy tx types, v is just the y-parity bit (0 or 1).
+			v = big.NewInt(int64(bit))
+		case postExecTxType:
+			// PostExec txs are synthetic, unsigned, and chain-agnostic.
+			v = big.NewInt(0)
 		default:
 			return fmt.Errorf("invalid tx type: %d", txType)
 		}
@@ -347,7 +351,7 @@ func (btx *spanBatchTxs) fullTxs(chainID *big.Int) ([][]byte, error) {
 		}
 		nonce := btx.txNonces[idx]
 		gas := btx.txGases[idx]
-		var to *common.Address = nil
+		var to *common.Address
 		bit := btx.contractCreationBits.Bit(idx)
 		if bit == 0 {
 			if len(btx.txTos) <= toIdx {
@@ -356,7 +360,7 @@ func (btx *spanBatchTxs) fullTxs(chainID *big.Int) ([][]byte, error) {
 			to = &btx.txTos[toIdx]
 			toIdx++
 		}
-		v := new(big.Int).SetUint64(btx.txSigs[idx].v)
+		v := btx.txSigs[idx].v
 		r := btx.txSigs[idx].r.ToBig()
 		s := btx.txSigs[idx].s.ToBig()
 		tx, err := stx.convertToFullTx(nonce, gas, to, chainID, v, r, s)
@@ -372,34 +376,34 @@ func (btx *spanBatchTxs) fullTxs(chainID *big.Int) ([][]byte, error) {
 	return txs, nil
 }
 
-func convertVToYParity(v uint64, txType int) (uint, error) {
+func convertVToYParity(v *big.Int, txType int) (uint, error) {
 	var yParityBit uint
 	switch txType {
 	case types.LegacyTxType:
 		if isProtectedV(v, txType) {
 			// EIP-155: v = 2 * chainID + 35 + yParity
 			// v - 35 = yParity (mod 2)
-			yParityBit = uint((v - 35) & 1)
+			vMinus35 := new(big.Int).Sub(v, big.NewInt(35))
+			yParityBit = uint(vMinus35.Bit(0))
 		} else {
 			// unprotected legacy txs must have v = 27 or 28
-			yParityBit = uint(v - 27)
+			yParityBit = uint(bigs.Uint64Strict(v) - 27)
 		}
-	case types.AccessListTxType:
-		yParityBit = uint(v)
-	case types.DynamicFeeTxType:
-		yParityBit = uint(v)
-	case types.SetCodeTxType:
-		yParityBit = uint(v)
+	case types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
+		yParityBit = uint(bigs.Uint64Strict(v))
+	case postExecTxType:
+		yParityBit = 0
 	default:
 		return 0, fmt.Errorf("invalid tx type: %d", txType)
 	}
 	return yParityBit, nil
 }
 
-func isProtectedV(v uint64, txType int) bool {
+func isProtectedV(v *big.Int, txType int) bool {
 	if txType == types.LegacyTxType {
 		// if EIP-155 applied, v = 2 * chainID + 35 + yParity
-		return v != 27 && v != 28
+		// unprotected legacy txs have v = 27 or 28, so protected means v is neither
+		return !bigs.Equal(v, big.NewInt(27)) && !bigs.Equal(v, big.NewInt(28))
 	}
 	// every non legacy tx are protected
 	return true
@@ -425,11 +429,10 @@ func newSpanBatchTxs(txs [][]byte, chainID *big.Int) (*spanBatchTxs, error) {
 }
 
 func (sbtx *spanBatchTxs) AddTxs(txs [][]byte, chainID *big.Int) error {
-	totalBlockTxCount := uint64(len(txs))
 	offset := sbtx.totalBlockTxCount
-	for idx := 0; idx < int(totalBlockTxCount); idx++ {
+	for idx, rawTx := range txs {
 		tx := &types.Transaction{}
-		if err := tx.UnmarshalBinary(txs[idx]); err != nil {
+		if err := tx.UnmarshalBinary(rawTx); err != nil {
 			return errors.New("failed to decode tx")
 		}
 		if tx.Type() == types.LegacyTxType {
@@ -440,14 +443,14 @@ func (sbtx *spanBatchTxs) AddTxs(txs [][]byte, chainID *big.Int) error {
 			sbtx.protectedBits.SetBit(sbtx.protectedBits, int(sbtx.totalLegacyTxCount), protectedBit)
 			sbtx.totalLegacyTxCount++
 		}
-		if tx.Protected() && tx.ChainId().Cmp(chainID) != 0 {
+		if tx.Type() != postExecTxType && tx.Protected() && tx.ChainId().Cmp(chainID) != 0 {
 			return fmt.Errorf("protected tx has chain ID %d, but expected chain ID %d", tx.ChainId(), chainID)
 		}
 		var txSig spanBatchSignature
 		v, r, s := tx.RawSignatureValues()
 		R, _ := uint256.FromBig(r)
 		S, _ := uint256.FromBig(s)
-		txSig.v = v.Uint64()
+		txSig.v = v
 		txSig.r = R
 		txSig.s = S
 		sbtx.txSigs = append(sbtx.txSigs, txSig)
@@ -475,6 +478,6 @@ func (sbtx *spanBatchTxs) AddTxs(txs [][]byte, chainID *big.Int) error {
 		sbtx.txDatas = append(sbtx.txDatas, txData)
 		sbtx.txTypes = append(sbtx.txTypes, int(tx.Type()))
 	}
-	sbtx.totalBlockTxCount += totalBlockTxCount
+	sbtx.totalBlockTxCount += uint64(len(txs))
 	return nil
 }

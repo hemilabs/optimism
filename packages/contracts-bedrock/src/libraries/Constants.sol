@@ -51,8 +51,11 @@ library Constants {
     string internal constant PERMITTED_PROXY_DEPLOYMENT_KEY = "PermittedProxyDeployment";
 
     /// @notice Special constant value for the PermittedProxyDeployment instruction to permit all
-    ///         contracts to be deployed. Only to be used for deployments.
+    ///         contracts to be deployed. Used for both initial deployments and migrations.
     bytes internal constant PERMIT_ALL_CONTRACTS_INSTRUCTION = bytes("ALL");
+
+    /// @notice Current bundle artifact path for Network Upgrade Transaction bundles.
+    string internal constant CURRENT_BUNDLE_PATH = "snapshots/upgrades/current-upgrade-bundle.json";
 
     /// @notice Returns the default values for the ResourceConfig. These are the recommended values
     ///         for a production network.

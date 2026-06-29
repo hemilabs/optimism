@@ -28,6 +28,34 @@ func (e *EngineController) onPayloadProcess(ctx context.Context, ev PayloadProce
 	rpcCtx, cancel := context.WithTimeout(e.ctx, payloadProcessTimeout)
 	defer cancel()
 
+	// Check SuperAuthority denylist before inserting the payload
+	if e.superAuthority != nil && ev.Envelope != nil && ev.Envelope.ExecutionPayload != nil {
+		payload := ev.Envelope.ExecutionPayload
+		denied, err := e.superAuthority.IsDenied(uint64(payload.BlockNumber), payload.BlockHash)
+		if err != nil {
+			e.log.Error("Failed to check SuperAuthority denylist, proceeding with payload",
+				"blockNumber", payload.BlockNumber,
+				"blockHash", payload.BlockHash,
+				"err", err,
+			)
+		} else if denied {
+			if ev.DerivedFrom != (eth.L1BlockRef{}) {
+				e.log.Warn("Requesting deposits-only replacement for derived payload",
+					"blockNumber", payload.BlockNumber,
+					"blockHash", payload.BlockHash,
+					"derivedFrom", ev.DerivedFrom,
+				)
+				e.emitDepositsOnlyPayloadAttributesRequest(ctx, ev.Ref.ParentID(), ev.DerivedFrom)
+			} else {
+				e.log.Warn("Unsafe payload denied by SuperAuthority, dropping",
+					"blockNumber", payload.BlockNumber,
+					"blockHash", payload.BlockHash,
+				)
+			}
+			return
+		}
+	}
+
 	insertStart := time.Now()
 	status, err := e.engine.NewPayload(rpcCtx,
 		ev.Envelope.ExecutionPayload, ev.Envelope.ParentBeaconBlockRoot)

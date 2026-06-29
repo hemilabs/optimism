@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 
 	"encoding/binary"
@@ -17,8 +16,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/bindings"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/contractio"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 )
 
 type minBaseFeeEnv struct {
@@ -83,7 +81,7 @@ func (mbf *minBaseFeeEnv) verifyMinBaseFee(t devtest.T, minBase *big.Int) {
 // waitForMinBaseFeeConfigChangeOnL2 waits until the L2 latest payload extra-data encodes the expected min base fee.
 func (mbf *minBaseFeeEnv) waitForMinBaseFeeConfigChangeOnL2(t devtest.T, expected uint64) {
 	client := mbf.l2EL.Escape().L2EthClient()
-	expectedExtraData := eth.BytesMax32(rollup.EncodeJovianExtraData(250, 6, expected))
+	expectedExtraData := eth.BytesMax32(eip1559.EncodeJovianExtraData(250, 6, expected))
 
 	// Check extradata in block header (for all clients)
 	var actualBlockExtraData []byte
@@ -93,23 +91,13 @@ func (mbf *minBaseFeeEnv) waitForMinBaseFeeConfigChangeOnL2(t devtest.T, expecte
 			return false
 		}
 
-		// Get header RLP and decode to access Extra field
-		headerRLP, err := info.HeaderRLP()
-		if err != nil {
+		extra := info.Extra()
+		if len(extra) != 17 {
 			return false
 		}
 
-		var header types.Header
-		if err := rlp.DecodeBytes(headerRLP, &header); err != nil {
-			return false
-		}
-
-		if len(header.Extra) != 17 {
-			return false
-		}
-
-		got := binary.BigEndian.Uint64(header.Extra[9:])
-		actualBlockExtraData = header.Extra
+		got := binary.BigEndian.Uint64(extra[9:])
+		actualBlockExtraData = extra
 		return got == expected
 	}, 2*time.Minute, 5*time.Second, "L2 min base fee in block header did not sync within timeout")
 

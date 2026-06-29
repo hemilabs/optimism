@@ -35,6 +35,7 @@ extern crate alloc;
 mod base;
 mod base_sepolia;
 mod basefee;
+mod bootnodes;
 
 pub mod constants;
 mod dev;
@@ -200,9 +201,16 @@ impl OpChainSpecBuilder {
         self
     }
 
+    /// Enable Karst at genesis
+    pub fn karst_activated(mut self) -> Self {
+        self = self.jovian_activated();
+        self.inner = self.inner.with_fork(OpHardfork::Karst, ForkCondition::Timestamp(0));
+        self
+    }
+
     /// Enable Interop at genesis
     pub fn interop_activated(mut self) -> Self {
-        self = self.jovian_activated();
+        self = self.karst_activated();
         self.inner = self.inner.with_fork(OpHardfork::Interop, ForkCondition::Timestamp(0));
         self
     }
@@ -281,6 +289,15 @@ impl EthChainSpec for OpChainSpec {
     }
 
     fn bootnodes(&self) -> Option<Vec<NodeRecord>> {
+        let chain = self.inner.chain;
+        if chain.is_optimism() {
+            let testnet = chain.named().is_some_and(|n| n.is_testnet());
+            return Some(if testnet {
+                bootnodes::op_testnet_nodes()
+            } else {
+                bootnodes::op_nodes()
+            });
+        }
         self.inner.bootnodes()
     }
 
@@ -393,6 +410,7 @@ impl From<Genesis> for OpChainSpec {
             (OpHardfork::Holocene.boxed(), genesis_info.holocene_time),
             (OpHardfork::Isthmus.boxed(), genesis_info.isthmus_time),
             (OpHardfork::Jovian.boxed(), genesis_info.jovian_time),
+            (OpHardfork::Karst.boxed(), genesis_info.karst_time),
             (OpHardfork::Interop.boxed(), genesis_info.interop_time),
         ];
 
@@ -1340,5 +1358,17 @@ mod tests {
         for eth_hf in EthereumHardfork::VARIANTS {
             assert!(!content.contains(eth_hf.name()));
         }
+    }
+
+    // Mainnets get the 11-enode pool, sepolias the 8-enode pool. OP covers
+    // the hand-coded OpChainSpec constants; Unichain covers the
+    // registry-driven path through the superchain-configs macro.
+    #[cfg(feature = "superchain-configs")]
+    #[test]
+    fn op_stack_default_bootnodes() {
+        assert_eq!(OP_MAINNET.bootnodes().expect("op-mainnet bootnodes").len(), 11);
+        assert_eq!(UNICHAIN_MAINNET.bootnodes().expect("unichain-mainnet bootnodes").len(), 11);
+        assert_eq!(OP_SEPOLIA.bootnodes().expect("op-sepolia bootnodes").len(), 8);
+        assert_eq!(UNICHAIN_SEPOLIA.bootnodes().expect("unichain-sepolia bootnodes").len(), 8);
     }
 }

@@ -3,7 +3,7 @@ pragma solidity 0.8.15;
 
 // Contracts
 import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import { ProxyAdminOwnedBase } from "src/L1/ProxyAdminOwnedBase.sol";
+import { ProxyAdminOwnedBase } from "src/universal/ProxyAdminOwnedBase.sol";
 import { ReinitializableBase } from "src/universal/ReinitializableBase.sol";
 
 // Libraries
@@ -11,7 +11,6 @@ import { GameType, Proposal, Claim, GameStatus, Hash } from "src/dispute/lib/Typ
 
 // Interfaces
 import { ISemver } from "interfaces/universal/ISemver.sol";
-import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
 import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
@@ -25,8 +24,8 @@ import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 ///         be initialized with a more recent starting state which reduces the amount of required offchain computation.
 contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, ReinitializableBase, ISemver {
     /// @notice Semantic version.
-    /// @custom:semver 3.7.0
-    string public constant version = "3.7.0";
+    /// @custom:semver 3.9.0
+    string public constant version = "3.9.0";
 
     /// @notice The dispute game finality delay in seconds.
     uint256 internal immutable DISPUTE_GAME_FINALITY_DELAY_SECONDS;
@@ -38,7 +37,7 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
     IDisputeGameFactory public disputeGameFactory;
 
     /// @notice The game whose claim is currently being used as the anchor state.
-    IFaultDisputeGame public anchorGame;
+    IDisputeGame public anchorGame;
 
     /// @notice The starting anchor root.
     Proposal internal startingAnchorRoot;
@@ -56,7 +55,7 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
 
     /// @notice Emitted when an anchor state is updated.
     /// @param game Game that was used as the new anchor game.
-    event AnchorUpdated(IFaultDisputeGame indexed game);
+    event AnchorUpdated(IDisputeGame indexed game);
 
     /// @notice Emitted when the respected game type is set.
     /// @param gameType The new respected game type.
@@ -86,6 +85,7 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
     /// @param _systemConfig The address of the SystemConfig contract.
     /// @param _disputeGameFactory The address of the DisputeGameFactory contract.
     /// @param _startingAnchorRoot The starting anchor root.
+    /// @param _startingRespectedGameType The starting respected game type.
     function initialize(
         ISystemConfig _systemConfig,
         IDisputeGameFactory _disputeGameFactory,
@@ -101,8 +101,20 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
         // Now perform initialization logic.
         systemConfig = _systemConfig;
         disputeGameFactory = _disputeGameFactory;
-        startingAnchorRoot = _startingAnchorRoot;
         respectedGameType = _startingRespectedGameType;
+
+        // If the starting anchor root is changing and an anchor game exists, verify the new root
+        // is ahead and clear the anchor game so getAnchorRoot() returns the new startingAnchorRoot.
+        bool rootChanged = _startingAnchorRoot.root.raw() != startingAnchorRoot.root.raw()
+            || _startingAnchorRoot.l2SequenceNumber != startingAnchorRoot.l2SequenceNumber;
+        if (rootChanged && address(anchorGame) != address(0)) {
+            (, uint256 currentSeqNum) = getAnchorRoot();
+            if (_startingAnchorRoot.l2SequenceNumber <= currentSeqNum) {
+                revert AnchorStateRegistry_InvalidAnchorGame();
+            }
+            anchorGame = IDisputeGame(address(0));
+        }
+        startingAnchorRoot = _startingAnchorRoot;
 
         // Set the retirement timestamp to the current timestamp the first time the contract is
         // initialized. This was originally done in U16a to guarantee that all games created before
@@ -190,7 +202,15 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
     }
 
     /// @notice Determines whether a game is registered by checking that it was created by the
-    ///         DisputeGameFactory and that it uses this AnchorStateRegistry.
+    ///         DisputeGameFactory.
+    /// @dev NOTE: A previous version of this function also verified that the game's
+    ///      AnchorStateRegistry matched address(this). This check was removed because
+    ///      retirementTimestamp (set to block.timestamp on initialize) invalidates all
+    ///      pre-existing games. However, there is a theoretical risk if: (a) the ASR
+    ///      proxy is upgraded to a net-new proxy address rather than upgraded in-place,
+    ///      (b) the upgrade is non-atomic, and (c) an invalid game from the old ASR
+    ///      is used in the gap between operations. This scenario is extremely contrived
+    ///      and not a practical concern for atomic proxy upgrades.
     /// @param _game The game to check.
     /// @return Whether the game is registered.
     function isGameRegistered(IDisputeGame _game) public view returns (bool) {
@@ -201,16 +221,8 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
         (IDisputeGame factoryRegisteredGame,) =
             disputeGameFactory.games({ _gameType: gameType, _rootClaim: rootClaim, _extraData: extraData });
 
-        // Grab the AnchorStateRegistry from the game. Awkward type conversion here but
-        // IDisputeGame probably needs to have this function eventually anyway.
-        address asr = address(IFaultDisputeGame(address(_game)).anchorStateRegistry());
-
-        // Return whether the game is factory registered and uses this AnchorStateRegistry. We
-        // check for both of these conditions because the game could be using a different
-        // AnchorStateRegistry if the registry was updated at some point. We mitigate the risks of
-        // an outdated AnchorStateRegistry by invalidating all previous games in the initializer of
-        // this contract, but an explicit check avoids potential footguns in the future.
-        return address(factoryRegisteredGame) == address(_game) && asr == address(this);
+        // Return whether the game is factory registered.
+        return address(factoryRegisteredGame) == address(_game);
     }
 
     /// @notice Determines whether a game is of a respected game type.
@@ -332,27 +344,20 @@ contract AnchorStateRegistry is ProxyAdminOwnedBase, Initializable, Reinitializa
     /// @notice Updates the anchor game.
     /// @param _game New candidate anchor game.
     function setAnchorState(IDisputeGame _game) public {
-        // Convert game to FaultDisputeGame.
-        // We can't use FaultDisputeGame in the interface because this function is called from the
-        // FaultDisputeGame contract which can't import IFaultDisputeGame by convention. We should
-        // likely introduce a new interface (e.g., StateDisputeGame) that can act as a more useful
-        // version of IDisputeGame in the future.
-        IFaultDisputeGame game = IFaultDisputeGame(address(_game));
-
         // Check if the candidate game claim is valid.
-        if (!isGameClaimValid(game)) {
+        if (!isGameClaimValid(_game)) {
             revert AnchorStateRegistry_InvalidAnchorGame();
         }
 
         // Must be newer than the current anchor game.
         (, uint256 anchorL2BlockNumber) = getAnchorRoot();
-        if (game.l2SequenceNumber() <= anchorL2BlockNumber) {
+        if (_game.l2SequenceNumber() <= anchorL2BlockNumber) {
             revert AnchorStateRegistry_InvalidAnchorGame();
         }
 
         // Update the anchor game.
-        anchorGame = game;
-        emit AnchorUpdated(game);
+        anchorGame = _game;
+        emit AnchorUpdated(_game);
     }
 
     /// @notice Asserts that the caller is the Guardian.

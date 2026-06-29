@@ -5,7 +5,7 @@ library SafeSigners {
     /// @notice Splits signature bytes into `uint8 v, bytes32 r, bytes32 s`.
     ///         Copied directly from
     /// https://github.com/safe-global/safe-contracts/blob/e870f514ad34cd9654c72174d6d4a839e3c6639f/contracts/common/SignatureDecoder.sol
-    /// @dev Make sure to perform a bounds check for @param pos, to avoid out of bounds access on @param signatures
+    /// @dev Make sure to perform a bounds check for `_pos`, to avoid out of bounds access on `_signatures`.
     ///      The signature format is a compact form of {bytes32 r}{bytes32 s}{uint8 v}
     ///      Compact means uint8 is not padded to 32 bytes.
     /// @param _pos Which signature to read.
@@ -37,7 +37,7 @@ library SafeSigners {
     /// @notice Extract the signers from a set of signatures.
     ///         This method is based closely on the code in the Safe.checkNSignatures() method.
     ///         https://github.com/safe-global/safe-contracts/blob/e870f514ad34cd9654c72174d6d4a839e3c6639f/contracts/Safe.sol#L274
-    ///         It has been modified by removing all signature _validation_ code. We trust the Safe to properly validate
+    /// It has been modified by removing all signature _validation_ code. We trust the Safe to properly validate
     ///         the signatures.
     ///         This method therefore simply extracts the addresses from the signatures.
     function getNSigners(

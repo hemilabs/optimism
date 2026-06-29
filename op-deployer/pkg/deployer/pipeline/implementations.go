@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
-	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
+	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 )
 
 func DeployImplementations(env *Env, intent *state.Intent, st *state.State) error {
@@ -43,40 +43,52 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		return fmt.Errorf("error merging proof params from overrides: %w", err)
 	}
 
-	dio, err := env.Scripts.DeployImplementations.Run(
-		opcm.DeployImplementationsInput{
-			WithdrawalDelaySeconds:          new(big.Int).SetUint64(proofParams.WithdrawalDelaySeconds),
-			MinProposalSizeBytes:            new(big.Int).SetUint64(proofParams.MinProposalSizeBytes),
-			ChallengePeriodSeconds:          new(big.Int).SetUint64(proofParams.ChallengePeriodSeconds),
-			ProofMaturityDelaySeconds:       new(big.Int).SetUint64(proofParams.ProofMaturityDelaySeconds),
-			DisputeGameFinalityDelaySeconds: new(big.Int).SetUint64(proofParams.DisputeGameFinalityDelaySeconds),
-			MipsVersion:                     new(big.Int).SetUint64(proofParams.MIPSVersion),
-			DevFeatureBitmap:                proofParams.DevFeatureBitmap,
-			FaultGameV2MaxGameDepth:         new(big.Int).SetUint64(proofParams.DisputeMaxGameDepth),
-			FaultGameV2SplitDepth:           new(big.Int).SetUint64(proofParams.DisputeSplitDepth),
-			FaultGameV2ClockExtension:       new(big.Int).SetUint64(proofParams.DisputeClockExtension),
-			FaultGameV2MaxClockDuration:     new(big.Int).SetUint64(proofParams.DisputeMaxClockDuration),
-			SuperchainConfigProxy:           st.SuperchainDeployment.SuperchainConfigProxy,
-			ProtocolVersionsProxy:           st.SuperchainDeployment.ProtocolVersionsProxy,
-			SuperchainProxyAdmin:            st.SuperchainDeployment.SuperchainProxyAdminImpl,
-			L1ProxyAdminOwner:               st.SuperchainRoles.SuperchainProxyAdminOwner,
-			Challenger:                      st.SuperchainRoles.Challenger,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("error deploying implementations: %w", err)
+	var dio opcm.DeployImplementationsOutput
+	input := opcm.DeployImplementationsInput{
+		WithdrawalDelaySeconds:          new(big.Int).SetUint64(proofParams.WithdrawalDelaySeconds),
+		MinProposalSizeBytes:            new(big.Int).SetUint64(proofParams.MinProposalSizeBytes),
+		ChallengePeriodSeconds:          new(big.Int).SetUint64(proofParams.ChallengePeriodSeconds),
+		ProofMaturityDelaySeconds:       new(big.Int).SetUint64(proofParams.ProofMaturityDelaySeconds),
+		DisputeGameFinalityDelaySeconds: new(big.Int).SetUint64(proofParams.DisputeGameFinalityDelaySeconds),
+		MipsVersion:                     new(big.Int).SetUint64(proofParams.MIPSVersion),
+		DevFeatureBitmap:                proofParams.DevFeatureBitmap,
+		FaultGameV2MaxGameDepth:         new(big.Int).SetUint64(proofParams.DisputeMaxGameDepth),
+		FaultGameV2SplitDepth:           new(big.Int).SetUint64(proofParams.DisputeSplitDepth),
+		FaultGameV2ClockExtension:       new(big.Int).SetUint64(proofParams.DisputeClockExtension),
+		FaultGameV2MaxClockDuration:     new(big.Int).SetUint64(proofParams.DisputeMaxClockDuration),
+		SuperchainConfigProxy:           st.SuperchainDeployment.SuperchainConfigProxy,
+		SuperchainProxyAdmin:            st.SuperchainDeployment.SuperchainProxyAdminImpl,
+		L1ProxyAdminOwner:               st.SuperchainRoles.SuperchainProxyAdminOwner,
+		Challenger:                      st.SuperchainRoles.Challenger,
+	}
+
+	if env.UseForge {
+		lgr.Info("using Forge for DeployImplementations")
+		forgeEnv := &opcm.ForgeEnv{
+			Client:     env.ForgeClient,
+			Context:    env.Context,
+			L1RPCUrl:   env.L1RPCUrl,
+			PrivateKey: env.PrivateKey,
+		}
+		dio, err = opcm.DeployImplementationsViaForge(forgeEnv, input)
+		if err != nil {
+			return err
+		}
+	} else {
+		dio, err = env.Scripts.DeployImplementations.Run(input)
+		if err != nil {
+			return fmt.Errorf("error deploying implementations: %w", err)
+		}
 	}
 
 	st.ImplementationsDeployment = &addresses.ImplementationsContracts{
-		OpcmImpl:                         dio.Opcm,
-		OpcmGameTypeAdderImpl:            dio.OpcmGameTypeAdder,
-		OpcmDeployerImpl:                 dio.OpcmDeployer,
-		OpcmUpgraderImpl:                 dio.OpcmUpgrader,
-		OpcmInteropMigratorImpl:          dio.OpcmInteropMigrator,
 		OpcmStandardValidatorImpl:        dio.OpcmStandardValidator,
+		OpcmUtilsImpl:                    dio.OpcmUtils,
+		OpcmMigratorImpl:                 dio.OpcmMigrator,
+		OpcmV2Impl:                       dio.OpcmV2,
+		OpcmContainerImpl:                dio.OpcmContainer,
 		DelayedWethImpl:                  dio.DelayedWETHImpl,
 		OptimismPortalImpl:               dio.OptimismPortalImpl,
-		OptimismPortalInteropImpl:        dio.OptimismPortalInteropImpl,
 		EthLockboxImpl:                   dio.ETHLockboxImpl,
 		PreimageOracleImpl:               dio.PreimageOracleSingleton,
 		MipsImpl:                         dio.MipsSingleton,
@@ -87,9 +99,12 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		OptimismMintableErc20FactoryImpl: dio.OptimismMintableERC20FactoryImpl,
 		DisputeGameFactoryImpl:           dio.DisputeGameFactoryImpl,
 		AnchorStateRegistryImpl:          dio.AnchorStateRegistryImpl,
-		FaultDisputeGameV2Impl:           dio.FaultDisputeGameV2Impl,
-		PermissionedDisputeGameV2Impl:    dio.PermissionedDisputeGameV2Impl,
+		FaultDisputeGameImpl:             dio.FaultDisputeGameImpl,
+		PermissionedDisputeGameImpl:      dio.PermissionedDisputeGameImpl,
+		ZkDisputeGameImpl:                dio.ZkDisputeGameImpl,
 		StorageSetterImpl:                dio.StorageSetterImpl,
+		SuperFaultDisputeGameImpl:        dio.SuperFaultDisputeGameImpl,
+		SuperPermissionedDisputeGameImpl: dio.SuperPermissionedDisputeGameImpl,
 	}
 
 	return nil

@@ -2,17 +2,15 @@
 
 use alloc::{vec, vec::Vec};
 use alloc_no_stdlib::*;
-use brotli::*;
+use brotli::{BrotliResult, *};
 use core::ops;
 
-use crate::MAX_SPAN_BATCH_ELEMENTS;
-
-/// A frame decompression error.
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+/// A brotli decompression error.
+#[derive(thiserror::Error, Debug)]
 pub enum BrotliDecompressionError {
-    /// The buffer exceeds the [`MAX_SPAN_BATCH_ELEMENTS`] protocol parameter.
-    #[error("The batch exceeds the maximum number of elements: {max_size}", max_size = MAX_SPAN_BATCH_ELEMENTS)]
-    BatchTooLarge,
+    /// Brotli decompression failed due to corrupt or invalid data.
+    #[error("brotli decompression failed: {0:?}")]
+    DecompressionFailed(BrotliResult),
 }
 
 /// Decompresses the given bytes data using the Brotli decompressor implemented
@@ -32,17 +30,21 @@ pub fn decompress_brotli(
     let hc_allocator = MemPool::<HuffmanCode>::new_allocator(&mut hc_buffer, bzero);
     let mut brotli_state = BrotliState::new(u8_allocator, u32_allocator, hc_allocator);
 
-    // Setup the decompressor inputs and outputs
-    let mut output = vec![0; data.len()];
+    // Setup the decompressor inputs and outputs.
+    // Cap initial buffer at the limit to prevent over-allocation.
+    let mut output = vec![0; core::cmp::min(data.len(), max_rlp_bytes_per_channel)];
     let mut available_in = data.len();
     let mut input_offset = 0;
     let mut available_out = output.len();
     let mut output_offset = 0;
     let mut written = 0;
 
-    // Decompress the data stream until success or failure
-    while matches!(
-        brotli::BrotliDecompressStream(
+    // Decompress the data stream until success or failure.
+    // The output buffer is grown as needed, capped at max_rlp_bytes_per_channel.
+    // Per spec, if decompressed data exceeds the limit, the output is truncated
+    // to max_rlp_bytes_per_channel bytes (not rejected).
+    loop {
+        let result = brotli::BrotliDecompressStream(
             &mut available_in,
             &mut input_offset,
             data,
@@ -51,25 +53,39 @@ pub fn decompress_brotli(
             &mut output,
             &mut written,
             &mut brotli_state,
-        ),
-        brotli::BrotliResult::NeedsMoreOutput
-    ) {
-        // Resize the output buffer to double the size, following standard
-        // practice for buffer resizing in streams.
+        );
         let old_len = output.len();
-        let new_len = old_len * 2;
 
-        if new_len > max_rlp_bytes_per_channel {
-            return Err(BrotliDecompressionError::BatchTooLarge);
+        // `NeedsMoreOutput` means the buffer is full (`available_out == 0`).
+        // `NeedsMoreInput` is normally raised when input is exhausted while
+        // there's still output space — but when `available_in` and
+        // `available_out` both reach 0 in the same call, brotli returns
+        // `NeedsMoreInput` with priority, even though it could produce more
+        // output given more buffer space. Treat both cases identically: at the
+        // size cap, stop (spec truncation); otherwise grow the buffer and
+        // continue.
+        match result {
+            BrotliResult::NeedsMoreOutput | BrotliResult::NeedsMoreInput
+                if available_out == 0 && old_len >= max_rlp_bytes_per_channel =>
+            {
+                break;
+            }
+            BrotliResult::NeedsMoreOutput | BrotliResult::NeedsMoreInput if available_out == 0 => {
+                let new_len = core::cmp::min((old_len * 2).max(1), max_rlp_bytes_per_channel);
+                output.resize(new_len, 0);
+                available_out += new_len - old_len;
+            }
+            // No output: error.
+            _ if written == 0 => {
+                return Err(BrotliDecompressionError::DecompressionFailed(result));
+            }
+            // Success, NeedsMoreInput with output space remaining, or
+            // ResultFailure with some bytes written: return what we have.
+            _ => break,
         }
-
-        output.resize(new_len, 0);
-        available_out += old_len;
     }
 
-    // Truncate the output buffer to the written bytes
     output.truncate(written);
-
     Ok(output)
 }
 
@@ -101,5 +117,116 @@ mod test {
         let decompressed =
             decompress_brotli(&raw_batch, MAX_RLP_BYTES_PER_CHANNEL_FJORD as usize).unwrap();
         assert_eq!(decompressed, raw_batch_decompressed);
+    }
+
+    #[test]
+    fn test_brotli_truncation_instead_of_rejection() {
+        // Use the small test data to verify truncation behavior.
+        let expected = hex!("75ed184249e9bc19675e");
+        let compressed = hex!("8b048075ed184249e9bc19675e03");
+        let full_len = expected.len();
+
+        // Full limit — should decompress fully.
+        let decompressed = decompress_brotli(&compressed, full_len).unwrap();
+        assert_eq!(decompressed, expected);
+
+        // Limit smaller than data — should truncate, not error.
+        let limit = full_len / 2;
+        let decompressed = decompress_brotli(&compressed, limit).unwrap();
+        assert!(
+            decompressed.len() <= limit,
+            "truncated output ({}) should not exceed limit ({})",
+            decompressed.len(),
+            limit
+        );
+    }
+
+    #[test]
+    fn test_decompress_truncated_matches_streaming_reader() {
+        // Regression test for a buffer-exhaustion bug where `decompress_brotli`
+        // returned fewer output bytes than the underlying brotli decoder could
+        // produce.
+        //
+        // When `available_in` and `available_out` reach 0 in the same iteration,
+        // `BrotliDecompressStream` returns `NeedsMoreInput` (priority over
+        // `NeedsMoreOutput`). The previous loop treated that as "done" without
+        // first growing the output buffer, so brotli never got a chance to flush
+        // bytes it could have produced from internal state. Go's
+        // `brotli.NewReader` doesn't have this issue (its own bufio indirection
+        // re-reads and provides more output space on the next call), so the bug
+        // manifested as a Go vs Rust derivation divergence on truncated brotli
+        // channels.
+        //
+        // Compare kona's output to the brotli crate's high-level Reader API on a
+        // truncated stream: the byte counts must match.
+        use std::io::Read;
+
+        let data: Vec<u8> = (0..2000).map(|i| ((i * 7) % 256) as u8).collect();
+        let compressed = {
+            let params = brotli::enc::BrotliEncoderParams::default();
+            let mut output = alloc::vec::Vec::new();
+            let mut input = &data[..];
+            brotli::BrotliCompress(&mut input, &mut output, &params).unwrap();
+            output
+        };
+        assert!(compressed.len() < data.len(), "brotli should compress this");
+
+        // Sweep truncations across the compressed stream. The bug only fires when
+        // brotli's output fills the (input-sized) initial buffer at the moment
+        // input is exhausted, so we need to try multiple offsets to find one
+        // that triggers it.
+        let mut any_partial = false;
+        for trunc_len in (1..compressed.len()).step_by(3) {
+            let truncated = &compressed[..trunc_len];
+
+            // Reference: the brotli crate's high-level Reader on the same input.
+            // It writes partial bytes to the output Vec even when it ultimately
+            // surfaces an error — that's the canonical "streaming decoder"
+            // output, matching Go's brotli.NewReader byte-for-byte.
+            let mut reader_out = alloc::vec::Vec::new();
+            let mut reader = brotli::Decompressor::new(truncated, 4096);
+            let _ = reader.read_to_end(&mut reader_out);
+
+            let kona_out = decompress_brotli(truncated, MAX_RLP_BYTES_PER_CHANNEL_FJORD as usize)
+                .unwrap_or_default();
+
+            if !reader_out.is_empty() {
+                any_partial = true;
+            }
+            assert_eq!(
+                kona_out, reader_out,
+                "decompress_brotli must match the streaming Reader at truncation len {trunc_len}",
+            );
+        }
+        assert!(any_partial, "test fixture should produce at least one non-empty partial decode");
+    }
+
+    #[test]
+    fn test_brotli_buffer_doubling_regression() {
+        // Regression test for the buffer-doubling bug: the old code doubled the
+        // output buffer and rejected if the doubled size exceeded the limit,
+        // even if the actual decompressed data fit within the limit.
+        //
+        // Example: 100 bytes of data, initial buffer = compressed.len() (small),
+        // buffer doubles past 100 -> old code returns BatchTooLarge.
+        let data = vec![0xAA; 100];
+        let compressed = {
+            let params = brotli::enc::BrotliEncoderParams::default();
+            let mut output = alloc::vec::Vec::new();
+            let mut input = &data[..];
+            brotli::BrotliCompress(&mut input, &mut output, &params).unwrap();
+            output
+        };
+
+        // Limit = exact decompressed size. The old code would error because
+        // internal buffer doubling would overshoot.
+        let result = decompress_brotli(&compressed, data.len());
+        assert!(result.is_ok(), "decompression at exact limit should succeed");
+        assert_eq!(result.unwrap(), data);
+
+        // Limit = data.len() + 1 — also succeeds.
+        let result = decompress_brotli(&compressed, data.len() + 1);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), data);
     }
 }

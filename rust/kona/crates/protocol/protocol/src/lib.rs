@@ -37,7 +37,8 @@ pub use block::{BlockInfo, FromBlockError, L2BlockInfo};
 
 mod frame;
 pub use frame::{
-    DERIVATION_VERSION_0, FRAME_OVERHEAD, Frame, FrameDecodingError, FrameParseError, MAX_FRAME_LEN,
+    BASE_FRAME_LEN, DERIVATION_VERSION_0, FRAME_OVERHEAD, Frame, FrameDecodingError,
+    FrameParseError, MAX_FRAME_LEN,
 };
 
 mod utils;
@@ -48,6 +49,9 @@ pub use channel::{
     CHANNEL_ID_LENGTH, Channel, ChannelError, ChannelId, FJORD_MAX_RLP_BYTES_PER_CHANNEL,
     MAX_RLP_BYTES_PER_CHANNEL,
 };
+
+mod ordered_channel;
+pub use ordered_channel::{OrderedChannel, ReadError};
 
 mod deposits;
 pub use deposits::{

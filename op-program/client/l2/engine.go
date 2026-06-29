@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
@@ -216,5 +218,9 @@ func (o *OracleEngine) SystemConfigByL2Hash(ctx context.Context, hash common.Has
 }
 
 func (o *OracleEngine) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
+	return nil, errors.New("unsupported")
+}
+
+func (o *OracleEngine) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
 	return nil, errors.New("unsupported")
 }

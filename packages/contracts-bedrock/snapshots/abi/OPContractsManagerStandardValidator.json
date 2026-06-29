@@ -2,6 +2,16 @@
   {
     "inputs": [
       {
+        "internalType": "contract IStandardValidatorUtils",
+        "name": "_standardValidatorUtils",
+        "type": "address"
+      },
+      {
+        "internalType": "contract IOPContractsManagerMigrationValidator",
+        "name": "_migrationValidator",
+        "type": "address"
+      },
+      {
         "components": [
           {
             "internalType": "address",
@@ -11,11 +21,6 @@
           {
             "internalType": "address",
             "name": "optimismPortalImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismPortalInteropImpl",
             "type": "address"
           },
           {
@@ -71,6 +76,21 @@
           {
             "internalType": "address",
             "name": "permissionedDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "superFaultDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "superPermissionedDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "zkDisputeGameImpl",
             "type": "address"
           }
         ],
@@ -252,6 +272,19 @@
   },
   {
     "inputs": [],
+    "name": "migrationValidator",
+    "outputs": [
+      {
+        "internalType": "contract IOPContractsManagerMigrationValidator",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "mipsImpl",
     "outputs": [
       {
@@ -291,19 +324,6 @@
   },
   {
     "inputs": [],
-    "name": "optimismPortalInteropImpl",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
     "name": "permissionedDisputeGameImpl",
     "outputs": [
       {
@@ -326,6 +346,45 @@
       }
     ],
     "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "standardValidatorUtils",
+    "outputs": [
+      {
+        "internalType": "contract IStandardValidatorUtils",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "superFaultDisputeGameImpl",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "superPermissionedDisputeGameImpl",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -441,6 +500,125 @@
       }
     ],
     "name": "validate",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract IDisputeGameFactory",
+            "name": "dgf",
+            "type": "address"
+          },
+          {
+            "internalType": "contract ISystemConfig[]",
+            "name": "chainSystemConfigs",
+            "type": "address[]"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonKonaPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "address",
+            "name": "proposer",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct IOPContractsManagerMigrationValidator.MigrationValidationInput",
+        "name": "_input",
+        "type": "tuple"
+      },
+      {
+        "internalType": "bool",
+        "name": "_allowFailure",
+        "type": "bool"
+      }
+    ],
+    "name": "validateMigratedChain",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract IDisputeGameFactory",
+            "name": "dgf",
+            "type": "address"
+          },
+          {
+            "internalType": "contract ISystemConfig[]",
+            "name": "chainSystemConfigs",
+            "type": "address[]"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonKonaPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "address",
+            "name": "proposer",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct IOPContractsManagerMigrationValidator.MigrationValidationInput",
+        "name": "_input",
+        "type": "tuple"
+      },
+      {
+        "internalType": "bool",
+        "name": "_allowFailure",
+        "type": "bool"
+      },
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "l1PAOMultisig",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "challenger",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationOverrides",
+        "name": "_overrides",
+        "type": "tuple"
+      }
+    ],
+    "name": "validateMigratedChainWithOverrides",
     "outputs": [
       {
         "internalType": "string",
@@ -603,6 +781,19 @@
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "zkDisputeGameImpl",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",

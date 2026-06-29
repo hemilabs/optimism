@@ -3,6 +3,7 @@ pragma solidity 0.8.15;
 
 // Contracts
 import { StandardBridge } from "src/universal/StandardBridge.sol";
+import { ProxyAdminOwnedBase } from "src/universal/ProxyAdminOwnedBase.sol";
 
 // Libraries
 import { Predeploys } from "src/libraries/Predeploys.sol";
@@ -15,13 +16,13 @@ import { OptimismMintableERC20 } from "src/universal/OptimismMintableERC20.sol";
 /// @custom:proxied true
 /// @custom:predeploy 0x4200000000000000000000000000000000000010
 /// @title L2StandardBridge
-/// @notice The L2StandardBridge is responsible for transfering ETH and ERC20 tokens between L1 and
+/// @notice The L2StandardBridge is responsible for transferring ETH and ERC20 tokens between L1 and
 ///         L2. In the case that an ERC20 token is native to L2, it will be escrowed within this
 ///         contract. If the ERC20 token is native to L1, it will be burnt.
 ///         NOTE: this contract is not intended to support all variations of ERC20 tokens. Examples
 ///         of some token types that may not be properly supported by this contract include, but are
 ///         not limited to: tokens with transfer fees, rebasing tokens, and tokens with blocklists.
-contract L2StandardBridge is StandardBridge, ISemver {
+contract L2StandardBridge is ProxyAdminOwnedBase, StandardBridge, ISemver {
     /// @custom:legacy
     /// @notice Emitted whenever a withdrawal from L2 to L1 is initiated.
     /// @param l1Token   Address of the token on L1.
@@ -57,9 +58,9 @@ contract L2StandardBridge is StandardBridge, ISemver {
     );
 
     /// @notice Semantic version.
-    /// @custom:semver 1.13.0
+    /// @custom:semver 1.13.2
     function version() public pure virtual returns (string memory) {
-        return "1.13.0";
+        return "1.13.2";
     }
 
     /// @notice Constructs the L2StandardBridge contract.
@@ -70,6 +71,7 @@ contract L2StandardBridge is StandardBridge, ISemver {
     /// @notice Initializer.
     /// @param _otherBridge Contract for the corresponding bridge on the other chain.
     function initialize(StandardBridge _otherBridge) external initializer {
+        _assertOnlyProxyAdminOrProxyAdminOwner();
         __StandardBridge_init({
             _messenger: ICrossDomainMessenger(Predeploys.L2_CROSS_DOMAIN_MESSENGER),
             _otherBridge: _otherBridge

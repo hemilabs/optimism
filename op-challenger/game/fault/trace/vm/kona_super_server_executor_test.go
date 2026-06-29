@@ -10,15 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestKonaSuperExecutorWithWitnessEndpoint(t *testing.T) {
+func TestKonaSuperExecutorWithDepsetConfig(t *testing.T) {
 	t.Parallel()
 	executor := NewKonaSuperExecutor()
 	cfg := Config{
-		Server:                            "/path/to/kona",
-		L1:                                "http://l1",
-		L1Beacon:                          "http://beacon",
-		L2s:                               []string{"http://l2a", "http://l2b"},
-		EnableExperimentalWitnessEndpoint: true,
+		Server:           "/path/to/kona",
+		L1:               "http://l1",
+		L1Beacon:         "http://beacon",
+		L2s:              []string{"http://l2a", "http://l2b"},
+		DepsetConfigPath: "/path/to/depset.json",
 	}
 	inputs := utils.LocalGameInputs{
 		L1Head:           common.Hash{0x11},
@@ -29,18 +29,19 @@ func TestKonaSuperExecutorWithWitnessEndpoint(t *testing.T) {
 
 	args, err := executor.OracleCommand(cfg, "/data", inputs)
 	require.NoError(t, err)
-	require.True(t, slices.Contains(args, "--enable-experimental-witness-endpoint"))
+	require.True(t, slices.Contains(args, "--depset-cfg"))
+	idx := slices.Index(args, "--depset-cfg")
+	require.Equal(t, "/path/to/depset.json", args[idx+1])
 }
 
-func TestKonaSuperExecutorWithoutWitnessEndpoint(t *testing.T) {
+func TestKonaSuperExecutorWithoutDepsetConfig(t *testing.T) {
 	t.Parallel()
 	executor := NewKonaSuperExecutor()
 	cfg := Config{
-		Server:                            "/path/to/kona",
-		L1:                                "http://l1",
-		L1Beacon:                          "http://beacon",
-		L2s:                               []string{"http://l2a", "http://l2b"},
-		EnableExperimentalWitnessEndpoint: false,
+		Server:   "/path/to/kona",
+		L1:       "http://l1",
+		L1Beacon: "http://beacon",
+		L2s:      []string{"http://l2a", "http://l2b"},
 	}
 	inputs := utils.LocalGameInputs{
 		L1Head:           common.Hash{0x11},
@@ -51,5 +52,5 @@ func TestKonaSuperExecutorWithoutWitnessEndpoint(t *testing.T) {
 
 	args, err := executor.OracleCommand(cfg, "/data", inputs)
 	require.NoError(t, err)
-	require.False(t, slices.Contains(args, "--enable-experimental-witness-endpoint"))
+	require.False(t, slices.Contains(args, "--depset-cfg"))
 }

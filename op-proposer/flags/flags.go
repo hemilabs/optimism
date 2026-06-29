@@ -32,18 +32,13 @@ var (
 		Usage:   "HTTP provider URL for the rollup node. A comma-separated list enables the active rollup provider.",
 		EnvVars: prefixEnvVars("ROLLUP_RPC"),
 	}
-	SupervisorRpcsFlag = &cli.StringSliceFlag{
-		Name:    "supervisor-rpcs",
-		Usage:   "HTTP provider URLs for the supervisor nodes. Multiple URLs can be provided to automatically fail over.",
-		EnvVars: prefixEnvVars("SUPERVISOR_RPCS"),
+	SuperNodeRpcsFlag = &cli.StringSliceFlag{
+		Name:    "supernode-rpcs",
+		Usage:   "HTTP provider URLs for the supernode instances. Multiple URLs can be provided to automatically fail over.",
+		EnvVars: prefixEnvVars("SUPERNODE_RPCS"),
 	}
 
 	// Optional flags
-	L2OOAddressFlag = &cli.StringFlag{
-		Name:    "l2oo-address",
-		Usage:   "Address of the L2OutputOracle contract",
-		EnvVars: prefixEnvVars("L2OO_ADDRESS"),
-	}
 	PollIntervalFlag = &cli.DurationFlag{
 		Name:    "poll-interval",
 		Usage:   "Delay between periodic checks on whether it is time to load an output root and propose it.",
@@ -94,8 +89,7 @@ var requiredFlags = []cli.Flag{
 
 var optionalFlags = []cli.Flag{
 	RollupRpcFlag,
-	SupervisorRpcsFlag,
-	L2OOAddressFlag,
+	SuperNodeRpcsFlag,
 	PollIntervalFlag,
 	AllowNonFinalizedFlag,
 	L2OutputHDPathFlag,

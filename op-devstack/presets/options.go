@@ -1,6 +1,8 @@
 package presets
 
 import (
+	"time"
+
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -228,25 +230,6 @@ func WithRespectedGameTypeOverride(gameType gameTypes.GameType) Option {
 	}
 }
 
-func WithCannonKonaGameTypeAdded() Option {
-	return option{
-		kinds: optionKindAddedGameType | optionKindChallengerCannonKona,
-		applyFn: func(cfg *sysgo.PresetConfig) {
-			cfg.EnableCannonKonaForChall = true
-			cfg.AddedGameTypes = append(cfg.AddedGameTypes, gameTypes.CannonKonaGameType)
-		},
-	}
-}
-
-func WithChallengerCannonKonaEnabled() Option {
-	return option{
-		kinds: optionKindChallengerCannonKona,
-		applyFn: func(cfg *sysgo.PresetConfig) {
-			cfg.EnableCannonKonaForChall = true
-		},
-	}
-}
-
 func WithTimeTravelEnabled() Option {
 	return option{
 		kinds: optionKindTimeTravel,
@@ -266,6 +249,17 @@ func WithMaxSequencingWindow(max uint64) Option {
 	}
 }
 
+// WithInteropFilter enables the in-process op-interop-filter for EL transaction
+// validation. Only supported on supernode interop presets.
+func WithInteropFilter() Option {
+	return option{
+		kinds: optionKindInteropFilter,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.UseInteropFilter = true
+		},
+	}
+}
+
 func WithRequireInteropNotAtGenesis() Option {
 	return option{
 		kinds: optionKindRequireInteropNotAtGen,
@@ -275,9 +269,76 @@ func WithRequireInteropNotAtGenesis() Option {
 	}
 }
 
+// WithMessageExpiryWindow configures the message expiry window (in seconds)
+// used by the dependency set. This controls how long cross-chain messages
+// remain valid before they expire.
+func WithMessageExpiryWindow(window uint64) Option {
+	return option{
+		kinds: optionKindMessageExpiryWindow,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			v := window
+			cfg.MessageExpiryWindow = &v
+		},
+	}
+}
+
 // WithL2BlockTimes configures per-chain L2 block times via the deployer.
 // The blockTimes map keys are L2 chain IDs and values are the desired block
 // time in seconds for that chain.
 func WithL2BlockTimes(blockTimes map[eth.ChainID]uint64) Option {
 	return WithDeployerOptions(sysgo.WithL2BlockTimes(blockTimes))
+}
+
+// WithUniformL2BlockTimes configures the same L2 block time (in seconds) on
+// every configured L2 chain via the deployer.
+func WithUniformL2BlockTimes(seconds uint64) Option {
+	return WithDeployerOptions(sysgo.WithUniformL2BlockTimes(seconds))
+}
+
+// WithInteropLogBackfillDepth configures the supernode to pre-ingest
+// initiating-message logs backward from the tip by the given duration at
+// startup. Zero disables backfill (the default).
+func WithInteropLogBackfillDepth(d time.Duration) Option {
+	var kinds optionKinds
+	if d > 0 {
+		kinds = optionKindInteropLogBackfill
+	}
+	return option{
+		kinds: kinds,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.InteropLogBackfillDepth = d
+		},
+	}
+}
+
+// WithoutHonestProposer skips starting op-proposer.
+func WithoutHonestProposer() Option {
+	return option{
+		kinds: optionKindSkipHonestProposer,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			cfg.SkipHonestProposer = true
+		},
+	}
+}
+
+// WithPreGenesisSuperGame seeds one invalid super dispute game before the
+// rollup start block so tests can exercise supernode/challenger behaviour
+// when a game's L1 head predates rollup genesis. The claimed outputs follow
+// the preset chain order (`l2a`, `l2b` for two-chain presets).
+func WithPreGenesisSuperGame(claimedOutputs ...eth.Bytes32) Option {
+	var kinds optionKinds
+	if len(claimedOutputs) > 0 {
+		kinds = optionKindPreGenesisSuperGame
+	}
+	return option{
+		kinds: kinds,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			if len(claimedOutputs) == 0 {
+				return
+			}
+			cfg.PreGenesisSuperGame = &sysgo.PreGenesisSuperGameConfig{
+				ClaimedOutputs: append([]eth.Bytes32(nil), claimedOutputs...),
+			}
+		},
+	}
 }

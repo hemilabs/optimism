@@ -11,17 +11,17 @@ var ErrUnknownGameType = errors.New("unknown game type")
 type GameType uint32
 
 const (
-	CannonGameType            GameType = 0
-	PermissionedGameType      GameType = 1
-	AsteriscGameType          GameType = 2
-	AsteriscKonaGameType      GameType = 3
-	SuperCannonGameType       GameType = 4
+	CannonGameType       GameType = 0
+	PermissionedGameType GameType = 1
+	AsteriscGameType     GameType = 2 // Not supported by op-challenger
+	AsteriscKonaGameType GameType = 3 // Not supported by op-challenger
+	// GameType 4 was SuperCannonGameType — removed.
 	SuperPermissionedGameType GameType = 5
 	OPSuccinctGameType        GameType = 6 // Not supported by op-challenger
-	SuperAsteriscKonaGameType GameType = 7
+	SuperAsteriscKonaGameType GameType = 7 // Not supported by op-challenger
 	CannonKonaGameType        GameType = 8
 	SuperCannonKonaGameType   GameType = 9
-	OptimisticZKGameType      GameType = 10
+	ZKDisputeGameType         GameType = 10
 	FastGameType              GameType = 254
 	AlphabetGameType          GameType = 255
 	KailuaGameType            GameType = 1337           // Not supported by op-challenger
@@ -35,14 +35,10 @@ var SupportedGameTypes = []GameType{
 	CannonGameType,
 	CannonKonaGameType,
 	PermissionedGameType,
-	AsteriscGameType,
-	AsteriscKonaGameType,
 	FastGameType,
-	SuperCannonGameType,
 	SuperCannonKonaGameType,
 	SuperPermissionedGameType,
-	SuperAsteriscKonaGameType,
-	OptimisticZKGameType,
+	ZKDisputeGameType,
 }
 
 // Set implements the Set method required by the [cli.Generic] interface.
@@ -83,8 +79,6 @@ func (g GameType) String() string {
 		return "asterisc"
 	case AsteriscKonaGameType:
 		return "asterisc-kona"
-	case SuperCannonGameType:
-		return "super-cannon"
 	case SuperPermissionedGameType:
 		return "super-permissioned"
 	case OPSuccinctGameType:
@@ -95,8 +89,8 @@ func (g GameType) String() string {
 		return "cannon-kona"
 	case SuperCannonKonaGameType:
 		return "super-cannon-kona"
-	case OptimisticZKGameType:
-		return "optimistic-zk"
+	case ZKDisputeGameType:
+		return "zk"
 	case FastGameType:
 		return "fast"
 	case AlphabetGameType:

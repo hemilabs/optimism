@@ -2,9 +2,11 @@
 
 use super::{SingleChainHintHandler, SingleChainLocalInputs};
 use crate::{
-    DiskKeyValueStore, MemoryKeyValueStore, OfflineHostBackend, OnlineHostBackend,
-    OnlineHostBackendCfg, PreimageServer, SharedKeyValueStore, SplitKeyValueStore,
-    eth::rpc_provider, server::PreimageServerError,
+    OfflineHostBackend, OnlineHostBackend, OnlineHostBackendCfg, PreimageServer,
+    SharedKeyValueStore,
+    eth::rpc_provider,
+    kv::{DataFormat, create_key_value_store},
+    server::PreimageServerError,
 };
 use alloy_primitives::B256;
 use alloy_provider::RootProvider;
@@ -13,6 +15,7 @@ use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
 use kona_preimage::{
     BidirectionalChannel, Channel, HintReader, HintWriter, OracleReader, OracleServer,
+    VerifyingPreimageFetcher,
 };
 use kona_proof::HintType;
 use kona_providers_alloy::{OnlineBeaconClient, OnlineBlobProvider};
@@ -20,10 +23,7 @@ use kona_std_fpvm::{FileChannel, FileDescriptor};
 use op_alloy_network::Optimism;
 use serde::Serialize;
 use std::{path::PathBuf, sync::Arc};
-use tokio::{
-    sync::RwLock,
-    task::{self, JoinHandle},
-};
+use tokio::task::{self, JoinHandle};
 
 /// The host binary CLI application arguments.
 #[derive(Default, Parser, Serialize, Clone, Debug)]
@@ -80,6 +80,10 @@ pub struct SingleChainHost {
         env
     )]
     pub data_dir: Option<PathBuf>,
+    /// The default format for preimage data storage on disk. If the data directory already
+    /// contains a `kvformat` marker file, that format is used instead of this value.
+    #[arg(long, default_value = "directory", env)]
+    pub data_format: DataFormat,
     /// Run the client program natively.
     #[arg(long, conflicts_with = "server", required_unless_present = "server")]
     pub native: bool,
@@ -110,10 +114,6 @@ pub struct SingleChainHost {
     /// look up the config in the known l1 configs.
     #[arg(long, alias = "l1-cfg", env)]
     pub l1_config_path: Option<PathBuf>,
-    /// Optionally enables the use of `debug_executePayload` to collect the execution witness from
-    /// the execution layer.
-    #[arg(long, env)]
-    pub enable_experimental_witness_endpoint: bool,
 }
 
 /// An error that can occur when handling single chain hosts
@@ -172,7 +172,7 @@ impl SingleChainHost {
                 PreimageServer::new(
                     OracleServer::new(preimage),
                     HintReader::new(hint),
-                    Arc::new(OfflineHostBackend::new(kv_store)),
+                    Arc::new(VerifyingPreimageFetcher::new(OfflineHostBackend::new(kv_store))),
                 )
                 .start()
                 .await
@@ -192,7 +192,7 @@ impl SingleChainHost {
                 PreimageServer::new(
                     OracleServer::new(preimage),
                     HintReader::new(hint),
-                    Arc::new(backend),
+                    Arc::new(VerifyingPreimageFetcher::new(backend)),
                 )
                 .start()
                 .await
@@ -253,20 +253,12 @@ impl SingleChainHost {
     }
 
     /// Creates the key-value store for the host backend.
+    ///
+    /// If the data directory contains a `kvformat` marker file, the recorded format is used to
+    /// ensure compatibility with existing data. Otherwise, `--data-format` is used as the default.
     pub fn create_key_value_store(&self) -> Result<SharedKeyValueStore, SingleChainHostError> {
         let local_kv_store = SingleChainLocalInputs::new(self.clone());
-
-        let kv_store: SharedKeyValueStore = if let Some(ref data_dir) = self.data_dir {
-            let disk_kv_store = DiskKeyValueStore::new(data_dir.clone());
-            let split_kv_store = SplitKeyValueStore::new(local_kv_store, disk_kv_store);
-            Arc::new(RwLock::new(split_kv_store))
-        } else {
-            let mem_kv_store = MemoryKeyValueStore::new();
-            let split_kv_store = SplitKeyValueStore::new(local_kv_store, mem_kv_store);
-            Arc::new(RwLock::new(split_kv_store))
-        };
-
-        Ok(kv_store)
+        Ok(create_key_value_store(local_kv_store, self.data_dir.as_deref(), self.data_format))
     }
 
     /// Creates the providers required for the host backend.
@@ -350,18 +342,6 @@ mod test {
                     "--server",
                     "--l2-chain-id",
                     "0",
-                ]
-                .as_slice(),
-                true,
-            ),
-            (
-                [
-                    "--server",
-                    "--l2-chain-id",
-                    "0",
-                    "--data-dir",
-                    "dummy",
-                    "--enable-experimental-witness-endpoint",
                 ]
                 .as_slice(),
                 true,

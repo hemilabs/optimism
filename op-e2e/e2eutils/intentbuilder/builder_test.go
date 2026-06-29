@@ -32,7 +32,6 @@ func TestBuilder(t *testing.T) {
 	superchainConfig.WithSuperchainConfigProxy(superchainConfigProxyAddr)
 	superchainConfig.WithProxyAdminOwner(common.HexToAddress("0xaaaa"))
 	superchainConfig.WithGuardian(common.HexToAddress("0xbbbb"))
-	superchainConfig.WithProtocolVersionsOwner(common.HexToAddress("0xcccc"))
 	superchainConfig.WithChallenger(common.HexToAddress("0xdddd"))
 
 	// Configure L1
@@ -78,9 +77,6 @@ func TestBuilder(t *testing.T) {
 	// Test ContractsConfigurator methods
 	l2Config.WithL1ContractsLocator("http://l1.example.com")
 	l2Config.WithL2ContractsLocator("http://l2.example.com")
-
-	// Test RevenueShareConfigurator methods
-	l2Config.WithRevenueShare(true, common.HexToAddress("0x4444"))
 
 	// Test L2VaultsConfigurator methods
 	baseFeeRecipient := common.HexToAddress("0x1111")
@@ -135,7 +131,6 @@ func TestBuilder(t *testing.T) {
 		SuperchainRoles: &addresses.SuperchainRoles{
 			SuperchainProxyAdminOwner: common.HexToAddress("0xaaaa"),
 			SuperchainGuardian:        common.HexToAddress("0xbbbb"),
-			ProtocolVersionsOwner:     common.HexToAddress("0xcccc"),
 			Challenger:                common.HexToAddress("0xdddd"),
 		},
 		L1DevGenesisParams: &l1Params,
@@ -196,8 +191,6 @@ func TestBuilder(t *testing.T) {
 						bob: (*hexutil.U256)(bobFunds),
 					},
 				},
-				UseRevenueShare:    true,
-				ChainFeesRecipient: common.HexToAddress("0x4444"),
 			},
 		},
 	}

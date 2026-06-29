@@ -189,13 +189,15 @@ type Metricer interface {
 
 	RecordMixedSafetyGames(count int)
 
-	RecordDifferentOutputRootGames(count int)
+	RecordDifferentRootGames(count int)
 
 	RecordBondCollateral(addr common.Address, required, available *big.Int)
 
 	RecordL2Challenges(agreement bool, count int)
 
 	RecordOldestGameUpdateTime(t time.Time)
+
+	RecordGameTypes(gameTypeCounts map[string]int)
 
 	caching.Metrics
 	contractMetrics.ContractMetricer
@@ -248,7 +250,8 @@ type Metrics struct {
 	nodeEndpointOutOfSyncCount prometheus.Gauge
 	mixedAvailabilityGames     prometheus.Gauge
 	mixedSafetyGames           prometheus.Gauge
-	differentOutputRootGames   prometheus.Gauge
+	differentRootGames         prometheus.Gauge
+	gameTypes                  prometheus.GaugeVec
 }
 
 func (m *Metrics) Registry() *prometheus.Registry {
@@ -439,12 +442,19 @@ func NewMetrics() *Metrics {
 		mixedSafetyGames: factory.NewGauge(prometheus.GaugeOpts{
 			Namespace: Namespace,
 			Name:      "mixed_safety_games",
-			Help:      "Number of games where some rollup nodes reported the root as safe while others reported it as unsafe in the last update cycle",
+			Help:      "Number of games where some nodes reported the root as safe while others reported it as unsafe in the last update cycle",
 		}),
-		differentOutputRootGames: factory.NewGauge(prometheus.GaugeOpts{
+		differentRootGames: factory.NewGauge(prometheus.GaugeOpts{
 			Namespace: Namespace,
-			Name:      "different_output_root_games",
-			Help:      "Number of games where rollup nodes returned different output roots for the same L2 block in the last update cycle",
+			Name:      "different_root_games",
+			Help:      "Number of games where nodes returned different roots (output roots for FaultDisputeGame, super roots for SuperFaultDisputeGame) in the last update cycle",
+		}),
+		gameTypes: *factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "games",
+			Help:      "Number of games in the monitoring window broken down by game type",
+		}, []string{
+			"game_type",
 		}),
 	}
 }
@@ -603,8 +613,8 @@ func (m *Metrics) RecordMixedSafetyGames(count int) {
 	m.mixedSafetyGames.Set(float64(count))
 }
 
-func (m *Metrics) RecordDifferentOutputRootGames(count int) {
-	m.differentOutputRootGames.Set(float64(count))
+func (m *Metrics) RecordDifferentRootGames(count int) {
+	m.differentRootGames.Set(float64(count))
 }
 
 func (m *Metrics) RecordBondCollateral(addr common.Address, required, available *big.Int) {
@@ -674,6 +684,12 @@ func labelValuesFor(status GameAgreementStatus) []string {
 
 	default:
 		panic(fmt.Errorf("unknown game agreement status: %v", status))
+	}
+}
+
+func (m *Metrics) RecordGameTypes(gameTypeCounts map[string]int) {
+	for gameType, count := range gameTypeCounts {
+		m.gameTypes.WithLabelValues(gameType).Set(float64(count))
 	}
 }
 

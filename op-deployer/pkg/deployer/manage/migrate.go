@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os"
 	"strings"
-
-	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
@@ -17,7 +14,9 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
+	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -26,56 +25,95 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// ScriptInput represents the input struct that is actually passed to the script.
+// It contains the prank address, OPCM address, and ABI-encoded migrate input.
+type ScriptInput struct {
+	Prank        common.Address `evm:"prank"`
+	Opcm         common.Address `evm:"opcm"`
+	MigrateInput []byte         `evm:"migrateInput"`
+}
+
+// InteropMigrationInput represents the struct that is read from the config file.
 type InteropMigrationInput struct {
-	Prank common.Address `json:"prank"`
-	Opcm  common.Address `json:"opcm"`
-
-	UsePermissionlessGame          bool           `json:"usePermissionlessGame"`
-	StartingAnchorRoot             common.Hash    `json:"startingAnchorRoot"`
-	StartingAnchorL2SequenceNumber *big.Int       `json:"startingAnchorL2SequenceNumber"`
-	Proposer                       common.Address `json:"proposer"`
-	Challenger                     common.Address `json:"challenger"`
-	MaxGameDepth                   uint64         `json:"maxGameDepth"`
-	SplitDepth                     uint64         `json:"splitDepth"`
-	InitBond                       *big.Int       `json:"initBond"`
-	ClockExtension                 uint64         `json:"clockExtension"`
-	MaxClockDuration               uint64         `json:"maxClockDuration"`
-
-	EncodedChainConfigs []OPChainConfig `evm:"-" json:"chainConfigs"`
+	Prank          common.Address  `json:"prank"`
+	Opcm           common.Address  `json:"opcm"`
+	MigrateInputV2 *MigrateInputV2 `json:"migrateInputV2,omitempty"`
 }
 
-func (u *InteropMigrationInput) OpChainConfigs() ([]byte, error) {
-	data, err := opChainConfigEncoder.EncodeArgs(u.EncodedChainConfigs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode chain configs: %w", err)
-	}
-	return data[4:], nil
+// MigrateInputV2 represents the migrate input format for OPCM v2 (>= 7.0.0).
+// Corresponds to IOPContractsManagerMigrator.MigrateInput
+type MigrateInputV2 struct {
+	ChainSystemConfigs        []common.Address    `json:"chainSystemConfigs"`
+	DisputeGameConfigs        []DisputeGameConfig `json:"disputeGameConfigs"`
+	StartingAnchorRoot        Proposal            `json:"startingAnchorRoot"`
+	StartingRespectedGameType uint32              `json:"startingRespectedGameType"`
 }
 
-type OPChainConfig struct {
-	SystemConfigProxy  common.Address `json:"systemConfigProxy"`
-	CannonPrestate     common.Hash    `json:"cannonPrestate"`
-	CannonKonaPrestate common.Hash    `json:"cannonKonaPrestate"`
+// DisputeGameConfig defines the configuration for a specific dispute game type.
+// Corresponds to IOPContractsManagerMigrator.DisputeGameConfig
+type DisputeGameConfig struct {
+	Enabled  bool     `json:"enabled"`
+	InitBond *big.Int `json:"initBond"`
+	GameType uint32   `json:"gameType"`
+	GameArgs []byte   `json:"gameArgs"`
 }
 
+// Proposal represents an L2 output root proposal used as the starting anchor for dispute games.
+type Proposal struct {
+	Root             common.Hash `json:"root"`
+	L2SequenceNumber *big.Int    `json:"l2SequenceNumber"`
+}
+
+// InteropMigrationOutput contains the output of the interop migration script.
 type InteropMigrationOutput struct {
 	DisputeGameFactory common.Address `json:"disputeGameFactory"`
+}
+
+var migrateInputV2Encoder = w3.MustNewFunc(
+	"dummy((address[] chainSystemConfigs,(bool enabled,uint256 initBond,uint32 gameType,bytes gameArgs)[] disputeGameConfigs,(bytes32 root,uint256 l2SequenceNumber) startingAnchorRoot,uint32 startingRespectedGameType))",
+	"",
+)
+
+func (i *InteropMigrationInput) EncodedMigrateInputV2() ([]byte, error) {
+	if i.MigrateInputV2 == nil {
+		return nil, fmt.Errorf("MigrateInputV2 is nil")
+	}
+	data, err := migrateInputV2Encoder.EncodeArgs(i.MigrateInputV2)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode migrate input v2: %w", err)
+	}
+
+	if len(data) < 4 {
+		return nil, fmt.Errorf("failed to encode migrate input v2: data is too short")
+	}
+
+	// Skip the function selector (first 4 bytes)
+	return data[4:], nil
 }
 
 func (output *InteropMigrationOutput) CheckOutput(input common.Address) error {
 	return nil
 }
 
-var opChainConfigEncoder = w3.MustNewFunc("dummy((address systemConfigProxy, bytes32 cannonPrestate, bytes32 cannonKonaPrestate)[])", "")
-
-type InteropMigration struct {
-	Run func(input common.Address)
-}
-
 func Migrate(host *script.Host, input InteropMigrationInput) (InteropMigrationOutput, error) {
-	return opcm.RunScriptSingle[InteropMigrationInput, InteropMigrationOutput](host, input, "InteropMigration.s.sol", "InteropMigration")
+	if input.MigrateInputV2 == nil {
+		return InteropMigrationOutput{}, fmt.Errorf("MigrateInputV2 is required")
+	}
+
+	encodedMigrateInput, err := input.EncodedMigrateInputV2()
+	if err != nil {
+		return InteropMigrationOutput{}, err
+	}
+
+	scriptInput := ScriptInput{
+		Prank:        input.Prank,
+		Opcm:         input.Opcm,
+		MigrateInput: encodedMigrateInput,
+	}
+	return opcm.RunScriptSingle[ScriptInput, InteropMigrationOutput](host, scriptInput, "InteropMigration.s.sol", "InteropMigration")
 }
 
+// MigrateCLI is the main function for the migrate command. It validates required flags and runs the migration.
 func MigrateCLI(cliCtx *cli.Context) error {
 	logCfg := oplog.ReadCLIConfig(cliCtx)
 	lgr := oplog.NewLogger(oplog.AppOut(cliCtx), logCfg)
@@ -90,31 +128,106 @@ func MigrateCLI(cliCtx *cli.Context) error {
 	}
 
 	privateKey := cliCtx.String(deployer.PrivateKeyFlag.Name)
+	if privateKey == "" {
+		return fmt.Errorf("missing required flag: %s", deployer.PrivateKeyFlag.Name)
+	}
 	privateKeyECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(privateKey, "0x"))
 	if err != nil {
 		return fmt.Errorf("failed to parse private key: %w", err)
 	}
 
+	opcmFlag := cliCtx.String(OPCMImplFlag.Name)
+	if opcmFlag == "" {
+		return fmt.Errorf("missing required flag: %s", OPCMImplFlag.Name)
+	}
+	opcmAddr := common.HexToAddress(opcmFlag)
+
+	systemConfigProxyFlag := cliCtx.String(SystemConfigProxyFlag.Name)
+	if systemConfigProxyFlag == "" {
+		return fmt.Errorf("missing required flag: %s", SystemConfigProxyFlag.Name)
+	}
+
+	startingAnchorRootFlag := cliCtx.String(StartingAnchorRootFlag.Name)
+	if startingAnchorRootFlag == "" {
+		return fmt.Errorf("missing required flag: %s", StartingAnchorRootFlag.Name)
+	}
+
+	initBondStr := cliCtx.String(InitialBondFlag.Name)
+	if initBondStr == "" {
+		return fmt.Errorf("missing required flag: %s", InitialBondFlag.Name)
+	}
+	initBond, ok := new(big.Int).SetString(initBondStr, 10)
+	if !ok {
+		return fmt.Errorf("failed to parse initial bond: %s", initBondStr)
+	}
+
+	l1ProxyAdminOwnerFlag := cliCtx.String(L1ProxyAdminOwnerFlag.Name)
+	if l1ProxyAdminOwnerFlag == "" {
+		return fmt.Errorf("missing required flag: %s", L1ProxyAdminOwnerFlag.Name)
+	}
+
+	disputeAbsolutePrestateFlag := cliCtx.String(DisputeAbsolutePrestateFlag.Name)
+	if disputeAbsolutePrestateFlag == "" {
+		return fmt.Errorf("missing required flag: %s", DisputeAbsolutePrestateFlag.Name)
+	}
+
+	disputeGameTypeU64 := cliCtx.Uint64(DisputeGameTypeFlag.Name)
+	if disputeGameTypeU64 > 0xFFFFFFFF {
+		return fmt.Errorf("disputeGameType %d exceeds uint32 max value", disputeGameTypeU64)
+	}
+	disputeGameType := uint32(disputeGameTypeU64)
+
+	migrateStartingRespectedGameTypeU64 := cliCtx.Uint64(MigrateStartingRespectedGameTypeFlag.Name)
+	if migrateStartingRespectedGameTypeU64 > 0xFFFFFFFF {
+		return fmt.Errorf("startingRespectedGameType %d exceeds uint32 max value", migrateStartingRespectedGameTypeU64)
+	}
+	migrateStartingRespectedGameType := uint32(migrateStartingRespectedGameTypeU64)
+
+	if disputeGameType == superCannonGameType {
+		return fmt.Errorf(
+			"--%s = %d (SUPER_CANNON) is retired and no longer accepted by OPCMv2",
+			DisputeGameTypeFlag.Name, disputeGameType,
+		)
+	}
+	if migrateStartingRespectedGameType == superCannonGameType {
+		return fmt.Errorf(
+			"--%s = %d (SUPER_CANNON) is retired and no longer accepted by OPCMv2",
+			MigrateStartingRespectedGameTypeFlag.Name, migrateStartingRespectedGameType,
+		)
+	}
+
+	absolutePrestate := common.HexToHash(disputeAbsolutePrestateFlag)
+
+	bytes32Type, err := abi.NewType("bytes32", "", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create bytes32 ABI type: %w", err)
+	}
+
+	gameArgs, err := abi.Arguments{{Type: bytes32Type}}.Pack(absolutePrestate)
+	if err != nil {
+		return fmt.Errorf("failed to ABI-encode game args: %w", err)
+	}
+
 	input := InteropMigrationInput{
-		Prank:                          common.Address{}, // The current CLI does not support prank address, so we set it to zero.
-		Opcm:                           common.HexToAddress(cliCtx.String(OPCMImplFlag.Name)),
-		UsePermissionlessGame:          cliCtx.Bool(PermissionlessFlag.Name),
-		StartingAnchorRoot:             common.HexToHash(cliCtx.String(StartingAnchorRootFlag.Name)),
-		StartingAnchorL2SequenceNumber: new(big.Int).SetUint64(cliCtx.Uint64(StartingAnchorL2SequenceNumberFlag.Name)),
-		Proposer:                       common.HexToAddress(cliCtx.String(ProposerFlag.Name)),
-		Challenger:                     common.HexToAddress(cliCtx.String(ChallengerFlag.Name)),
-		MaxGameDepth:                   cliCtx.Uint64(DisputeMaxGameDepthFlag.Name),
-		SplitDepth:                     cliCtx.Uint64(DisputeSplitDepthFlag.Name),
-		InitBond:                       big.NewInt(int64(cliCtx.Uint64(InitialBondFlag.Name))),
-		ClockExtension:                 cliCtx.Uint64(DisputeClockExtensionFlag.Name),
-		MaxClockDuration:               cliCtx.Uint64(DisputeMaxClockDurationFlag.Name),
-		// At the moment we only support a single chain config
-		EncodedChainConfigs: []OPChainConfig{
-			{
-				SystemConfigProxy:  common.HexToAddress(cliCtx.String(SystemConfigProxyFlag.Name)),
-				CannonPrestate:     common.HexToHash(cliCtx.String(DisputeAbsolutePrestateCannonFlag.Name)),
-				CannonKonaPrestate: common.HexToHash(cliCtx.String(DisputeAbsolutePrestateCannonKonaFlag.Name)),
+		Prank: common.HexToAddress(l1ProxyAdminOwnerFlag),
+		Opcm:  opcmAddr,
+		MigrateInputV2: &MigrateInputV2{
+			ChainSystemConfigs: []common.Address{
+				common.HexToAddress(systemConfigProxyFlag),
 			},
+			DisputeGameConfigs: []DisputeGameConfig{
+				{
+					Enabled:  cliCtx.Bool(MigrateDisputeGameEnabledFlag.Name),
+					InitBond: initBond,
+					GameType: disputeGameType,
+					GameArgs: gameArgs,
+				},
+			},
+			StartingAnchorRoot: Proposal{
+				Root:             common.HexToHash(startingAnchorRootFlag),
+				L2SequenceNumber: new(big.Int).SetUint64(cliCtx.Uint64(StartingAnchorL2SequenceNumberFlag.Name)),
+			},
+			StartingRespectedGameType: migrateStartingRespectedGameType,
 		},
 	}
 
@@ -124,31 +237,33 @@ func MigrateCLI(cliCtx *cli.Context) error {
 		return fmt.Errorf("failed to parse artifacts locator: %w", err)
 	}
 
+	l1RPC, err := rpc.Dial(l1RPCUrl)
+	if err != nil {
+		return fmt.Errorf("failed to dial RPC %s: %w", l1RPCUrl, err)
+	}
+
 	cacheDir := cliCtx.String(deployer.CacheDirFlag.Name)
 	artifactsFS, err := artifacts.Download(ctx, artifactsLocator, ioutil.BarProgressor(), cacheDir)
 	if err != nil {
 		return fmt.Errorf("failed to download artifacts: %w", err)
 	}
 
-	l1RPC, err := rpc.Dial(l1RPCUrl)
-	if err != nil {
-		return fmt.Errorf("failed to dial RPC %s: %w", l1RPCUrl, err)
-	}
-
 	l1Client := ethclient.NewClient(l1RPC)
+	defer l1Client.Close()
+
 	l1ChainID, err := l1Client.ChainID(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get chain ID: %w", err)
 	}
 
 	signer := opcrypto.SignerFnFromBind(opcrypto.PrivateKeySignerFn(privateKeyECDSA, l1ChainID))
-	deployer := crypto.PubkeyToAddress(privateKeyECDSA.PublicKey)
+	deployerAddr := crypto.PubkeyToAddress(privateKeyECDSA.PublicKey)
 	bcaster, err := broadcaster.NewKeyedBroadcaster(broadcaster.KeyedBroadcasterOpts{
 		Logger:  lgr,
 		ChainID: l1ChainID,
 		Client:  l1Client,
 		Signer:  signer,
-		From:    deployer,
+		From:    deployerAddr,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create broadcaster: %w", err)
@@ -158,7 +273,7 @@ func MigrateCLI(cliCtx *cli.Context) error {
 		ctx,
 		bcaster,
 		lgr,
-		deployer,
+		deployerAddr,
 		artifactsFS,
 		l1RPC,
 	)
@@ -171,7 +286,7 @@ func MigrateCLI(cliCtx *cli.Context) error {
 		return fmt.Errorf("failed to run interop migration: %w", err)
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(cliCtx.App.Writer)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(output); err != nil {
 		return fmt.Errorf("failed to encode interop migration output: %w", err)

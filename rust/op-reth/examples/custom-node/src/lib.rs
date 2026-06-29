@@ -7,6 +7,10 @@
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+// Required for feature forwarding
+use reth_ethereum as _;
+use reth_payload_primitives as _;
+
 use crate::{
     engine::{CustomEngineValidatorBuilder, CustomPayloadTypes},
     engine_api::CustomEngineApiBuilder,
@@ -17,10 +21,11 @@ use crate::{
 };
 use chainspec::CustomChainSpec;
 use primitives::CustomNodePrimitives;
-use reth_ethereum::node::api::{FullNodeTypes, NodeTypes};
+use reth_node_api::FullNodeTypes;
 use reth_node_builder::{
-    Node, NodeAdapter,
-    components::{BasicPayloadServiceBuilder, ComponentsBuilder},
+    Node, NodeAdapter, NodeTypes,
+    components::{BasicPayloadServiceBuilder, ComponentsBuilder, NodeComponentsBuilder},
+    rpc::BasicEngineValidatorBuilder,
 };
 use reth_op::{
     node::{
@@ -39,7 +44,7 @@ pub mod pool;
 pub mod primitives;
 pub mod rpc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CustomNode {
     inner: OpNode,
 }
@@ -65,10 +70,11 @@ where
     >;
 
     type AddOns = OpAddOns<
-        NodeAdapter<N>,
+        NodeAdapter<N, <Self::ComponentsBuilder as NodeComponentsBuilder<N>>::Components>,
         OpEthApiBuilder<CustomRpcTypes>,
         CustomEngineValidatorBuilder,
         CustomEngineApiBuilder,
+        BasicEngineValidatorBuilder<CustomEngineValidatorBuilder>,
     >;
 
     fn components_builder(&self) -> Self::ComponentsBuilder {

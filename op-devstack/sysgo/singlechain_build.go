@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/params/forks"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/intentbuilder"
 	faucetConfig "github.com/ethereum-optimism/optimism/op-faucet/config"
@@ -28,7 +29,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/p2p"
 	p2pcli "github.com/ethereum-optimism/optimism/op-node/p2p/cli"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	nodeSync "github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
@@ -40,7 +40,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/retry"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	sequencerConfig "github.com/ethereum-optimism/optimism/op-test-sequencer/config"
 	testmetrics "github.com/ethereum-optimism/optimism/op-test-sequencer/metrics"
 	"github.com/ethereum-optimism/optimism/op-test-sequencer/sequencer"
@@ -98,7 +97,7 @@ func buildSingleChainWorld(t devtest.T, keys devkeys.Keys, localContractArtifact
 		genesis:    wb.outL2Genesis[l2ID],
 		rollupCfg:  wb.outL2RollupCfg[l2ID],
 		deployment: wb.outL2Deployment[l2ID],
-		opcmImpl:   wb.output.ImplementationsDeployment.OpcmImpl,
+		opcmImpl:   wb.output.ImplementationsDeployment.OpcmV2Impl,
 		mipsImpl:   wb.output.ImplementationsDeployment.MipsImpl,
 		keys:       keys,
 	}
@@ -127,7 +126,6 @@ func applyConfigCommons(t devtest.T, keys devkeys.Keys, l1ChainID eth.ChainID, b
 	_, superCfg := builder.WithSuperchain()
 	intentbuilder.WithDevkeySuperRoles(t, keys, l1ChainID, superCfg)
 	l1Config.WithPrefundedAccount(addrFor(devkeys.SuperchainProxyAdminOwner), *millionEth)
-	l1Config.WithPrefundedAccount(addrFor(devkeys.SuperchainProtocolVersionsOwner), *millionEth)
 	l1Config.WithPrefundedAccount(addrFor(devkeys.SuperchainConfigGuardianKey), *millionEth)
 	l1Config.WithPrefundedAccount(addrFor(devkeys.L1ProxyAdminOwnerRole), *millionEth)
 }
@@ -150,8 +148,53 @@ func applyConfigPrefundedL2(t devtest.T, keys devkeys.Keys, l1ChainID, l2ChainID
 	l1Config.WithPrefundedAccount(addrFor(devkeys.SystemConfigOwner), *millionEth)
 }
 
-func startSequencerEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, identity *ELNodeIdentity) *OpGeth {
-	return startL2ELNode(t, l2Net, jwtPath, jwtSecret, "sequencer", identity)
+// startL2ELForKey starts an L2 EL node for the given key, respecting DEVSTACK_L2EL_KIND.
+// This is the single env-aware dispatch point for L2 EL selection.
+func startL2ELForKey(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, key string, identity *ELNodeIdentity) L2ELNode {
+	switch devstackL2ELKind() {
+	case MixedL2ELOpGeth:
+		return startL2ELNode(t, l2Net, jwtPath, jwtSecret, key, identity)
+	case MixedL2ELOpRethV2:
+		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v2")
+	default: // op-reth v1
+		return startMixedOpRethNode(t, l2Net, key, jwtPath, jwtSecret, nil, "v1")
+	}
+}
+
+// startL2CLForKey starts an L2 CL node for the given key, respecting DEVSTACK_L2CL_KIND.
+// This is the single env-aware dispatch point for L2 CL selection.
+func startL2CLForKey(
+	t devtest.T,
+	keys devkeys.Keys,
+	l1Net *L1Network,
+	l2Net *L2Network,
+	l1EL L1ELNode,
+	l1CL *L1CLNode,
+	l2EL L2ELNode,
+	jwtSecret [32]byte,
+	clKey, elKey string,
+	isSequencer bool,
+	followSource string,
+	l2CLOpts []L2CLOption,
+) L2CLNode {
+	switch devstackL2CLKind() {
+	case MixedL2CLKona:
+		return startMixedKonaNode(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, clKey, elKey, isSequencer, nil)
+	default: // op-node
+		return startL2CLNode(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, jwtSecret, l2CLNodeStartConfig{
+			Key:            clKey,
+			IsSequencer:    isSequencer,
+			NoDiscovery:    true,
+			EnableReqResp:  true,
+			UseReqResp:     true,
+			L2FollowSource: followSource,
+			L2CLOptions:    l2CLOpts,
+		})
+	}
+}
+
+func startSequencerEL(t devtest.T, l2Net *L2Network, jwtPath string, jwtSecret [32]byte, identity *ELNodeIdentity) L2ELNode {
+	return startL2ELForKey(t, l2Net, jwtPath, jwtSecret, "sequencer", identity)
 }
 
 func startL2ELNode(
@@ -229,17 +272,8 @@ func startSequencerCL(
 	l2EL L2ELNode,
 	jwtSecret [32]byte,
 	l2CLOpts []L2CLOption,
-) *OpNode {
-	return startL2CLNode(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, jwtSecret, l2CLNodeStartConfig{
-		Key:            "sequencer",
-		IsSequencer:    true,
-		NoDiscovery:    true,
-		EnableReqResp:  true,
-		UseReqResp:     true,
-		IndexingMode:   false,
-		L2FollowSource: "",
-		L2CLOptions:    l2CLOpts,
-	})
+) L2CLNode {
+	return startL2CLForKey(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, jwtSecret, "sequencer", "sequencer", true, "", l2CLOpts)
 }
 
 type l2CLNodeStartConfig struct {
@@ -248,7 +282,6 @@ type l2CLNodeStartConfig struct {
 	NoDiscovery    bool
 	EnableReqResp  bool
 	UseReqResp     bool
-	IndexingMode   bool
 	L2FollowSource string
 	DependencySet  depset.DependencySet
 	L2CLOptions    []L2CLOption
@@ -271,7 +304,6 @@ func startL2CLNode(
 	cfg.NoDiscovery = startCfg.NoDiscovery
 	cfg.EnableReqRespSync = startCfg.EnableReqResp
 	cfg.UseReqRespSync = startCfg.UseReqResp
-	cfg.IndexingMode = startCfg.IndexingMode
 	cfg.FollowSource = startCfg.L2FollowSource
 	if len(startCfg.L2CLOptions) > 0 {
 		l2CLTarget := NewComponentTarget(startCfg.Key, l2Net.ChainID())
@@ -325,15 +357,6 @@ func startL2CLNode(
 	p2pConfig.NoDiscovery = cfg.NoDiscovery
 	p2pConfig.EnableReqRespSync = cfg.EnableReqRespSync
 
-	interopCfg := &interop.Config{}
-	if startCfg.IndexingMode {
-		interopCfg = &interop.Config{
-			RPCAddr:          "127.0.0.1",
-			RPCPort:          0,
-			RPCJwtSecretPath: l2EL.JWTPath(),
-		}
-	}
-
 	nodeCfg := &config.Config{
 		L1: &config.L1EndpointConfig{
 			L1NodeAddr:       l1EL.UserRPC(),
@@ -357,19 +380,18 @@ func startL2CLNode(
 			BeaconAddr: l1CL.beaconHTTPAddr,
 		},
 		Driver: driver.Config{
-			SequencerEnabled:   cfg.IsSequencer,
-			SequencerConfDepth: 2,
+			SequencerEnabled:    cfg.IsSequencer,
+			SequencerConfDepth:  2,
+			SequencerMaxSafeLag: cfg.SequencerMaxSafeLag,
 		},
-		Rollup:            *l2Net.rollupCfg,
-		DependencySet:     startCfg.DependencySet,
-		SupervisorEnabled: cfg.IndexingMode,
-		P2PSigner:         p2pSignerSetup,
+		Rollup:        *l2Net.rollupCfg,
+		DependencySet: startCfg.DependencySet,
+		P2PSigner:     p2pSignerSetup,
 		RPC: oprpc.CLIConfig{
 			ListenAddr:  "127.0.0.1",
 			ListenPort:  0,
 			EnableAdmin: true,
 		},
-		InteropConfig:               interopCfg,
 		P2P:                         p2pConfig,
 		L1EpochPollInterval:         time.Second * 2,
 		RuntimeConfigReloadInterval: 0,
@@ -381,12 +403,12 @@ func startL2CLNode(
 			SupportsPostFinalizationELSync: false,
 			L2FollowSourceEndpoint:         cfg.FollowSource,
 			NeedInitialResetEngine:         false,
+			OffsetELSafe:                   cfg.OffsetELSafe,
 		},
 		ConfigPersistence:               config.DisabledConfigPersistence{},
 		Metrics:                         opmetrics.CLIConfig{},
 		Pprof:                           oppprof.CLIConfig{},
 		SafeDBPath:                      cfg.SafeDBPath,
-		RollupHalt:                      "",
 		Cancel:                          nil,
 		ConductorEnabled:                false,
 		ConductorRpc:                    nil,
@@ -396,12 +418,13 @@ func startL2CLNode(
 		ExperimentalOPStackAPI:          true,
 	}
 	l2CL := &OpNode{
-		name:   startCfg.Key,
-		opNode: nil,
-		cfg:    nodeCfg,
-		p:      t,
-		logger: logger,
-		clock:  clock.SystemClock,
+		name:     startCfg.Key,
+		opNode:   nil,
+		cfg:      nodeCfg,
+		syncMode: syncMode,
+		p:        t,
+		logger:   logger,
+		clock:    clock.SystemClock,
 	}
 	l2CL.Start()
 	t.Cleanup(l2CL.Stop)

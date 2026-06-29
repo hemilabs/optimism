@@ -42,10 +42,6 @@ type SyncDeriver struct {
 
 	Ctx context.Context
 
-	// When in interop, and managed by an op-supervisor,
-	// the node performs a reset based on the instructions of the op-supervisor.
-	ManagedBySupervisor bool
-
 	StepDeriver StepDeriver
 }
 
@@ -65,11 +61,6 @@ func (s *SyncDeriver) OnL1Finalized(ctx context.Context) {
 }
 
 func (s *SyncDeriver) OnEvent(ctx context.Context, ev event.Event) bool {
-	// TODO(#16917) Remove Event System Refactor Comments
-	//  ELSyncStartedEvent is removed and OnELSyncStarted is synchronously called at EngineController
-	//  ReceivedBlockEvent is removed and OnUnsafeL2Payload is synchronously called at NewBlockReceiver
-	//  L1UnsafeEvent is removed and OnL1Unsafe is synchronously called at L1Handler
-	//  FinalizeL1Event is removed and OnL1Finalized is synchronously called at L1Handler
 	switch x := ev.(type) {
 	case StepEvent:
 		s.SyncStep()
@@ -95,8 +86,6 @@ func (s *SyncDeriver) OnEvent(ctx context.Context, ev event.Event) bool {
 		s.StepDeriver.RequestStep(ctx, true)
 	case engine.SafeDerivedEvent:
 		s.onSafeDerivedBlock(ctx, x)
-	case derive.ProvideL1Traversal:
-		s.StepDeriver.RequestStep(ctx, false)
 	default:
 		return false
 	}
@@ -162,7 +151,7 @@ func (s *SyncDeriver) onEngineConfirmedReset(ctx context.Context, x engine.Engin
 			s.Log.Error("Failed to warn safe-head notifier of safe-head reset", "safe", x.CrossSafe)
 			return
 		}
-		if s.SafeHeadNotifs.Enabled() && x.CrossSafe.ID() == s.Config.Genesis.L2 {
+		if s.SafeHeadNotifs.Enabled() && x.LocalSafe.ID() == s.Config.Genesis.L2 {
 			// The rollup genesis block is always safe by definition. So if the pipeline resets this far back we know
 			// we will process all safe head updates and can record genesis as always safe from L1 genesis.
 			// Note that it is not safe to use cfg.Genesis.L1 here as it is the block immediately before the L2 genesis
@@ -173,7 +162,7 @@ func (s *SyncDeriver) onEngineConfirmedReset(ctx context.Context, x engine.Engin
 				s.Log.Error("Failed to retrieve L1 genesis, cannot notify genesis as safe block", "err", err)
 				return
 			}
-			if err := s.SafeHeadNotifs.SafeHeadUpdated(x.CrossSafe, l1Genesis.ID()); err != nil {
+			if err := s.SafeHeadNotifs.SafeHeadUpdated(x.LocalSafe, l1Genesis.ID()); err != nil {
 				s.Log.Error("Failed to notify safe-head listener of safe-head", "err", err)
 				return
 			}
@@ -184,11 +173,6 @@ func (s *SyncDeriver) onEngineConfirmedReset(ctx context.Context, x engine.Engin
 }
 
 func (s *SyncDeriver) onResetEvent(ctx context.Context, x rollup.ResetEvent) {
-	if s.ManagedBySupervisor {
-		s.Log.Warn("Encountered reset when managed by op-supervisor, waiting for op-supervisor", "err", x.Err)
-		// IndexingMode will pick up the ResetEvent
-		return
-	}
 	// If the system corrupts, e.g. due to a reorg, simply reset it
 	s.Log.Warn("Deriver system is resetting", "err", x.Err)
 	s.Emitter.Emit(ctx, engine.ResetEngineRequestEvent{})
@@ -226,8 +210,6 @@ func (s *SyncDeriver) SyncStep() {
 	s.Log.Debug("Sync process step")
 
 	s.tryBackupUnsafeReorg()
-
-	s.Engine.TryUpdateEngine(s.Ctx)
 
 	if s.Engine.IsEngineInitialELSyncing() {
 		// The pipeline cannot move forwards if doing initial EL sync.

@@ -311,9 +311,6 @@ where
                 .context_for_next_block(parent_header, attrs)
                 .map_err(RethError::other)?;
 
-            // The cached bundle prestate already includes pre-execution state changes.
-            // Only set the state clear flag (Spurious Dragon empty-account handling).
-            state.set_state_clear_flag(true);
             let evm = self.evm_config.evm_with_env(&mut state, evm_env);
             let mut executor = self.evm_config.create_executor(evm, execution_ctx.clone());
 
@@ -359,6 +356,7 @@ where
                     &bundle,
                     &state_provider,
                     state_root,
+                    None,
                 ))
                 .map_err(RethError::other)?;
             let block = RecoveredBlock::new_unhashed(block, senders);
@@ -379,9 +377,9 @@ where
             let BlockBuilderOutcome { execution_result, block, hashed_state, .. } =
                 if args.compute_state_root {
                     trace!(target: "flashblocks", "Computing block state root");
-                    builder.finish(&state_provider)?
+                    builder.finish(&state_provider, None)?
                 } else {
-                    builder.finish(NoopProvider::default())?
+                    builder.finish(NoopProvider::default(), None)?
                 };
             let bundle = state.take_bundle();
 
@@ -438,10 +436,7 @@ where
             ExecutedBlock::new(
                 block.into(),
                 execution_outcome,
-                ComputedTrieData::without_trie_input(
-                    Arc::new(hashed_state.into_sorted()),
-                    Arc::default(),
-                ),
+                ComputedTrieData::new(Arc::new(hashed_state.into_sorted()), Arc::default()),
             ),
         );
         let pending_flashblock = PendingFlashBlock::new(

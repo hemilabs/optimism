@@ -1,6 +1,6 @@
 //! Test utilities for the executor.
 
-use crate::{StatelessL2Builder, TrieDBProvider};
+use crate::{BlockBuildingOutcome, ExecutorResult, StatelessL2Builder, TrieDBProvider};
 use alloy_consensus::Header;
 use alloy_op_evm::OpEvmFactory;
 use alloy_primitives::{B256, Bytes, Sealable};
@@ -13,17 +13,24 @@ use kona_genesis::RollupConfig;
 use kona_mpt::{NoopTrieHinter, TrieNode, TrieProvider};
 use kona_registry::ROLLUP_CONFIGS;
 use op_alloy_rpc_types_engine::OpPayloadAttributes;
-use op_revm::OpTransaction;
-use revm::context::TxEnv;
 use rocksdb::{DB, Options};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 use tokio::{fs, runtime::Handle, sync::Mutex};
 
-/// Executes a [`ExecutorTestFixture`] stored at the passed `fixture_path` and asserts that the
-/// produced block hash matches the expected block hash.
-pub async fn run_test_fixture(fixture_path: PathBuf) {
-    // First, untar the fixture.
+/// A loaded executor test fixture and its backing temporary fixture directory.
+#[derive(Debug)]
+pub struct LoadedExecutorTestFixture {
+    /// Keeps the untarred fixture directory alive while the `RocksDB` provider is open.
+    pub fixture_dir: tempfile::TempDir,
+    /// The deserialized fixture metadata and payload.
+    pub fixture: ExecutorTestFixture,
+    /// Trie/database provider backed by the fixture's key-value store.
+    pub provider: DiskTrieNodeProvider,
+}
+
+/// Loads a [`ExecutorTestFixture`] stored at the passed `fixture_path`.
+pub async fn load_test_fixture(fixture_path: PathBuf) -> LoadedExecutorTestFixture {
     let fixture_dir = tempfile::tempdir().expect("Failed to create temporary directory");
     tokio::process::Command::new("tar")
         .arg("-xvf")
@@ -45,19 +52,39 @@ pub async fn run_test_fixture(fixture_path: PathBuf) {
         serde_json::from_slice(&fs::read(fixture_dir.path().join("fixture.json")).await.unwrap())
             .expect("Failed to deserialize fixture");
 
+    LoadedExecutorTestFixture { fixture_dir, fixture, provider }
+}
+
+/// Executes a loaded fixture, optionally overriding SDM activation for the run.
+pub fn execute_loaded_fixture(
+    loaded: LoadedExecutorTestFixture,
+    sdm_active_override: Option<bool>,
+) -> ExecutorResult<BlockBuildingOutcome> {
+    let LoadedExecutorTestFixture { fixture_dir: _fixture_dir, fixture, provider } = loaded;
+    let ExecutorTestFixture { rollup_config, parent_header, executing_payload, .. } = fixture;
+
     let mut executor = StatelessL2Builder::new(
-        &fixture.rollup_config,
-        OpEvmFactory::<OpTransaction<TxEnv>>::default(),
+        &rollup_config,
+        OpEvmFactory::<alloy_op_evm::OpTx>::default(),
         provider,
         NoopTrieHinter,
-        fixture.parent_header.seal_slow(),
+        parent_header.seal_slow(),
     );
+    executor.set_sdm_active_override(sdm_active_override);
 
-    let outcome = executor.build_block(fixture.executing_payload).unwrap();
+    executor.build_block(executing_payload)
+}
+
+/// Executes a [`ExecutorTestFixture`] stored at the passed `fixture_path` and asserts that the
+/// produced block hash matches the expected block hash.
+pub async fn run_test_fixture(fixture_path: PathBuf) {
+    let loaded = load_test_fixture(fixture_path).await;
+    let expected_block_hash = loaded.fixture.expected_block_hash;
+    let outcome = execute_loaded_fixture(loaded, None).unwrap();
 
     assert_eq!(
         outcome.header.hash(),
-        fixture.expected_block_hash,
+        expected_block_hash,
         "Produced header does not match the expected header"
     );
 }
@@ -153,6 +180,7 @@ impl ExecutorTestFixtureCreator {
                 prev_randao: executing_header.mix_hash,
                 withdrawals: Default::default(),
                 suggested_fee_recipient: executing_header.beneficiary,
+                slot_number: Default::default(),
             },
             gas_limit: Some(executing_header.gas_limit),
             transactions: Some(encoded_executing_transactions),
@@ -183,7 +211,7 @@ impl ExecutorTestFixtureCreator {
 
         let mut executor = StatelessL2Builder::new(
             rollup_config,
-            OpEvmFactory::<OpTransaction<TxEnv>>::default(),
+            OpEvmFactory::<alloy_op_evm::OpTx>::default(),
             self,
             NoopTrieHinter,
             parent_header,

@@ -41,9 +41,8 @@ type OPCMImplementationsConfig struct {
 type SuperchainConfig struct {
 	Deployer common.Address
 
-	ProxyAdminOwner       common.Address
-	ProtocolVersionsOwner common.Address
-	Challenger            common.Address
+	ProxyAdminOwner common.Address
+	Challenger      common.Address
 
 	Paused bool
 
@@ -71,15 +70,18 @@ type L2Config struct {
 	Challenger        common.Address
 	SystemConfigOwner common.Address
 	genesis.L2InitializationConfig
-	Prefund                 map[common.Address]*big.Int
-	SaltMixer               string
-	GasLimit                uint64
-	DisputeGameType         uint32
-	DisputeAbsolutePrestate common.Hash
-	DisputeMaxGameDepth     uint64
-	DisputeSplitDepth       uint64
-	DisputeClockExtension   uint64
-	DisputeMaxClockDuration uint64
+	Prefund                     map[common.Address]*big.Int
+	SaltMixer                   string
+	GasLimit                    uint64
+	DisputeGameType             uint32
+	DisputeAbsolutePrestate     common.Hash
+	DisputeKonaAbsolutePrestate common.Hash
+	DisputeMaxGameDepth         uint64
+	DisputeSplitDepth           uint64
+	DisputeClockExtension       uint64
+	DisputeMaxClockDuration     uint64
+	// TODO(#20084): remove once L2CM is the default codepath and DevFeatures are removed.
+	UseL2CM bool
 }
 
 func (c *L2Config) Check(log log.Logger) error {

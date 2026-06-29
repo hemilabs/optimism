@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ethereum-optimism/optimism/op-node/metrics"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -45,12 +41,12 @@ func NewDriver(logger log.Logger, cfg *rollup.Config, depSet derive.DependencySe
 		logger: logger,
 	}
 
-	pipeline := derive.NewDerivationPipeline(logger, cfg, depSet, l1Source, l1BlobsSource, altda.Disabled, l2Source, metrics.NoopMetrics, false, l1ChainConfig)
+	pipeline := derive.NewDerivationPipeline(logger, cfg, depSet, l1Source, l1BlobsSource, altda.Disabled, l2Source, metrics.NoopMetrics, l1ChainConfig)
 	pipelineDeriver := derive.NewPipelineDeriver(context.Background(), pipeline)
 	pipelineDeriver.AttachEmitter(d)
 
 	syncCfg := &sync.Config{SyncMode: sync.CLSync}
-	ec := engine.NewEngineController(context.Background(), l2Source, logger, metrics.NoopMetrics, cfg, syncCfg, l1Source, d)
+	ec := engine.NewEngineController(context.Background(), l2Source, logger, metrics.NoopMetrics, cfg, syncCfg, l1Source, d, nil)
 
 	attrHandler := attributes.NewAttributesHandler(logger, cfg, context.Background(), l2Source, ec)
 	ec.SetAttributesResetter(attrHandler)

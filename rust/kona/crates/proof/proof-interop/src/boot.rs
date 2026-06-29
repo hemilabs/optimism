@@ -6,12 +6,13 @@ use alloc::{string::ToString, vec::Vec};
 use alloy_primitives::{B256, Bytes, U256};
 use alloy_rlp::Decodable;
 use kona_genesis::{L1ChainConfig, RollupConfig};
+use kona_interop::DependencySet;
 use kona_preimage::{
     CommsClient, HintWriterClient, PreimageKey, PreimageKeyType, PreimageOracleClient,
     errors::PreimageOracleError,
 };
 use kona_proof::errors::OracleProviderError;
-use kona_registry::{HashMap, L1_CONFIGS, ROLLUP_CONFIGS};
+use kona_registry::{DEPENDENCY_SETS, HashMap, L1_CONFIGS, ROLLUP_CONFIGS};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::warn;
@@ -34,6 +35,9 @@ pub const L2_ROLLUP_CONFIG_KEY: U256 = U256::from_be_slice(&[6]);
 /// The local key ident for the l1 config.
 pub const L1_CONFIG_KEY: U256 = U256::from_be_slice(&[7]);
 
+/// The local key ident for the dependency set.
+pub const DEPENDENCY_SET_KEY: U256 = U256::from_be_slice(&[8]);
+
 /// The boot information for the interop client program.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BootInfo {
@@ -49,6 +53,8 @@ pub struct BootInfo {
     pub claimed_l2_timestamp: u64,
     /// The rollup config for the L2 chain.
     pub rollup_configs: HashMap<u64, RollupConfig>,
+    /// The dependency set configuration for the interop cluster.
+    pub dependency_set: DependencySet,
     /// The L1 config for the L2 chain.
     pub l1_config: L1ChainConfig,
 }
@@ -110,6 +116,20 @@ impl BootInfo {
         let agreed_pre_state =
             PreState::decode(&mut raw_pre_state.as_ref()).map_err(OracleProviderError::Rlp)?;
 
+        // INVARIANT: the honest actor never agrees to a prestate whose timestamp exceeds
+        // the dispute-game-pinned `claimed_l2_timestamp`. The oracle only verifies
+        // `key == keccak256(preimage)`, not the timestamp inside; without this guard a
+        // malicious proposer could register a future-timestamped prestate and use it as
+        // both starting and disputed claim at trace-extended bisection positions, where
+        // `claim == prestate ⇒ Ok(())` would resolve as `vmStatus = VALID`. Op-program
+        // panics on this condition (see `op-program/client/interop/interop.go:87-97`).
+        assert!(
+            agreed_pre_state.timestamp() <= l2_claim_block,
+            "agreed prestate timestamp {} is after the game timestamp {}",
+            agreed_pre_state.timestamp(),
+            l2_claim_block
+        );
+
         let chain_ids: Vec<_> = match agreed_pre_state {
             PreState::SuperRoot(ref super_root) => {
                 super_root.output_roots.iter().map(|r| r.chain_id).collect()
@@ -127,10 +147,12 @@ impl BootInfo {
         {
             chain_ids.iter().map(|id| (*id, ROLLUP_CONFIGS[id].clone())).collect()
         } else {
+            let missing_ids: Vec<u64> =
+                chain_ids.iter().copied().filter(|id| !ROLLUP_CONFIGS.contains_key(id)).collect();
             warn!(
                 target: "boot_loader",
                 "No rollup config found for chain IDs {:?}, falling back to preimage oracle. This is insecure in production without additional validation!",
-                chain_ids
+                missing_ids
             );
             let ser_cfg = oracle
                 .get(PreimageKey::new_local(L2_ROLLUP_CONFIG_KEY.to()))
@@ -138,6 +160,8 @@ impl BootInfo {
                 .map_err(OracleProviderError::Preimage)?;
             serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?
         };
+
+        let dependency_set = load_dependency_set(oracle, &chain_ids, &DEPENDENCY_SETS).await?;
 
         // Attempt to load the l1 config from the chain ID. If there is no config for the chain,
         // fall back to loading the config from the preimage oracle.
@@ -170,6 +194,7 @@ impl BootInfo {
             l1_head,
             l1_config,
             rollup_configs,
+            dependency_set,
             agreed_pre_state_commitment: l2_pre,
             agreed_pre_state,
             claimed_post_state: l2_post,
@@ -236,4 +261,117 @@ where
     }
 
     Ok(Bytes::from(pre))
+}
+
+/// Loads the dependency set for the proof.
+///
+/// Looks up the first chain id from the proof's `agreed_pre_state` in the
+/// registry-embedded `DEPENDENCY_SETS` map. The build pipeline guarantees that every
+/// chain id in any embedded cluster is keyed under that cluster's [`DependencySet`], so
+/// a single lookup suffices — if the first chain id is in any embedded cluster, this
+/// returns it. If no embedded entry exists, falls back to the preimage oracle, which
+/// keeps host-synthesized depsets working for dev/test flows.
+///
+/// Cross-cluster and partial-coverage proofs (chain ids spanning multiple embedded
+/// clusters or mixing embedded/non-embedded chains) are not detected here. They fail
+/// downstream during interop message validation when a message's source chain isn't in
+/// the chosen depset's `dependencies`.
+async fn load_dependency_set<O>(
+    oracle: &O,
+    chain_ids: &[u64],
+    embedded: &HashMap<u64, DependencySet>,
+) -> Result<DependencySet, BootstrapError>
+where
+    O: PreimageOracleClient + Send,
+{
+    if let Some(ds) = chain_ids.first().and_then(|id| embedded.get(id)) {
+        return Ok(ds.clone());
+    }
+    warn!(
+        target: "boot_loader",
+        "No embedded dependency set found for proof chain ids {:?}, falling back to preimage oracle. This is insecure in production without additional validation!",
+        chain_ids
+    );
+    let ser_cfg = oracle
+        .get(PreimageKey::new_local(DEPENDENCY_SET_KEY.to()))
+        .await
+        .map_err(OracleProviderError::Preimage)?;
+    let ds: DependencySet = serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?;
+    Ok(ds)
+}
+
+#[cfg(test)]
+#[allow(clippy::zero_sized_map_values)]
+mod tests {
+    use super::*;
+    use alloc::{boxed::Box, vec, vec::Vec};
+    use kona_genesis::{ChainDependency, DependencySet};
+    use kona_preimage::{HintWriterClient, errors::PreimageOracleError};
+    use kona_registry::HashMap;
+
+    #[derive(Default)]
+    struct MockOracle {
+        fetched: spin::Mutex<Vec<PreimageKey>>,
+        depset_payload: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl PreimageOracleClient for MockOracle {
+        async fn get(&self, key: PreimageKey) -> Result<Vec<u8>, PreimageOracleError> {
+            self.fetched.lock().push(key);
+            Ok(self.depset_payload.clone())
+        }
+        async fn get_exact(
+            &self,
+            _key: PreimageKey,
+            _buf: &mut [u8],
+        ) -> Result<(), PreimageOracleError> {
+            unimplemented!("not exercised by load_dependency_set tests")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HintWriterClient for MockOracle {
+        async fn write(&self, _hint: &str) -> Result<(), PreimageOracleError> {
+            unimplemented!("not exercised by load_dependency_set tests")
+        }
+    }
+
+    fn make_depset(chain_ids: &[u64]) -> DependencySet {
+        let dependencies = chain_ids.iter().map(|id| (*id, ChainDependency {})).collect();
+        DependencySet { dependencies, override_message_expiry_window: None }
+    }
+
+    fn embed(depsets: Vec<DependencySet>) -> HashMap<u64, DependencySet> {
+        let mut by_chain = HashMap::default();
+        for ds in depsets {
+            for id in ds.dependencies.keys() {
+                by_chain.insert(*id, ds.clone());
+            }
+        }
+        by_chain
+    }
+
+    #[tokio::test]
+    async fn embedded_depset_covers_all_chains_does_not_call_oracle() {
+        let oracle = MockOracle::default();
+        let depset = make_depset(&[1u64, 2u64]);
+        let embedded = embed(vec![depset.clone()]);
+        let out = load_dependency_set(&oracle, &[1, 2], &embedded).await.unwrap();
+        assert_eq!(out, depset);
+        assert!(oracle.fetched.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_embedded_depsets_falls_back_to_oracle() {
+        let oracle = MockOracle {
+            depset_payload: serde_json::to_vec(&make_depset(&[1u64])).unwrap(),
+            ..Default::default()
+        };
+        let out = load_dependency_set(&oracle, &[1], &HashMap::default()).await.unwrap();
+        assert_eq!(out.dependencies.len(), 1);
+        let fetched = oracle.fetched.lock().clone();
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0], PreimageKey::new_local(DEPENDENCY_SET_KEY.to()));
+    }
 }

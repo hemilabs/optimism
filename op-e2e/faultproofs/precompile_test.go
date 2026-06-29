@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/challenger"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/disputegame"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
@@ -73,12 +74,12 @@ func TestPrecompile(t *testing.T) {
 
 		t.Log("Determine L2 claim")
 		l2ClaimBlockNumber := receipt.BlockNumber
-		l2Output, err := rollupClient.OutputAtBlock(ctx, l2ClaimBlockNumber.Uint64())
+		l2Output, err := rollupClient.OutputAtBlock(ctx, bigs.Uint64Strict(l2ClaimBlockNumber))
 		require.NoError(t, err, "could not get expected output")
 		l2Claim := l2Output.OutputRoot
 
 		t.Log("Determine L1 head that includes all batches required for L2 claim block")
-		require.NoError(t, wait.ForSafeBlock(ctx, rollupClient, l2ClaimBlockNumber.Uint64()))
+		require.NoError(t, wait.ForSafeBlock(ctx, rollupClient, bigs.Uint64Strict(l2ClaimBlockNumber)))
 		l1HeadBlock, err := l1Client.BlockByNumber(ctx, nil)
 		require.NoError(t, err, "get l1 head block")
 		l1Head := l1HeadBlock.Hash()
@@ -116,7 +117,7 @@ func TestDisputePrecompile(t *testing.T) {
 		})
 
 		disputeGameFactory := disputegame.NewFactoryHelper(t, ctx, sys)
-		game := disputeGameFactory.StartOutputCannonGame(ctx, "sequencer", receipt.BlockNumber.Uint64(), common.Hash{0x01, 0xaa})
+		game := disputeGameFactory.StartOutputCannonGame(ctx, "sequencer", bigs.Uint64Strict(receipt.BlockNumber), common.Hash{0x01, 0xaa})
 		require.NotNil(t, game)
 		outputRootClaim := game.DisputeLastBlock(ctx)
 		game.LogGameData(ctx)
@@ -187,12 +188,12 @@ func TestGranitePrecompiles(t *testing.T) {
 		t.Logf("Transaction hash %v", tx.Hash())
 		t.Log("Determine L2 claim")
 		l2ClaimBlockNumber := receipt.BlockNumber
-		l2Output, err := rollupClient.OutputAtBlock(ctx, l2ClaimBlockNumber.Uint64())
+		l2Output, err := rollupClient.OutputAtBlock(ctx, bigs.Uint64Strict(l2ClaimBlockNumber))
 		require.NoError(t, err, "could not get expected output")
 		l2Claim := l2Output.OutputRoot
 
 		t.Log("Determine L1 head that includes all batches required for L2 claim block")
-		require.NoError(t, wait.ForSafeBlock(ctx, rollupClient, l2ClaimBlockNumber.Uint64()))
+		require.NoError(t, wait.ForSafeBlock(ctx, rollupClient, bigs.Uint64Strict(l2ClaimBlockNumber)))
 		l1HeadBlock, err := l1Client.BlockByNumber(ctx, nil)
 		require.NoError(t, err, "get l1 head block")
 		l1Head := l1HeadBlock.Hash()
@@ -213,21 +214,21 @@ func runCannon(t *testing.T, ctx context.Context, sys *e2esys.System, inputs uti
 	l1Beacon := sys.L1BeaconEndpoint().RestHTTP()
 	rollupEndpoint := sys.RollupEndpoint("sequencer").RPC()
 	l2Endpoint := sys.NodeEndpoint("sequencer").RPC()
-	cannonOpts := challenger.WithCannon(t, sys)
+	cannonOpts := challenger.WithCannonKona(t, sys)
 	dir := t.TempDir()
 	proofsDir := filepath.Join(dir, "cannon-proofs")
 	cfg := config.NewConfig(common.Address{}, l1Endpoint, l1Beacon, rollupEndpoint, l2Endpoint, dir)
-	cfg.Cannon.L2Custom = true
+	cfg.CannonKona.L2Custom = true
 	cannonOpts(&cfg)
 
 	logger := testlog.Logger(t, log.LevelInfo).New("role", "cannon")
-	executor := vm.NewExecutor(logger, metrics.NoopMetrics.ToTypedVmMetrics("cannon"), cfg.Cannon, vm.NewOpProgramServerExecutor(logger), cfg.CannonAbsolutePreState, inputs)
+	executor := vm.NewExecutor(logger, metrics.NoopMetrics.ToTypedVmMetrics("cannon"), cfg.CannonKona, vm.NewKonaExecutor(), cfg.CannonKonaAbsolutePreState, inputs)
 
 	t.Log("Running cannon")
 	err := executor.DoGenerateProof(ctx, proofsDir, math.MaxUint, math.MaxUint, extraVmArgs...)
 	require.NoError(t, err, "failed to generate proof")
 
-	stdOut, _, err := runCmd(ctx, cfg.Cannon.VmBin, "witness", "--input", vm.FinalStatePath(proofsDir, cfg.Cannon.BinarySnapshots))
+	stdOut, _, err := runCmd(ctx, cfg.CannonKona.VmBin, "witness", "--input", vm.FinalStatePath(proofsDir, cfg.CannonKona.BinarySnapshots))
 	require.NoError(t, err, "failed to run witness cmd")
 	type stateData struct {
 		Step     uint64 `json:"step"`

@@ -1,84 +1,15 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "Duration",
-        "name": "_maxChallengeDuration",
-        "type": "uint64"
-      },
-      {
-        "internalType": "Duration",
-        "name": "_maxProveDuration",
-        "type": "uint64"
-      },
-      {
-        "internalType": "contract IDisputeGameFactory",
-        "name": "_disputeGameFactory",
-        "type": "address"
-      },
-      {
-        "internalType": "contract ISP1Verifier",
-        "name": "_sp1Verifier",
-        "type": "address"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "_rollupConfigHash",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "_aggregationVkey",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "_rangeVkeyCommitment",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_challengerBond",
-        "type": "uint256"
-      },
-      {
-        "internalType": "contract IAnchorStateRegistry",
-        "name": "_anchorStateRegistry",
-        "type": "address"
-      },
-      {
-        "internalType": "contract AccessManager",
-        "name": "_accessManager",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
     "inputs": [],
-    "name": "accessManager",
-    "outputs": [
-      {
-        "internalType": "contract AccessManager",
-        "name": "accessManager_",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "aggregationVkey",
+    "name": "absolutePrestate",
     "outputs": [
       {
         "internalType": "bytes32",
-        "name": "aggregationVkey_",
+        "name": "absolutePrestate_",
         "type": "bytes32"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -91,7 +22,7 @@
         "type": "address"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -112,7 +43,11 @@
     "name": "challenge",
     "outputs": [
       {
+<<<<<<<< HEAD:packages/contracts-bedrock/snapshots/abi/OPSuccinctFaultDisputeGame.json
         "internalType": "enum OPSuccinctFaultDisputeGame.ProposalStatus",
+========
+        "internalType": "enum ZKDisputeGame.ProposalStatus",
+>>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/snapshots/abi/ZKDisputeGame.json
         "name": "",
         "type": "uint8"
       }
@@ -130,7 +65,7 @@
         "type": "uint256"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -156,8 +91,13 @@
         "type": "uint32"
       },
       {
+        "internalType": "enum ZKDisputeGame.ProposalStatus",
+        "name": "status",
+        "type": "uint8"
+      },
+      {
         "internalType": "address",
-        "name": "counteredBy",
+        "name": "challenger",
         "type": "address"
       },
       {
@@ -166,6 +106,7 @@
         "type": "address"
       },
       {
+<<<<<<<< HEAD:packages/contracts-bedrock/snapshots/abi/OPSuccinctFaultDisputeGame.json
         "internalType": "Claim",
         "name": "claim",
         "type": "bytes32"
@@ -176,9 +117,16 @@
         "type": "uint8"
       },
       {
+========
+>>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/snapshots/abi/ZKDisputeGame.json
         "internalType": "Timestamp",
         "name": "deadline",
         "type": "uint64"
+      },
+      {
+        "internalType": "Claim",
+        "name": "claim",
+        "type": "bytes32"
       }
     ],
     "stateMutability": "view",
@@ -229,7 +177,7 @@
     "outputs": [
       {
         "internalType": "contract IDisputeGameFactory",
-        "name": "disputeGameFactory_",
+        "name": "",
         "type": "address"
       }
     ],
@@ -282,7 +230,7 @@
         "type": "bytes"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -308,7 +256,7 @@
         "type": "uint32"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -326,6 +274,19 @@
         "internalType": "Hash",
         "name": "l1Head_",
         "type": "bytes32"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "l2ChainId",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "l2ChainId_",
+        "type": "uint256"
       }
     ],
     "stateMutability": "pure",
@@ -354,7 +315,7 @@
         "type": "uint64"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -367,7 +328,7 @@
         "type": "uint64"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -413,25 +374,16 @@
     "name": "prove",
     "outputs": [
       {
+<<<<<<<< HEAD:packages/contracts-bedrock/snapshots/abi/OPSuccinctFaultDisputeGame.json
         "internalType": "enum OPSuccinctFaultDisputeGame.ProposalStatus",
+========
+        "internalType": "enum ZKDisputeGame.ProposalStatus",
+>>>>>>>> b42e064b63 (feat: new zk dispute game (#19606)):packages/contracts-bedrock/snapshots/abi/ZKDisputeGame.json
         "name": "",
         "type": "uint8"
       }
     ],
     "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "rangeVkeyCommitment",
-    "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "rangeVkeyCommitment_",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -481,19 +433,6 @@
   },
   {
     "inputs": [],
-    "name": "rollupConfigHash",
-    "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "rollupConfigHash_",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
     "name": "rootClaim",
     "outputs": [
       {
@@ -503,19 +442,6 @@
       }
     ],
     "stateMutability": "pure",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "sp1Verifier",
-    "outputs": [
-      {
-        "internalType": "contract ISP1Verifier",
-        "name": "verifier_",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -577,6 +503,32 @@
   },
   {
     "inputs": [],
+    "name": "totalBonds",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "verifier",
+    "outputs": [
+      {
+        "internalType": "contract IZKVerifier",
+        "name": "verifier_",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "version",
     "outputs": [
       {
@@ -599,6 +551,19 @@
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "weth",
+    "outputs": [
+      {
+        "internalType": "contract IDelayedWETH",
+        "name": "weth_",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -660,11 +625,6 @@
   },
   {
     "inputs": [],
-    "name": "BadAuth",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "BondTransferFailed",
     "type": "error"
   },
@@ -690,17 +650,22 @@
   },
   {
     "inputs": [],
+    "name": "GameNotResolved",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "GameOver",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "IncorrectBondAmount",
+    "name": "GamePaused",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "IncorrectDisputeGameFactory",
+    "name": "IncorrectBondAmount",
     "type": "error"
   },
   {
@@ -729,6 +694,11 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "UnexpectedGameType",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "Claim",
@@ -737,6 +707,11 @@
       }
     ],
     "name": "UnexpectedRootClaim",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "UnknownChainId",
     "type": "error"
   }
 ]

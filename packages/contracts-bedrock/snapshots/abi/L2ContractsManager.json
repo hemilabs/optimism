@@ -1,0 +1,139 @@
+[
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "impl",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct L2ContractsManagerTypes.ImplRecord[]",
+        "name": "_implementations",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "getImplementations",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "impl",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct L2ContractsManagerTypes.ImplRecord[]",
+        "name": "implementations_",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "upgrade",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "version",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_target",
+        "type": "address"
+      }
+    ],
+    "name": "L2ContractsManager_DowngradeNotAllowed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_target",
+        "type": "address"
+      }
+    ],
+    "name": "L2ContractsManager_EmptyImplementation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "L2ContractsManager_FeatureFlagMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "name",
+        "type": "string"
+      }
+    ],
+    "name": "L2ContractsManager_ImplNotFound",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "L2ContractsManager_InitializingDuringUpgrade",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "L2ContractsManager_InvalidV5Offset",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_target",
+        "type": "address"
+      }
+    ],
+    "name": "L2ContractsManager_NotUpgradeable",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "L2ContractsManager_OnlyDelegatecall",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "SemverComp_InvalidSemverParts",
+    "type": "error"
+  }
+]

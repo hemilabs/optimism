@@ -77,8 +77,7 @@ func startDefaultSingleChainPrimary(
 	jwtSecret [32]byte,
 	cfg PresetConfig,
 ) singleChainPrimaryRuntime {
-	sequencerIdentity := NewELNodeIdentity(0)
-	l2EL := startSequencerEL(t, world.L2Network, jwtPath, jwtSecret, sequencerIdentity)
+	l2EL := startSequencerEL(t, world.L2Network, jwtPath, jwtSecret, NewELNodeIdentity(0))
 	l2CL := startSequencerCL(t, keys, world.L1Network, world.L2Network, l1EL, l1CL, l2EL, jwtSecret, cfg.GlobalL2CLOptions)
 	return singleChainPrimaryRuntime{
 		EL: l2EL,
@@ -118,14 +117,12 @@ func newSingleChainRuntimeWithConfig(t devtest.T, cfg PresetConfig, spec singleC
 
 	var l2Challenger *L2Challenger
 	if spec.StartChallenger {
-		l2Challenger = startMinimalChallenger(t, keys, world.L1Network, world.L2Network, l1EL, l1CL, primary.EL, primary.CL, cfg.EnableCannonKonaForChall)
+		l2Challenger = startMinimalChallenger(t, keys, world.L1Network, world.L2Network, l1EL, l1CL, primary.EL, primary.CL)
 	}
 
 	applyMinimalGameTypeOptions(t, keys, world.L1Network, world.L2Network, l1EL, cfg.AddedGameTypes, cfg.RespectedGameTypes)
 
-	sequencerCL, ok := primary.CL.(*OpNode)
-	require.True(ok, "single-chain runtime primary CL must be op-node for test sequencer")
-	testSequencer := startTestSequencer(t, keys, jwtPath, jwtSecret, world.L1Network, l1EL, l1CL, primary.EL, world.L2Network, sequencerCL)
+	testSequencer := startTestSequencerForRPCs(t, keys, "test-sequencer", jwtPath, jwtSecret, world.L1Network, l1EL, l1CL, world.L2Network.ChainID(), primary.EL.UserRPC(), primary.CL.UserRPC())
 	testSequencerRuntime := newTestSequencerRuntime(testSequencer, spec.TestSequencer)
 	faucetService := startFaucets(t, keys, world.L1Network.ChainID(), world.L2Network.ChainID(), l1EL.UserRPC(), primary.EL.UserRPC())
 
@@ -165,6 +162,21 @@ func NewMinimalRuntimeWithConfig(t devtest.T, cfg PresetConfig) *SingleChainRunt
 		StartBatcher:    true,
 		StartProposer:   true,
 		StartChallenger: true,
+	})
+}
+
+// NewMinimalNoFaultProofsRuntimeWithConfig returns a minimal single-chain
+// runtime without the proposer or challenger. It is intended for tests that
+// only exercise the sequencer + batcher + derivation loop and do not need
+// fault proofs. Skipping the challenger also avoids requiring cannon prestate
+// artifacts, which are expensive to build locally.
+func NewMinimalNoFaultProofsRuntimeWithConfig(t devtest.T, cfg PresetConfig) *SingleChainRuntime {
+	return newSingleChainRuntimeWithConfig(t, cfg, singleChainRuntimeSpec{
+		BuildWorld:      newDefaultSingleChainWorld,
+		StartPrimary:    startDefaultSingleChainPrimary,
+		StartBatcher:    true,
+		StartProposer:   false,
+		StartChallenger: false,
 	})
 }
 
@@ -323,7 +335,6 @@ func startMinimalChallenger(
 	l1CL *L1CLNode,
 	l2EL L2ELNode,
 	l2CL L2CLNode,
-	enableCannonKona bool,
 ) *L2Challenger {
 	require := t.Require()
 	challengerSecret, err := keys.Secret(devkeys.ChallengerRole.Key(l2Net.ChainID().ToBig()))
@@ -341,16 +352,11 @@ func startMinimalChallenger(
 		sharedchallenger.WithCannonGameType(),
 		sharedchallenger.WithPermissionedGameType(),
 		sharedchallenger.WithFastGames(),
-	}
-	if enableCannonKona {
-		t.Log("Enabling cannon-kona for challenger")
-		options = append(options,
-			sharedchallenger.WithCannonKonaConfig(rollupCfgs, l1Net.genesis, l2Geneses),
-			sharedchallenger.WithCannonKonaGameType(),
-			sharedchallenger.WithExperimentalWitnessEndpoint(),
-		)
+		sharedchallenger.WithCannonKonaConfig(rollupCfgs, l1Net.genesis, l2Geneses),
+		sharedchallenger.WithCannonKonaGameType(),
 	}
 	cfg, err := sharedchallenger.NewPreInteropChallengerConfig(
+		t.Ctx(),
 		t.TempDir(),
 		l1EL.UserRPC(),
 		l1CL.beaconHTTPAddr,
@@ -402,11 +408,16 @@ func applyMinimalGameTypeOptions(
 	}
 	l1ChainID := l1Net.ChainID()
 
+	// Filter out permissioned game type — it's always included by the V2 upgrade.
+	var filteredGameTypes []gameTypes.GameType
 	for _, gameType := range addedGameTypes {
 		if gameType == gameTypes.PermissionedGameType {
 			continue
 		}
-		addGameTypeForRuntime(t, keys, PrestateForGameType(t, gameType), gameType, l1ChainID, l1EL.UserRPC(), l2Net)
+		filteredGameTypes = append(filteredGameTypes, gameType)
+	}
+	if len(filteredGameTypes) > 0 {
+		addGameTypesForRuntime(t, keys, filteredGameTypes, l1ChainID, l1EL.UserRPC(), l2Net)
 	}
 	for _, gameType := range respectedGameTypes {
 		setRespectedGameTypeForRuntime(t, keys, gameType, l1ChainID, l1EL.UserRPC(), l2Net)

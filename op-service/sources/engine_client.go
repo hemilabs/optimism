@@ -8,15 +8,13 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
-	"github.com/hemilabs/heminetwork/hemi"
 )
 
 type EngineClientConfig struct {
@@ -125,6 +123,38 @@ func (s *EngineAPIClient) NewPayload(ctx context.Context, payload *eth.Execution
 	return &result, nil
 }
 
+// PopPayoutsByL2Keystone retrieves PoP payout data from the execution layer for a given L2 keystone.
+func (s *EngineAPIClient) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
+	e := s.log.New("hash", abrevHash)
+	e.Trace("asking for payouts for keystone")
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var result []eth.PopPayout
+
+	err := s.RPC.CallContext(execCtx, &result, string(eth.GetPayouts), abrevHash)
+	if err != nil {
+		e.Error("Error retrieving payouts", "err", err)
+		return nil, fmt.Errorf("failed to retrieve payouts: %w", err)
+	}
+	e.Trace("Received payouts for keystone")
+	return result, nil
+}
+
+// NewKeystone submits a new L2 keystone to the execution engine.
+func (s *EngineAPIClient) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
+	e := s.log.New("keystone", keystone)
+	e.Trace("submitting new keystone")
+	var result eth.KeystoneStatus
+	err := s.RPC.CallContext(ctx, &result, string(eth.NewKeystone), keystone)
+	if err != nil {
+		e.Error("Failed to submit keystone", "err", err)
+		return nil, fmt.Errorf("failed to submit keystone: %w", err)
+	}
+	e.Trace("Submitted keystone")
+	return &result, nil
+}
+
 // GetPayload gets the execution payload associated with the PayloadId.
 // It's the caller's responsibility to check the error type, and in case of an rpc.Error, check the ErrorCode.
 func (s *EngineAPIClient) GetPayload(ctx context.Context, payloadInfo eth.PayloadInfo) (*eth.ExecutionPayloadEnvelope, error) {
@@ -139,53 +169,4 @@ func (s *EngineAPIClient) GetPayload(ctx context.Context, payloadInfo eth.Payloa
 	}
 	e.Trace("Received payload")
 	return &result, nil
-}
-
-func (s *EngineAPIClient) SignalSuperchainV1(ctx context.Context, recommended, required params.ProtocolVersion) (params.ProtocolVersion, error) {
-	var result params.ProtocolVersion
-	err := s.RPC.CallContext(ctx, &result, "engine_signalSuperchainV1", &catalyst.SuperchainSignal{
-		Recommended: recommended,
-		Required:    required,
-	})
-	return result, err
-}
-
-func (s *EngineAPIClient) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
-	e := s.log.New("ep_hash", keystone.EPHash)
-	e.Trace("sending keystone for insertion")
-
-	method := eth.NewKeystone
-
-	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-	var result eth.KeystoneStatus
-
-	err := s.RPC.CallContext(execCtx, &result, string(method), keystone)
-
-	e.Trace("Received keystone insertion result", "status", result.Status, "message", result.ValidationError)
-	if err != nil {
-		e.Error("Keystone insertion failed", "err", err)
-		return nil, fmt.Errorf("failed to insert keystone: %w", err)
-	}
-	return &result, nil
-}
-
-func (s *EngineAPIClient) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
-	e := s.log.New("hash", abrevHash)
-	e.Trace("asking for payouts for keystone")
-
-	method := eth.GetPayouts
-
-	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-	var result []eth.PopPayout
-
-	err := s.RPC.CallContext(execCtx, &result, string(method), abrevHash)
-
-	e.Trace("Received payouts for keystone")
-	if err != nil {
-		e.Error("Error retrieving payouts", "err", err)
-		return nil, fmt.Errorf("failed to retrieve payouts: %w", err)
-	}
-	return result, nil
 }

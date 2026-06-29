@@ -10,13 +10,11 @@ pragma solidity ^0.8.0;
 ///         etc.
 ///         We'll expand to using all available bits if we need more than 64 concurrent features.
 library DevFeatures {
-    /// @notice The feature that enables the OptimismPortalInterop contract.
+    /// @notice The feature that enables the Interop migration functions on the OptimismPortal2 contract.
     bytes32 public constant OPTIMISM_PORTAL_INTEROP =
         bytes32(0x0000000000000000000000000000000000000000000000000000000000000001);
 
-    /// @notice The feature that enables deployment of the CANNON_KONA fault dispute game.
-    /// @custom:legacy
-    /// This feature is no longer used, but is kept here for legacy reasons.
+    /// @notice The feature that gates the respected game type override for CANNON_KONA during upgrades.
     bytes32 public constant CANNON_KONA = bytes32(0x0000000000000000000000000000000000000000000000000000000000000010);
 
     /// @notice The feature that enables deployment of V2 dispute game contracts.
@@ -25,8 +23,16 @@ library DevFeatures {
     bytes32 public constant DEPLOY_V2_DISPUTE_GAMES =
         bytes32(0x0000000000000000000000000000000000000000000000000000000000000100);
 
-    /// @notice The feature that enables the OPContractsManagerV2 contract.
-    bytes32 public constant OPCM_V2 = bytes32(0x0000000000000000000000000000000000000000000000000000000000010000);
+    /// @notice The feature that enables L2CM.
+    bytes32 public constant L2CM = bytes32(0x0000000000000000000000000000000000000000000000000000000000100000);
+
+    /// @notice The feature that enables the ZK dispute game system (ZKDisputeGame).
+    bytes32 public constant ZK_DISPUTE_GAME =
+        bytes32(0x0000000000000000000000000000000000000000000000000000000001000000);
+
+    /// @notice The feature that enables the super root games migration path in OPCM upgrade.
+    bytes32 public constant SUPER_ROOT_GAMES_MIGRATION =
+        bytes32(0x0000000000000000000000000000000000000000000000000000000010000000);
 
     /// @notice Checks if a feature is enabled in a bitmap. Note that this function does not check
     ///         that the input feature represents a single feature and the bitwise AND operation
@@ -36,6 +42,18 @@ library DevFeatures {
     /// @param _feature The feature to check.
     /// @return True if the feature is enabled, false otherwise.
     function isDevFeatureEnabled(bytes32 _bitmap, bytes32 _feature) internal pure returns (bool) {
-        return _feature != 0 && (_bitmap & _feature) == _feature;
+        // L2CM is enabled by default. TODO(#20084): remove with the broader L2CMFlag cleanup.
+        if (hasFlag(_feature, L2CM)) return true;
+        // CannonKona is enabled by default. TODO(#20084): remove with the broader CannonKonaFlag cleanup.
+        if (hasFlag(_feature, CANNON_KONA)) return true;
+        return _feature != 0 && hasFlag(_bitmap, _feature);
+    }
+
+    /// @notice Checks if all bits of _flag are set in _features.
+    /// @param _features The bitmap to check against.
+    /// @param _flag The flag bits to look for.
+    /// @return True if all bits of _flag are set in _features, false otherwise.
+    function hasFlag(bytes32 _features, bytes32 _flag) internal pure returns (bool) {
+        return (_features & _flag) == _flag;
     }
 }

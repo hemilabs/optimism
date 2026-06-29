@@ -24,10 +24,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_OPProgramAction_PrecompileHint(gt *testing.T) {
-	matrix := helpers.NewMatrix[any]()
-	defer matrix.Run(gt)
+func TestOPProgram_PrecompileHint(gt *testing.T) {
+	helpers.SkipIfKona(gt)
 
+	matrix := helpers.NewMatrix[any]()
 	for _, test := range PrecompileTestFixtures {
 		testCase := test
 		matrix.AddTestCase(
@@ -40,6 +40,7 @@ func Test_OPProgramAction_PrecompileHint(gt *testing.T) {
 			helpers.ExpectNoError(),
 		)
 	}
+	matrix.Run(gt)
 }
 
 func runPrecompileHintTest(gt *testing.T, testCase PrecompileTestFixture, testCfg *helpers.TestCfg[any]) {
@@ -152,9 +153,8 @@ func (p *precompileHintCounter) GetCount() int {
 	return p.count
 }
 
-func Test_ProgramAction_Precompiles(gt *testing.T) {
+func TestPrecompiles(gt *testing.T) {
 	matrix := helpers.NewMatrix[PrecompileTestFixture]()
-	defer matrix.Run(gt)
 	for _, test := range PrecompileTestFixtures {
 		testCase := test
 		matrix.AddTestCase(
@@ -165,6 +165,7 @@ func Test_ProgramAction_Precompiles(gt *testing.T) {
 			helpers.ExpectNoError(),
 		)
 	}
+	matrix.Run(gt)
 }
 
 func runPrecompileTest(gt *testing.T, testCfg *helpers.TestCfg[PrecompileTestFixture]) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/big"
 	"os"
 	"path"
@@ -22,7 +23,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"golang.org/x/exp/maps"
 
 	"github.com/ethereum-optimism/optimism/op-e2e/config/secrets"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -81,8 +81,13 @@ var (
 	l1DeploymentsByType = make(map[AllocType]*genesis.L1Deployments)
 	// l2Allocs represents the L2 allocs, by hardfork/mode (e.g. delta, ecotone, interop, other)
 	l2AllocsByType = make(map[AllocType]genesis.L2AllocsModeMap)
-	// DeployConfig represents the deploy config used by the system.
-	deployConfigsByType = make(map[AllocType]*genesis.DeployConfig)
+	// deployConfigBytesByType stores the canonical JSON encoding of the deploy
+	// config for each alloc type. We cache the bytes rather than the parsed
+	// *genesis.DeployConfig so each caller of DeployConfig() unmarshals a
+	// completely independent value. No shared pointers or maps survive between
+	// callers, so tests cannot mutate state another test depends on, and
+	// concurrent calls cannot race on a shared json.Marshal source.
+	deployConfigBytesByType = make(map[AllocType][]byte)
 	// EthNodeVerbosity is the (legacy geth) level of verbosity to output
 	EthNodeVerbosity int = 3
 
@@ -125,14 +130,22 @@ func L2Allocs(allocType AllocType, mode genesis.L2AllocsMode) *foundry.ForgeAllo
 	return allocs.Copy()
 }
 
+// DeployConfig returns a fresh, fully-independent *genesis.DeployConfig for
+// the given alloc type. Each call unmarshals from the cached JSON bytes, so
+// the returned value shares no maps, slices or pointers with any other call.
+// Callers can freely mutate the result without affecting any other test.
 func DeployConfig(allocType AllocType) *genesis.DeployConfig {
 	mtx.RLock()
-	defer mtx.RUnlock()
-	dc, ok := deployConfigsByType[allocType]
+	raw, ok := deployConfigBytesByType[allocType]
+	mtx.RUnlock()
 	if !ok {
 		panic(fmt.Errorf("unknown deploy config type: %q", allocType))
 	}
-	return dc.Copy()
+	dc := &genesis.DeployConfig{}
+	if err := json.Unmarshal(raw, dc); err != nil {
+		panic(fmt.Errorf("failed to unmarshal cached deploy config for %q: %w", allocType, err))
+	}
+	return dc
 }
 
 func init() {
@@ -323,8 +336,14 @@ func initAllocType(root string, allocType AllocType) {
 				dc.L1BlockTime = 2
 				dc.L2BlockTime = 1
 				dc.SetContracts(l1Contracts)
+				// Serialize the deploy config once now; callers will unmarshal
+				// a fresh copy from these bytes on every DeployConfig() call.
+				dcBytes, err := json.Marshal(dc)
+				if err != nil {
+					panic(fmt.Errorf("failed to marshal deploy config: %w", err))
+				}
 				mtx.Lock()
-				deployConfigsByType[allocType] = dc
+				deployConfigBytesByType[allocType] = dcBytes
 				l1AllocsByType[allocType] = st.L1StateDump.Data
 
 				l1Deployments := genesis.CreateL1DeploymentsFromContracts(l1Contracts)
@@ -347,7 +366,6 @@ func defaultIntent(root string, loc *artifacts.Locator, deployer common.Address,
 		L1ChainID:  900,
 		SuperchainRoles: &addresses.SuperchainRoles{
 			SuperchainProxyAdminOwner: deployer,
-			ProtocolVersionsOwner:     deployer,
 			SuperchainGuardian:        deployer,
 			Challenger:                common.HexToAddress("0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"),
 		},
@@ -416,8 +434,6 @@ func defaultIntent(root string, loc *artifacts.Locator, deployer common.Address,
 					Proposer:          addrs.Proposer,
 					Challenger:        common.HexToAddress("0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"),
 				},
-				UseRevenueShare:    true,
-				ChainFeesRecipient: common.HexToAddress("0xBcd4042DE499D14e55001CcbB24a551F3b954096"),
 				AdditionalDisputeGames: []state.AdditionalDisputeGame{
 					{
 						ChainProofParams: state.ChainProofParams{
@@ -435,6 +451,18 @@ func defaultIntent(root string, loc *artifacts.Locator, deployer common.Address,
 						ChainProofParams: state.ChainProofParams{
 							DisputeGameType:         0,
 							DisputeAbsolutePrestate: cannonPrestate(root, allocType),
+							DisputeMaxGameDepth:     50,
+							DisputeSplitDepth:       14,
+							DisputeClockExtension:   0,
+							DisputeMaxClockDuration: 1200,
+						},
+						VMType: cannonVMType(allocType),
+					},
+					{
+						ChainProofParams: state.ChainProofParams{
+							// CANNON_KONA game
+							DisputeGameType:         8,
+							DisputeAbsolutePrestate: konaPrestate(root),
 							DisputeMaxGameDepth:     50,
 							DisputeSplitDepth:       14,
 							DisputeClockExtension:   0,
@@ -478,6 +506,9 @@ var cannonPrestateMT common.Hash
 var cannonPrestateMTNext common.Hash
 var cannonPrestateMTOnce sync.Once
 var cannonPrestateMTNextOnce sync.Once
+
+var konaPrestateHash common.Hash
+var konaPrestateOnce sync.Once
 
 func cannonPrestate(monorepoRoot string, allocType AllocType) common.Hash {
 	var filename string
@@ -524,4 +555,29 @@ func cannonPrestate(monorepoRoot string, allocType AllocType) common.Hash {
 		*cacheVar = common.HexToHash("0xc02b59f772cb23a75b6ffb9f7602ba25fdd5d8e75ad88efcc013fec2c63b0895") // keccak("dummy")
 	}
 	return *cacheVar
+}
+
+func konaPrestate(monorepoRoot string) common.Hash {
+	konaPrestateOnce.Do(func() {
+		f, err := os.Open(path.Join(monorepoRoot, "rust", "kona", "prestate-artifacts-cannon", "prestate-proof.json"))
+		if err != nil {
+			log.Warn("error opening kona prestate file. If you're running a test that requires kona prestates, make sure you've run `just reproducible-prestate-kona`", "err", err)
+			return
+		}
+		defer f.Close()
+
+		var prestate prestateFile
+		dec := json.NewDecoder(f)
+		if err := dec.Decode(&prestate); err != nil {
+			log.Error("error decoding kona prestate file", "err", err)
+			return
+		}
+
+		konaPrestateHash = common.HexToHash(prestate.Pre)
+	})
+
+	if konaPrestateHash == (common.Hash{}) {
+		konaPrestateHash = common.HexToHash("0xc02b59f772cb23a75b6ffb9f7602ba25fdd5d8e75ad88efcc013fec2c63b0895") // keccak("dummy")
+	}
+	return konaPrestateHash
 }

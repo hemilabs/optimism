@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"net"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -18,7 +20,6 @@ import (
 
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/maps"
 
 	ds "github.com/ipfs/go-datastore"
 	dsSync "github.com/ipfs/go-datastore/sync"
@@ -46,6 +47,7 @@ import (
 	batcherCfg "github.com/ethereum-optimism/optimism/op-batcher/config"
 	batcherFlags "github.com/ethereum-optimism/optimism/op-batcher/flags"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	shared "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
 	"github.com/ethereum-optimism/optimism/op-e2e/config"
@@ -67,7 +69,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	l2os "github.com/ethereum-optimism/optimism/op-proposer/proposer"
 	"github.com/ethereum-optimism/optimism/op-service/client"
@@ -80,7 +81,6 @@ import (
 	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 )
 
 const (
@@ -116,7 +116,7 @@ func DefaultSystemConfig(t testing.TB, opts ...SystemConfigOpt) SystemConfig {
 
 	secrets := secrets.DefaultSecrets
 	deployConfig := config.DeployConfig(sco.AllocType)
-	require.Nil(t, deployConfig.L2GenesisJovianTimeOffset, "jovian not supported yet")
+	require.Nil(t, deployConfig.L2GenesisKarstTimeOffset, "karst not supported yet")
 	deployConfig.L1GenesisBlockTimestamp = hexutil.Uint64(time.Now().Unix())
 	e2eutils.ApplyDeployConfigForks(deployConfig)
 	require.NoError(t, deployConfig.Check(testlog.Logger(t, log.LevelInfo)),
@@ -158,7 +158,6 @@ func DefaultSystemConfig(t testing.TB, opts ...SystemConfigOpt) SystemConfig {
 					ListenPort:  0,
 					EnableAdmin: true,
 				},
-				InteropConfig:               &interop.Config{},
 				L1EpochPollInterval:         time.Second * 2,
 				RuntimeConfigReloadInterval: time.Minute * 10,
 				ConfigPersistence:           &config2.DisabledConfigPersistence{},
@@ -175,7 +174,6 @@ func DefaultSystemConfig(t testing.TB, opts ...SystemConfigOpt) SystemConfig {
 					ListenPort:  0,
 					EnableAdmin: true,
 				},
-				InteropConfig:               &interop.Config{},
 				L1EpochPollInterval:         time.Second * 4,
 				RuntimeConfigReloadInterval: time.Minute * 10,
 				ConfigPersistence:           &config2.DisabledConfigPersistence{},
@@ -209,6 +207,7 @@ func RegolithSystemConfig(t *testing.T, regolithTimeOffset *hexutil.Uint64, opts
 	cfg.DeployConfig.L2GenesisHoloceneTimeOffset = nil
 	cfg.DeployConfig.L2GenesisIsthmusTimeOffset = nil
 	cfg.DeployConfig.L2GenesisJovianTimeOffset = nil
+	cfg.DeployConfig.L2GenesisKarstTimeOffset = nil
 	// ADD NEW FORKS HERE!
 	return cfg
 }
@@ -261,6 +260,12 @@ func IsthmusSystemConfig(t *testing.T, isthmusTimeOffset *hexutil.Uint64, opts .
 func JovianSystemConfig(t *testing.T, jovianTimeOffset *hexutil.Uint64, opts ...SystemConfigOpt) SystemConfig {
 	cfg := IsthmusSystemConfig(t, &genesisTime, opts...)
 	cfg.DeployConfig.L2GenesisJovianTimeOffset = jovianTimeOffset
+	return cfg
+}
+
+func KarstSystemConfig(t *testing.T, karstTimeOffset *hexutil.Uint64, opts ...SystemConfigOpt) SystemConfig {
+	cfg := JovianSystemConfig(t, &genesisTime, opts...)
+	cfg.DeployConfig.L2GenesisKarstTimeOffset = karstTimeOffset
 	return cfg
 }
 
@@ -405,8 +410,8 @@ func (sys *System) DisputeGameFactoryAddr() common.Address {
 	return sys.L1Deployments().DisputeGameFactoryProxy
 }
 
-func (sys *System) SupervisorClient() *sources.SupervisorClient {
-	sys.t.Fatal("supervisor client is not available for single chain system")
+func (sys *System) SupernodeClient() *sources.SuperNodeClient {
+	sys.t.Fatal("supernode client is not available for single chain system")
 	return nil
 }
 
@@ -441,8 +446,8 @@ func (sys *System) L2NodeEndpoints() []endpoint.RPC {
 	return []endpoint.RPC{sys.NodeEndpoint("sequencer")}
 }
 
-func (sys *System) SupervisorEndpoint() endpoint.RPC {
-	sys.t.Fatalf("supervisor endpoint is not supported for pre-interop System")
+func (sys *System) SupernodeEndpoint() endpoint.RPC {
+	sys.t.Fatalf("supernode endpoint is not supported for pre-interop System")
 	return nil
 }
 
@@ -699,28 +704,28 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 				L2Time:       uint64(cfg.DeployConfig.L1GenesisBlockTimestamp),
 				SystemConfig: e2eutils.SystemConfigFromDeployConfig(cfg.DeployConfig),
 			},
-			BlockTime:               cfg.DeployConfig.L2BlockTime,
-			MaxSequencerDrift:       cfg.DeployConfig.MaxSequencerDrift,
-			SeqWindowSize:           cfg.DeployConfig.SequencerWindowSize,
-			ChannelTimeoutBedrock:   cfg.DeployConfig.ChannelTimeoutBedrock,
-			L1ChainID:               cfg.L1ChainIDBig(),
-			L2ChainID:               cfg.L2ChainIDBig(),
-			BatchInboxAddress:       cfg.DeployConfig.BatchInboxAddress,
-			DepositContractAddress:  cfg.DeployConfig.OptimismPortalProxy,
-			L1SystemConfigAddress:   cfg.DeployConfig.SystemConfigProxy,
-			RegolithTime:            cfg.DeployConfig.RegolithTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			CanyonTime:              cfg.DeployConfig.CanyonTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			DeltaTime:               cfg.DeployConfig.DeltaTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			EcotoneTime:             cfg.DeployConfig.EcotoneTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			FjordTime:               cfg.DeployConfig.FjordTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			GraniteTime:             cfg.DeployConfig.GraniteTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			HoloceneTime:            cfg.DeployConfig.HoloceneTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			PectraBlobScheduleTime:  cfg.DeployConfig.PectraBlobScheduleTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			IsthmusTime:             cfg.DeployConfig.IsthmusTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			JovianTime:              cfg.DeployConfig.JovianTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			InteropTime:             cfg.DeployConfig.InteropTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
-			ProtocolVersionsAddress: cfg.L1Deployments.ProtocolVersionsProxy,
-			AltDAConfig:             rollupAltDAConfig,
+			BlockTime:              cfg.DeployConfig.L2BlockTime,
+			MaxSequencerDrift:      cfg.DeployConfig.MaxSequencerDrift,
+			SeqWindowSize:          cfg.DeployConfig.SequencerWindowSize,
+			ChannelTimeoutBedrock:  cfg.DeployConfig.ChannelTimeoutBedrock,
+			L1ChainID:              cfg.L1ChainIDBig(),
+			L2ChainID:              cfg.L2ChainIDBig(),
+			BatchInboxAddress:      cfg.DeployConfig.BatchInboxAddress,
+			DepositContractAddress: cfg.DeployConfig.OptimismPortalProxy,
+			L1SystemConfigAddress:  cfg.DeployConfig.SystemConfigProxy,
+			RegolithTime:           cfg.DeployConfig.RegolithTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			CanyonTime:             cfg.DeployConfig.CanyonTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			DeltaTime:              cfg.DeployConfig.DeltaTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			EcotoneTime:            cfg.DeployConfig.EcotoneTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			FjordTime:              cfg.DeployConfig.FjordTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			GraniteTime:            cfg.DeployConfig.GraniteTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			HoloceneTime:           cfg.DeployConfig.HoloceneTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			PectraBlobScheduleTime: cfg.DeployConfig.PectraBlobScheduleTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			IsthmusTime:            cfg.DeployConfig.IsthmusTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			JovianTime:             cfg.DeployConfig.JovianTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			KarstTime:              cfg.DeployConfig.KarstTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			InteropTime:            cfg.DeployConfig.InteropTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			AltDAConfig:            rollupAltDAConfig,
 			ChainOpConfig: &params.OptimismConfig{
 				EIP1559Elasticity:        cfg.DeployConfig.EIP1559Elasticity,
 				EIP1559Denominator:       cfg.DeployConfig.EIP1559Denominator,
@@ -863,7 +868,7 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 	// Rollup nodes
 
 	// Ensure we are looping through the nodes in alphabetical order
-	ks := maps.Keys(cfg.Nodes)
+	ks := slices.Collect(maps.Keys(cfg.Nodes))
 	// Sort strings in ascending alphabetical order
 	sort.Strings(ks)
 

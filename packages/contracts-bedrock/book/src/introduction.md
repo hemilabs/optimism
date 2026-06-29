@@ -21,7 +21,7 @@ When contributing to the `contracts-bedrock` package there are some additional s
 conveniently packaged into a just command which you should run before pushing your changes.
 
 ```bash
-just pre-pr
+just pr
 ```
 
 ### Style Guide
@@ -34,8 +34,8 @@ safer.
 
 ### Contract Interfaces
 
-OP Stack smart contracts use contract interfaces in a relatively unique way. Please refer to the [interfaces guide]
-[ifaces] to read more about how the OP Stack uses contract interfaces.
+OP Stack smart contracts use contract interfaces in a relatively unique way. Please refer to the
+[interfaces guide][ifaces] to read more about how the OP Stack uses contract interfaces.
 
 [ifaces]: ./contributing/interfaces.md
 

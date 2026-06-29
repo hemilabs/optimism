@@ -172,8 +172,6 @@ func (ev TryFinalizeEvent) String() string {
 }
 
 func (fi *Finalizer) OnEvent(ctx context.Context, ev event.Event) bool {
-	// TODO(#16917) Remove Event System Refactor Comments
-	//  FinalizeL1Event is removed and OnL1Finalized is synchronously called at L1Handler
 	switch x := ev.(type) {
 	case engine.SafeDerivedEvent:
 		fi.onDerivedSafeBlock(x.Safe, x.Source)
@@ -297,13 +295,6 @@ func (fi *Finalizer) tryFinalize() {
 func (fi *Finalizer) onDerivedSafeBlock(l2Safe eth.L2BlockRef, derivedFrom eth.L1BlockRef) {
 	fi.mu.Lock()
 	defer fi.mu.Unlock()
-
-	// Stop registering blocks after interop.
-	// Finality in interop is determined by the superchain backend,
-	// i.e. the op-supervisor RPC identifies which L2 block may be finalized.
-	if fi.cfg.IsInterop(l2Safe.Time) {
-		return
-	}
 
 	// remember the last L2 block that we fully derived from the given finality data
 	if len(fi.finalityData) == 0 || fi.finalityData[len(fi.finalityData)-1].L1Block.Number < derivedFrom.Number {

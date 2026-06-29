@@ -6,10 +6,11 @@ use crate::{
     engine::OpEngineValidator,
     txpool::{OpTransactionPool, OpTransactionValidator},
 };
-use op_alloy_consensus::{OpPooledTransaction, interop::SafetyLevel};
-use op_alloy_rpc_types_engine::OpExecutionData;
-use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
-use reth_engine_local::LocalPayloadAttributesBuilder;
+use alloy_primitives::Sealed;
+use op_alloy_consensus::{OpPooledTransaction, TxPostExec, interop::SafetyLevel};
+use reth_chainspec::{
+    BaseFeeParams, ChainSpecProvider, EthChainSpec, EthereumHardforks, ForkCondition, Hardforks,
+};
 use reth_evm::ConfigureEvm;
 use reth_network::{
     NetworkConfig, NetworkHandle, NetworkManager, NetworkPrimitives, PeersInfo,
@@ -35,10 +36,10 @@ use reth_node_builder::{
 };
 use reth_optimism_chainspec::{OpChainSpec, OpHardfork};
 use reth_optimism_consensus::OpBeaconConsensus;
-use reth_optimism_evm::{OpEvmConfig, OpRethReceiptBuilder};
+use reth_optimism_evm::{ConfigurePostExecEvm, OpEvmConfig, OpRethReceiptBuilder};
 use reth_optimism_forks::OpHardforks;
 use reth_optimism_payload_builder::{
-    OpAttributes, OpBuiltPayload, OpPayloadPrimitives,
+    OpBuiltPayload, OpExecData, OpPayloadBuilderAttributes, OpPayloadPrimitives,
     builder::OpPayloadTransactions,
     config::{OpBuilderConfig, OpDAConfig, OpGasLimitConfig},
 };
@@ -51,9 +52,13 @@ use reth_optimism_rpc::{
     witness::{DebugExecutionWitnessApiServer, OpDebugWitnessApi},
 };
 use reth_optimism_storage::OpStorage;
-use reth_optimism_txpool::{OpPooledTx, supervisor::SupervisorClient};
+use reth_optimism_txpool::{OpPool, OpPooledTx, supervisor::SupervisorClient};
+use reth_primitives_traits::header::HeaderMut;
 use reth_provider::{CanonStateSubscriptions, providers::ProviderFactoryBuilder};
-use reth_rpc_api::{DebugApiServer, L2EthApiExtServer, eth::RpcTypes};
+use reth_rpc_api::{
+    DebugApiServer, EthConfigApiServer, L2EthApiExtServer,
+    eth::{RpcTypes, helpers::config::EthConfigHandler},
+};
 use reth_rpc_server_types::RethRpcModule;
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
@@ -61,10 +66,75 @@ use reth_transaction_pool::{
     TransactionValidationTaskExecutor, blobstore::DiskFileBlobStore,
 };
 use reth_trie_common::KeccakKeyHasher;
-use serde::de::DeserializeOwned;
 use std::{marker::PhantomData, sync::Arc};
 use url::Url;
 
+use reth_optimism_payload_builder::OpPayloadAttrs;
+
+/// Builds [`OpPayloadAttrs`] for local/dev-mode payload generation.
+struct OpLocalPayloadAttributesBuilder {
+    chain_spec: Arc<OpChainSpec>,
+}
+
+impl PayloadAttributesBuilder<OpPayloadAttrs> for OpLocalPayloadAttributesBuilder {
+    fn build(
+        &self,
+        parent: &reth_primitives_traits::SealedHeader<alloy_consensus::Header>,
+    ) -> OpPayloadAttrs {
+        use alloy_consensus::BlockHeader;
+        use alloy_primitives::{Address, B64};
+
+        let timestamp = std::cmp::max(
+            parent.timestamp().saturating_add(1),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        );
+
+        let eth_attrs = alloy_rpc_types_engine::PayloadAttributes {
+            timestamp,
+            prev_randao: alloy_primitives::B256::random(),
+            suggested_fee_recipient: Address::random(),
+            withdrawals: self
+                .chain_spec
+                .is_shanghai_active_at_timestamp(timestamp)
+                .then(Default::default),
+            parent_beacon_block_root: self
+                .chain_spec
+                .is_cancun_active_at_timestamp(timestamp)
+                .then(alloy_primitives::B256::random),
+            slot_number: None,
+        };
+
+        /// Dummy system transaction for dev mode.
+        /// OP Mainnet transaction at index 0 in block 124665056.
+        const TX_SET_L1_BLOCK: [u8; 251] = alloy_primitives::hex!(
+            "7ef8f8a0683079df94aa5b9cf86687d739a60a9b4f0835e520ec4d664e2e415dca17a6df94deaddeaddeaddeaddeaddeaddeaddeaddead00019442000000000000000000000000000000000000158080830f424080b8a4440a5e200000146b000f79c500000000000000040000000066d052e700000000013ad8a3000000000000000000000000000000000000000000000000000000003ef1278700000000000000000000000000000000000000000000000000000000000000012fdf87b89884a61e74b322bbcf60386f543bfae7827725efaaf0ab1de2294a590000000000000000000000006887246668a3b87f54deb3b94ba47a6f63f32985"
+        );
+
+        let default_params = BaseFeeParams::optimism();
+        let denominator = std::env::var("OP_DEV_EIP1559_DENOMINATOR")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(default_params.max_change_denominator as u32);
+        let elasticity = std::env::var("OP_DEV_EIP1559_ELASTICITY")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(default_params.elasticity_multiplier as u32);
+        let gas_limit = std::env::var("OP_DEV_GAS_LIMIT").ok().and_then(|v| v.parse::<u64>().ok());
+
+        let mut eip1559_bytes = [0u8; 8];
+        eip1559_bytes[0..4].copy_from_slice(&denominator.to_be_bytes());
+        eip1559_bytes[4..8].copy_from_slice(&elasticity.to_be_bytes());
+
+        OpPayloadAttrs(op_alloy_rpc_types_engine::OpPayloadAttributes {
+            payload_attributes: eth_attrs,
+            transactions: Some(vec![TX_SET_L1_BLOCK.into()]),
+            no_tx_pool: None,
+            gas_limit,
+            eip_1559_params: Some(B64::from(eip1559_bytes)),
+            min_base_fee: Some(0),
+        })
+    }
+}
 /// Marker trait for Optimism node types with standard engine, chain spec, and primitives.
 pub trait OpNodeTypes:
     NodeTypes<Payload = OpEngineTypes, ChainSpec: OpHardforks + Hardforks, Primitives = OpPrimitives>
@@ -87,18 +157,22 @@ pub trait OpFullNodeTypes:
         ChainSpec: OpHardforks,
         Primitives: OpPayloadPrimitives,
         Storage = OpStorage,
-        Payload: EngineTypes<ExecutionData = OpExecutionData>,
+        Payload: EngineTypes<ExecutionData = OpExecData>,
     >
+where
+    <<Self as NodeTypes>::Primitives as NodePrimitives>::SignedTx: From<Sealed<TxPostExec>>,
 {
 }
 
-impl<N> OpFullNodeTypes for N where
+impl<N> OpFullNodeTypes for N
+where
     N: NodeTypes<
             ChainSpec: OpHardforks,
             Primitives: OpPayloadPrimitives,
             Storage = OpStorage,
-            Payload: EngineTypes<ExecutionData = OpExecutionData>,
-        >
+            Payload: EngineTypes<ExecutionData = OpExecData>,
+        >,
+    <N::Primitives as NodePrimitives>::SignedTx: From<Sealed<TxPostExec>>,
 {
 }
 
@@ -162,7 +236,7 @@ impl OpNode {
             self.args;
         ComponentsBuilder::default()
             .node_types::<Node>()
-            .executor(OpExecutorBuilder::default())
+            .executor(OpExecutorBuilder::default().with_sdm_enabled(self.args.sdm_enabled))
             .pool(
                 OpPoolBuilder::default()
                     .with_enable_tx_conditional(self.args.enable_tx_conditional)
@@ -174,7 +248,8 @@ impl OpNode {
             .payload(BasicPayloadServiceBuilder::new(
                 OpPayloadBuilder::new(compute_pending_block)
                     .with_da_config(self.da_config.clone())
-                    .with_gas_limit_config(self.gas_limit_config.clone()),
+                    .with_gas_limit_config(self.gas_limit_config.clone())
+                    .with_sdm_enabled(self.args.sdm_enabled),
             ))
             .network(OpNetworkBuilder::new(disable_txpool_gossip, !discovery_v4))
             .consensus(OpConsensusBuilder::default())
@@ -187,6 +262,7 @@ impl OpNode {
             .with_sequencer_headers(self.args.sequencer_headers.clone())
             .with_da_config(self.da_config.clone())
             .with_gas_limit_config(self.gas_limit_config.clone())
+            .with_sdm_enabled(self.args.sdm_enabled)
             .with_enable_tx_conditional(self.args.enable_tx_conditional)
             .with_min_suggested_priority_fee(self.args.min_suggested_priority_fee)
             .with_historical_rpc(self.args.historical_rpc.clone())
@@ -277,7 +353,7 @@ where
     fn local_payload_attributes_builder(
         chain_spec: &Self::ChainSpec,
     ) -> impl PayloadAttributesBuilder<<Self::Payload as PayloadTypes>::PayloadAttributes> {
-        LocalPayloadAttributesBuilder::new(Arc::new(chain_spec.clone()))
+        OpLocalPayloadAttributesBuilder { chain_spec: Arc::new(chain_spec.clone()) }
     }
 }
 
@@ -317,6 +393,8 @@ pub struct OpAddOns<
     ///
     /// This can be used to forward pre-bedrock rpc requests (op-mainnet).
     pub historical_rpc: Option<String>,
+    /// Whether SDM is explicitly enabled for integration tests.
+    sdm_enabled: bool,
     /// Enable transaction conditionals.
     enable_tx_conditional: bool,
     min_suggested_priority_fee: u64,
@@ -336,6 +414,7 @@ where
         sequencer_url: Option<String>,
         sequencer_headers: Vec<String>,
         historical_rpc: Option<String>,
+        sdm_enabled: bool,
         enable_tx_conditional: bool,
         min_suggested_priority_fee: u64,
     ) -> Self {
@@ -346,6 +425,7 @@ where
             sequencer_url,
             sequencer_headers,
             historical_rpc,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
         }
@@ -397,6 +477,7 @@ where
             sequencer_url,
             sequencer_headers,
             historical_rpc,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
             ..
@@ -408,6 +489,7 @@ where
             sequencer_url,
             sequencer_headers,
             historical_rpc,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
         )
@@ -424,6 +506,7 @@ where
             gas_limit_config,
             sequencer_url,
             sequencer_headers,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
             historical_rpc,
@@ -436,6 +519,37 @@ where
             sequencer_url,
             sequencer_headers,
             historical_rpc,
+            sdm_enabled,
+            enable_tx_conditional,
+            min_suggested_priority_fee,
+        )
+    }
+
+    /// Maps the [`EngineValidatorBuilder`] builder type.
+    pub fn with_engine_validator<T>(
+        self,
+        engine_validator_builder: T,
+    ) -> OpAddOns<N, EthB, PVB, EB, T, RpcMiddleware> {
+        let Self {
+            rpc_add_ons,
+            da_config,
+            gas_limit_config,
+            sequencer_url,
+            sequencer_headers,
+            sdm_enabled,
+            enable_tx_conditional,
+            min_suggested_priority_fee,
+            historical_rpc,
+            ..
+        } = self;
+        OpAddOns::new(
+            rpc_add_ons.with_engine_validator(engine_validator_builder),
+            da_config,
+            gas_limit_config,
+            sequencer_url,
+            sequencer_headers,
+            historical_rpc,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
         )
@@ -455,6 +569,7 @@ where
             gas_limit_config,
             sequencer_url,
             sequencer_headers,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
             historical_rpc,
@@ -467,6 +582,7 @@ where
             sequencer_url,
             sequencer_headers,
             historical_rpc,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
         )
@@ -493,30 +609,30 @@ where
     }
 }
 
-impl<N, EthB, PVB, EB, EVB, Attrs, RpcMiddleware> NodeAddOns<N>
+impl<N, EthB, PVB, EB, EVB, RpcMiddleware> NodeAddOns<N>
     for OpAddOns<N, EthB, PVB, EB, EVB, RpcMiddleware>
 where
     N: FullNodeComponents<
             Types: NodeTypes<
-                ChainSpec: OpHardforks,
-                Primitives: OpPayloadPrimitives,
-                Payload: PayloadTypes<PayloadBuilderAttributes = Attrs>,
+                ChainSpec: OpHardforks + Hardforks,
+                Primitives: OpPayloadPrimitives<_Header: HeaderMut>,
             >,
-            Evm: ConfigureEvm<
+            Evm: ConfigurePostExecEvm<
+                Primitives = PrimitivesTy<N::Types>,
                 NextBlockEnvCtx: BuildNextEnv<
-                    Attrs,
+                    OpPayloadBuilderAttributes<TxTy<N::Types>>,
                     HeaderTy<N::Types>,
                     <N::Types as NodeTypes>::ChainSpec,
                 >,
             >,
-            Pool: TransactionPool<Transaction: OpPooledTx>,
+            Pool: TransactionPool<Transaction: OpPooledTx<Consensus = TxTy<N::Types>>>,
         >,
+    TxTy<N::Types>: From<Sealed<TxPostExec>>,
     EthB: EthApiBuilder<N>,
     PVB: Send,
     EB: EngineApiBuilder<N>,
     EVB: EngineValidatorBuilder<N>,
     RpcMiddleware: RethRpcMiddleware,
-    Attrs: OpAttributes<Transaction = TxTy<N::Types>, RpcPayloadAttributes: DeserializeOwned>,
 {
     type Handle = RpcHandle<N, EthB::EthApi>;
 
@@ -534,6 +650,9 @@ where
             historical_rpc,
             ..
         } = self;
+
+        let eth_config =
+            EthConfigHandler::new(ctx.node.provider().clone(), ctx.node.evm_config().clone());
 
         let maybe_pre_bedrock_historical_rpc = historical_rpc
             .and_then(|historical_rpc| {
@@ -563,11 +682,12 @@ where
             ctx.node.evm_config().clone(),
         );
         // install additional OP specific rpc methods
-        let debug_ext = OpDebugWitnessApi::<_, _, _, Attrs>::new(
-            ctx.node.provider().clone(),
-            Box::new(ctx.node.task_executor().clone()),
-            builder,
-        );
+        let debug_ext =
+            OpDebugWitnessApi::<_, _, _, OpPayloadBuilderAttributes<TxTy<N::Types>>>::new(
+                ctx.node.provider().clone(),
+                ctx.node.task_executor().clone(),
+                builder,
+            );
         let miner_ext = OpMinerExtApi::new(da_config, gas_limit_config);
 
         let sequencer_client = if let Some(url) = sequencer_url {
@@ -586,6 +706,8 @@ where
             .launch_add_ons_with(ctx, move |container| {
                 let reth_node_builder::rpc::RpcModuleContainer { modules, auth_module, registry } =
                     container;
+
+                modules.merge_if_module_configured(RethRpcModule::Eth, eth_config.into_rpc())?;
 
                 debug!(target: "reth::cli", "Installing debug payload witness rpc endpoint");
                 modules.merge_if_module_configured(RethRpcModule::Debug, debug_ext.into_rpc())?;
@@ -622,30 +744,31 @@ where
     }
 }
 
-impl<N, EthB, PVB, EB, EVB, Attrs, RpcMiddleware> RethRpcAddOns<N>
+impl<N, EthB, PVB, EB, EVB, RpcMiddleware> RethRpcAddOns<N>
     for OpAddOns<N, EthB, PVB, EB, EVB, RpcMiddleware>
 where
     N: FullNodeComponents<
             Types: NodeTypes<
-                ChainSpec: OpHardforks,
-                Primitives: OpPayloadPrimitives,
-                Payload: PayloadTypes<PayloadBuilderAttributes = Attrs>,
+                ChainSpec: OpHardforks + Hardforks,
+                Primitives: OpPayloadPrimitives<_Header: HeaderMut>,
             >,
-            Evm: ConfigureEvm<
+            Evm: ConfigurePostExecEvm<
+                Primitives = PrimitivesTy<N::Types>,
                 NextBlockEnvCtx: BuildNextEnv<
-                    Attrs,
+                    OpPayloadBuilderAttributes<TxTy<N::Types>>,
                     HeaderTy<N::Types>,
                     <N::Types as NodeTypes>::ChainSpec,
                 >,
             >,
         >,
-    <<N as FullNodeComponents>::Pool as TransactionPool>::Transaction: OpPooledTx,
+    TxTy<N::Types>: From<Sealed<TxPostExec>>,
+    <<N as FullNodeComponents>::Pool as TransactionPool>::Transaction:
+        OpPooledTx<Consensus = TxTy<N::Types>>,
     EthB: EthApiBuilder<N>,
     PVB: PayloadValidatorBuilder<N>,
     EB: EngineApiBuilder<N>,
     EVB: EngineValidatorBuilder<N>,
     RpcMiddleware: RethRpcMiddleware,
-    Attrs: OpAttributes<Transaction = TxTy<N::Types>, RpcPayloadAttributes: DeserializeOwned>,
 {
     type EthApi = EthB::EthApi;
 
@@ -686,6 +809,8 @@ pub struct OpAddOnsBuilder<NetworkT, RpcMiddleware = Identity> {
     da_config: Option<OpDAConfig>,
     /// Gas limit configuration for the OP builder.
     gas_limit_config: Option<OpGasLimitConfig>,
+    /// Whether SDM is explicitly enabled for integration tests.
+    sdm_enabled: bool,
     /// Enable transaction conditionals.
     enable_tx_conditional: bool,
     /// Marker for network types.
@@ -710,6 +835,7 @@ impl<NetworkT> Default for OpAddOnsBuilder<NetworkT> {
             historical_rpc: None,
             da_config: None,
             gas_limit_config: None,
+            sdm_enabled: false,
             enable_tx_conditional: false,
             min_suggested_priority_fee: 1_000_000,
             _nt: PhantomData,
@@ -743,6 +869,13 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
     /// Configure the gas limit configuration for the OP payload builder.
     pub fn with_gas_limit_config(mut self, gas_limit_config: OpGasLimitConfig) -> Self {
         self.gas_limit_config = Some(gas_limit_config);
+        self
+    }
+
+    /// Configure the temporary SDM integration-test override.
+    #[must_use]
+    pub const fn with_sdm_enabled(mut self, sdm_enabled: bool) -> Self {
+        self.sdm_enabled = sdm_enabled;
         self
     }
 
@@ -780,6 +913,7 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
             historical_rpc,
             da_config,
             gas_limit_config,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
             tokio_runtime,
@@ -794,6 +928,7 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
             historical_rpc,
             da_config,
             gas_limit_config,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
             _nt,
@@ -834,6 +969,7 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
             sequencer_headers,
             da_config,
             gas_limit_config,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
             historical_rpc,
@@ -850,12 +986,14 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
                     .with_sequencer(sequencer_url.clone())
                     .with_sequencer_headers(sequencer_headers.clone())
                     .with_min_suggested_priority_fee(min_suggested_priority_fee)
+                    .with_sdm_enabled(sdm_enabled)
                     .with_flashblocks(flashblocks_url)
                     .with_flashblock_consensus(flashblock_consensus),
                 PVB::default(),
                 EB::default(),
                 EVB::default(),
                 rpc_middleware,
+                reth_node_builder::rpc::Identity::new(),
             )
             .with_tokio_runtime(tokio_runtime),
             da_config.unwrap_or_default(),
@@ -863,6 +1001,7 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
             sequencer_url,
             sequencer_headers,
             historical_rpc,
+            sdm_enabled,
             enable_tx_conditional,
             min_suggested_priority_fee,
         )
@@ -872,7 +1011,19 @@ impl<NetworkT, RpcMiddleware> OpAddOnsBuilder<NetworkT, RpcMiddleware> {
 /// A regular optimism evm and executor builder.
 #[derive(Debug, Copy, Clone, Default)]
 #[non_exhaustive]
-pub struct OpExecutorBuilder;
+pub struct OpExecutorBuilder {
+    /// Whether SDM is explicitly enabled for integration tests.
+    pub sdm_enabled: bool,
+}
+
+impl OpExecutorBuilder {
+    /// Configure the temporary SDM integration-test override.
+    #[must_use]
+    pub const fn with_sdm_enabled(mut self, sdm_enabled: bool) -> Self {
+        self.sdm_enabled = sdm_enabled;
+        self
+    }
+}
 
 impl<Node> ExecutorBuilder<Node> for OpExecutorBuilder
 where
@@ -882,7 +1033,8 @@ where
         OpEvmConfig<<Node::Types as NodeTypes>::ChainSpec, <Node::Types as NodeTypes>::Primitives>;
 
     async fn build_evm(self, ctx: &BuilderContext<Node>) -> eyre::Result<Self::EVM> {
-        let evm_config = OpEvmConfig::new(ctx.chain_spec(), OpRethReceiptBuilder::default());
+        let evm_config = OpEvmConfig::new(ctx.chain_spec(), OpRethReceiptBuilder::default())
+            .with_sdm_enabled(self.sdm_enabled);
 
         Ok(evm_config)
     }
@@ -977,7 +1129,7 @@ where
         // supervisor used for interop txpool validation
         let supervisor_client = if let Some(url) = self.supervisor_http.clone() {
             Some(
-                SupervisorClient::builder(url)
+                SupervisorClient::builder(url, ctx.chain_spec().chain_id())
                     .minimum_safety(self.supervisor_safety_level)
                     .build()
                     .await,
@@ -1020,26 +1172,47 @@ where
 
         let final_pool_config = pool_config_overrides.apply(ctx.pool_config());
 
-        let transaction_pool = TxPoolBuilder::new(ctx)
+        let inner_pool = TxPoolBuilder::new(ctx)
             .with_validator(validator)
-            .build_and_spawn_maintenance_task(blob_store, final_pool_config)?;
+            .build(blob_store, final_pool_config.clone());
 
-        info!(target: "reth::cli", "Transaction pool initialized");
+        // Enable the interop filter on reorg whenever interop is scheduled or already active
+        let interop_filter_enabled =
+            ctx.chain_spec().op_fork_activation(OpHardfork::Interop) != ForkCondition::Never;
+        let transaction_pool = OpPool::new(inner_pool, interop_filter_enabled);
+
+        reth_node_builder::components::spawn_maintenance_tasks(
+            ctx,
+            transaction_pool.clone(),
+            &final_pool_config,
+        )?;
+
+        info!(target: "reth::cli", "Transaction pool initialized (interop filter enabled = {interop_filter_enabled})");
         debug!(target: "reth::cli", "Spawned txpool maintenance task");
 
-        // The Op txpool maintenance task is only spawned when interop is active and a supervisor is
-        // configured
-        if ctx.chain_spec().is_interop_active_at_timestamp(ctx.head().timestamp) &&
-            let Some(supervisor) = supervisor_client
+        // The Op txpool maintenance task is only spawned when interop is scheduled/active and a
+        // supervisor is configured
+        if ctx.chain_spec().op_fork_activation(OpHardfork::Interop) != ForkCondition::Never &&
+            let Some(ref supervisor) = supervisor_client
         {
-            // spawn the Op txpool maintenance task
+            // Spawn failsafe polling task (shares supervisor client via clone)
+            ctx.task_executor().spawn_critical_task(
+                "Op txpool failsafe polling task",
+                reth_optimism_txpool::maintain::poll_failsafe_future(
+                    supervisor.clone(),
+                    transaction_pool.clone(),
+                ),
+            );
+            debug!(target: "reth::cli", "Spawned failsafe polling task");
+
+            // Spawn the Op txpool maintenance task
             let chain_events = ctx.provider().canonical_state_stream();
             ctx.task_executor().spawn_critical_task(
                 "Op txpool interop maintenance task",
                 reth_optimism_txpool::maintain::maintain_transaction_pool_interop_future(
                     transaction_pool.clone(),
                     chain_events,
-                    supervisor,
+                    supervisor.clone(),
                 ),
             );
             debug!(target: "reth::cli", "Spawned Op interop txpool maintenance task");
@@ -1083,6 +1256,11 @@ pub struct OpPayloadBuilder<Txs = ()> {
     /// Gas limit configuration for the OP builder.
     /// This is used to configure gas limit related constraints for the payload builder.
     pub gas_limit_config: OpGasLimitConfig,
+    /// Whether produced payloads should inject a post-exec transaction.
+    ///
+    /// This is a temporary integration-test override; SDM has no scheduled Jovian/Karst
+    /// activation.
+    pub sdm_enabled: bool,
 }
 
 impl OpPayloadBuilder {
@@ -1094,6 +1272,7 @@ impl OpPayloadBuilder {
             best_transactions: (),
             da_config: OpDAConfig::default(),
             gas_limit_config: OpGasLimitConfig::default(),
+            sdm_enabled: false,
         }
     }
 
@@ -1108,18 +1287,31 @@ impl OpPayloadBuilder {
         self.gas_limit_config = gas_limit_config;
         self
     }
+
+    /// Configure whether the OP payload builder should inject a post-exec tx in integration tests.
+    #[must_use]
+    pub const fn with_sdm_enabled(mut self, sdm_enabled: bool) -> Self {
+        self.sdm_enabled = sdm_enabled;
+        self
+    }
 }
 
 impl<Txs> OpPayloadBuilder<Txs> {
     /// Configures the type responsible for yielding the transactions that should be included in the
     /// payload.
     pub fn with_transactions<T>(self, best_transactions: T) -> OpPayloadBuilder<T> {
-        let Self { compute_pending_block, da_config, gas_limit_config, .. } = self;
-        OpPayloadBuilder { compute_pending_block, best_transactions, da_config, gas_limit_config }
+        let Self { compute_pending_block, da_config, gas_limit_config, sdm_enabled, .. } = self;
+        OpPayloadBuilder {
+            compute_pending_block,
+            best_transactions,
+            da_config,
+            gas_limit_config,
+            sdm_enabled,
+        }
     }
 }
 
-impl<Node, Pool, Txs, Evm, Attrs> PayloadBuilderBuilder<Node, Pool, Evm> for OpPayloadBuilder<Txs>
+impl<Node, Pool, Txs, Evm> PayloadBuilderBuilder<Node, Pool, Evm> for OpPayloadBuilder<Txs>
 where
     Node: FullNodeTypes<
             Provider: ChainSpecProvider<ChainSpec: OpHardforks>,
@@ -1127,24 +1319,29 @@ where
                 Primitives: OpPayloadPrimitives,
                 Payload: PayloadTypes<
                     BuiltPayload = OpBuiltPayload<PrimitivesTy<Node::Types>>,
-                    PayloadBuilderAttributes = Attrs,
+                    PayloadAttributes = OpPayloadAttrs,
                 >,
             >,
         >,
-    Evm: ConfigureEvm<
+    TxTy<Node::Types>: From<Sealed<TxPostExec>>,
+    Evm: ConfigurePostExecEvm<
             Primitives = PrimitivesTy<Node::Types>,
             NextBlockEnvCtx: BuildNextEnv<
-                Attrs,
+                OpPayloadBuilderAttributes<TxTy<Node::Types>>,
                 HeaderTy<Node::Types>,
                 <Node::Types as NodeTypes>::ChainSpec,
             >,
         > + 'static,
     Pool: TransactionPool<Transaction: OpPooledTx<Consensus = TxTy<Node::Types>>> + Unpin + 'static,
     Txs: OpPayloadTransactions<Pool::Transaction>,
-    Attrs: OpAttributes<Transaction = TxTy<Node::Types>>,
 {
-    type PayloadBuilder =
-        reth_optimism_payload_builder::OpPayloadBuilder<Pool, Node::Provider, Evm, Txs, Attrs>;
+    type PayloadBuilder = reth_optimism_payload_builder::OpPayloadBuilder<
+        Pool,
+        Node::Provider,
+        Evm,
+        Txs,
+        OpPayloadBuilderAttributes<TxTy<Node::Types>>,
+    >;
 
     async fn build_payload_builder(
         self,
@@ -1159,6 +1356,7 @@ where
             OpBuilderConfig {
                 da_config: self.da_config.clone(),
                 gas_limit_config: self.gas_limit_config.clone(),
+                sdm_enabled: self.sdm_enabled,
             },
         )
         .with_transactions(self.best_transactions.clone())
@@ -1292,10 +1490,7 @@ pub struct OpEngineValidatorBuilder;
 impl<Node> PayloadValidatorBuilder<Node> for OpEngineValidatorBuilder
 where
     Node: FullNodeComponents<
-        Types: NodeTypes<
-            ChainSpec: OpHardforks,
-            Payload: PayloadTypes<ExecutionData = OpExecutionData>,
-        >,
+        Types: NodeTypes<ChainSpec: OpHardforks, Payload: PayloadTypes<ExecutionData = OpExecData>>,
     >,
 {
     type Validator = OpEngineValidator<

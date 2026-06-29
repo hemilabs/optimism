@@ -11,13 +11,12 @@ import { ForgeArtifacts, StorageSlot } from "scripts/libraries/ForgeArtifacts.so
 import { Constants } from "src/libraries/Constants.sol";
 import { EIP1967Helper } from "test/mocks/EIP1967Helper.sol";
 import { Features } from "src/libraries/Features.sol";
-import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
 // Interfaces
 import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
-import { IProxyAdminOwnedBase } from "interfaces/L1/IProxyAdminOwnedBase.sol";
+import { IProxyAdminOwnedBase } from "interfaces/universal/IProxyAdminOwnedBase.sol";
 
 /// @title SystemConfig Test Init
 /// @notice Reusable test initialization for SystemConfig tests.
@@ -99,6 +98,12 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
     function setUp() public override {
         super.setUp();
         skipIfForkTest("SystemConfig_Initialize_Test: cannot test initialization on forked network");
+    }
+
+    function test_initialize_interopFlag_succeeds() external view {
+        // The dev feature only makes interop code available. Runtime INTEROP activation is handled
+        // by OPContractsManagerMigrator so initialization does not enable the SystemConfig feature.
+        assertFalse(systemConfig.isFeatureEnabled(Features.INTEROP));
     }
 
     /// @notice Tests that initialization sets the correct values.
@@ -884,6 +889,12 @@ contract SystemConfig_IsFeatureEnabled_Test is SystemConfig_TestInit {
             systemConfig.setFeature(Features.CUSTOM_GAS_TOKEN, false);
         }
 
+        // Normalize INTEROP to avoid environment-dependent state
+        if (systemConfig.isFeatureEnabled(Features.INTEROP)) {
+            vm.prank(address(systemConfig.proxyAdmin()));
+            systemConfig.setFeature(Features.INTEROP, false);
+        }
+
         assertFalse(systemConfig.isFeatureEnabled(_feature));
     }
 
@@ -989,9 +1000,7 @@ contract SystemConfig_IsCustomGasToken_Test is SystemConfig_TestInit {
 contract SystemConfig_LastUsedOPCM_Test is SystemConfig_TestInit {
     /// @notice Tests that `lastUsedOPCM` returns the correct OPCM V2 address and that
     ///         `lastUsedOPCMVersion` matches the OPCM V2 version.
-    function test_lastUsedOPCM_opcmV2_succeeds() external {
-        skipIfDevFeatureDisabled(DevFeatures.OPCM_V2);
-
+    function test_lastUsedOPCM_opcmV2_succeeds() external view {
         // Verify that the lastUsedOPCM address matches the deployed OPCM V2 address
         assertEq(systemConfig.lastUsedOPCM(), address(opcmV2));
 

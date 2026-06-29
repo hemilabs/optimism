@@ -323,22 +323,12 @@
           },
           {
             "internalType": "address",
-            "name": "protocolVersionsImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
             "name": "l1ERC721BridgeImpl",
             "type": "address"
           },
           {
             "internalType": "address",
             "name": "optimismPortalImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismPortalInteropImpl",
             "type": "address"
           },
           {
@@ -404,6 +394,11 @@
           {
             "internalType": "address",
             "name": "superPermissionedDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "zkDisputeGameImpl",
             "type": "address"
           },
           {
@@ -723,6 +718,22 @@
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "_key",
+        "type": "string"
+      }
+    ],
+    "name": "OPContractsManagerV2_DuplicateUpgradeInstruction",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerV2_InvalidEthLockbox",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "OPContractsManagerV2_InvalidGameConfigs",
     "type": "error"
@@ -761,7 +772,23 @@
   },
   {
     "inputs": [],
+    "name": "OPContractsManagerV2_OnlyDelegateCall",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OPContractsManagerV2_SuperchainConfigNeedsUpgrade",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "GameType",
+        "name": "_gameType",
+        "type": "uint32"
+      }
+    ],
+    "name": "OPContractsManagerV2_ZeroGameImplementation",
     "type": "error"
   },
   {

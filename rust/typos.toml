@@ -7,8 +7,11 @@ extend-exclude = [
     "docs/docs/dist/",
     "*.min.js",
     "op-alloy/CHANGELOG.md",
+    "op-revm/CHANGELOG.md",
     "op-reth/crates/storage/libmdbx-rs/mdbx-sys/libmdbx",
     "op-reth/testing/ef-tests",
+    "op-rbuilder",
+    "rollup-boost",
 ]
 
 [default]

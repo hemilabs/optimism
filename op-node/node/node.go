@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/go-multierror"
-
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -29,8 +27,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/conductor"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop/indexing"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sequencing"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/client"
@@ -108,6 +104,8 @@ type OpNode struct {
 	appVersion string
 	metrics    *metrics.Metrics
 
+	superAuthority rollup.SuperAuthority // Supernode authority for payload validation (may be nil)
+
 	l1HeadsSub     ethereum.Subscription // Subscription to get L1 heads (automatically re-subscribes on error)
 	l1SafeSub      ethereum.Subscription // Subscription to get L1 safe blocks, a.k.a. justified data (polling)
 	l1FinalizedSub ethereum.Subscription // Subscription to get L1 safe blocks, a.k.a. justified data (polling)
@@ -128,14 +126,10 @@ type OpNode struct {
 
 	safeDB closableSafeDB
 
-	rollupHalt string // when to halt the rollup, disabled if empty
-
 	pprofService *oppprof.Service
 	metricsSrv   *httputil.HTTPServer
 
 	beacon L1Beacon
-
-	interopSys interop.SubSystem
 
 	// some resources cannot be stopped directly, like the p2p gossipsub router (not our design),
 	// and depend on this ctx to be closed.
@@ -147,9 +141,8 @@ type OpNode struct {
 
 	closed atomic.Bool
 
-	// cancels execution prematurely, e.g. to halt. This may be nil.
+	// cancels execution prematurely. This may be nil.
 	cancel context.CancelCauseFunc
-	halted atomic.Bool
 
 	tracer tracer.Tracer // used for testing PublishBlock and SignAndPublishL2Payload
 }
@@ -176,7 +169,6 @@ func NewWithOverride(ctx context.Context, cfg *config.Config, log log.Logger, ap
 		clock:      clk,
 		appVersion: appVersion,
 		metrics:    m,
-		rollupHalt: cfg.RollupHalt,
 		cancel:     cfg.Cancel,
 		tracer:     cfg.Tracer,
 	}
@@ -188,7 +180,7 @@ func NewWithOverride(ctx context.Context, cfg *config.Config, log log.Logger, ap
 		log.Error("Error initializing the rollup node", "err", err)
 		// ensure we always close the node resources if we fail to initialize the node.
 		if closeErr := n.Stop(ctx); closeErr != nil {
-			return nil, multierror.Append(err, closeErr)
+			return nil, errors.Join(err, closeErr)
 		}
 		return nil, err
 	}
@@ -200,6 +192,7 @@ type InitializationOverrides struct {
 	Beacon          L1Beacon
 	RPCHandler      *oprpc.Handler
 	MetricsRegistry func(*prometheus.Registry)
+	SuperAuthority  rollup.SuperAuthority // Supernode authority for payload validation
 }
 
 // init progressively creates and sets up all the components of the OpNode
@@ -225,6 +218,9 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 		return fmt.Errorf("failed to init event system: %w", err)
 	}
 
+	// Store the supernode authority for payload validation
+	n.superAuthority = overrides.SuperAuthority
+
 	if overrides.Beacon == nil {
 		beacon, err := initL1BeaconAPI(ctx, cfg, n)
 		if err != nil {
@@ -245,8 +241,7 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 		n.l1Source = overrides.L1Source
 	}
 
-	// initL2 may use side effects to register interop subsystem to the node.EventSystem
-	n.l2Source, n.interopSys, n.l2Driver, n.safeDB, err = initL2(ctx, cfg, n)
+	n.l2Source, n.l2Driver, n.safeDB, err = initL2(ctx, cfg, n)
 	if err != nil {
 		return fmt.Errorf("failed to init L2: %w", err)
 	}
@@ -256,7 +251,7 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 		return fmt.Errorf("failed to init L1 Source: %w", err)
 	}
 
-	// initRuntimeConfig relies on side effects to set the runCfg, node.halted and call node.cancel if needed
+	// initRuntimeConfig relies on side effects to set the runCfg
 	if err := initRuntimeConfig(ctx, cfg, n); err != nil {
 		return fmt.Errorf("failed to init the runtime config: %w", err)
 	}
@@ -351,8 +346,6 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 	cfg.HemitrapEnabled = cfg.HemitrapEnabled
 
 	onL1Head := func(ctx context.Context, sig eth.L1BlockRef) {
-		// TODO(#16917) Remove Event System Refactor Comments
-		//  L1UnsafeEvent fan out is updated to procedural method calls
 		if node.cfg.Tracer != nil {
 			node.cfg.Tracer.OnNewL1Head(ctx, sig)
 		}
@@ -364,8 +357,6 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 		node.l2Driver.StatusTracker.OnL1Safe(sig)
 	}
 	onL1Finalized := func(ctx context.Context, sig eth.L1BlockRef) {
-		// TODO(#16917) Remove Event System Refactor Comments
-		//  FinalizeL1Event fan out is updated to procedural method calls
 		node.l2Driver.StatusTracker.OnL1Finalized(sig)
 		node.l2Driver.Finalizer.OnL1Finalized(sig)
 		node.l2Driver.SyncDeriver.OnL1Finalized(ctx)
@@ -400,8 +391,7 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 // note: this function relies on side effects to set node.runCfg
 func initRuntimeConfig(ctx context.Context, cfg *config.Config, node *OpNode) error {
 	// attempt to load runtime config, repeat N times
-	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup, cfg.HemitrapEnabled)
-	// Set node.runCfg early so handleProtocolVersionsUpdate can access it during initialization
+	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup)
 	node.runCfg = runCfg
 
 	confDepth := cfg.Driver.VerifierConfDepth
@@ -435,16 +425,12 @@ func initRuntimeConfig(ctx context.Context, cfg *config.Config, node *OpNode) er
 			return l1Head, err
 		}
 
-		err = node.handleProtocolVersionsUpdate(ctx)
-		return l1Head, err
+		return l1Head, nil
 	}
 
 	// initialize the runtime config before unblocking
 	if err := retry.Do0(ctx, 5, retry.Fixed(time.Second*10), func() error {
 		_, err := reload(ctx)
-		if errors.Is(err, errNodeHalt) { // don't retry on halt error
-			err = nil
-		}
 		return err
 	}); err != nil {
 		return fmt.Errorf("failed to load runtime configuration repeatedly, last error: %w", err)
@@ -465,17 +451,7 @@ func initRuntimeConfig(ctx context.Context, cfg *config.Config, node *OpNode) er
 				// Missing a runtime-config update is not critical, and we do not want to overwhelm the L1 RPC.
 				l1Head, err := reload(ctx)
 				if err != nil {
-					if errors.Is(err, errNodeHalt) {
-						node.halted.Store(true)
-						if node.cancel != nil { // node cancellation is always available when started as CLI app
-							node.cancel(errNodeHalt)
-							return
-						} else {
-							node.log.Debug("opted to halt, but cannot halt node", "l1_head", l1Head)
-						}
-					} else {
-						node.log.Warn("failed to reload runtime config", "err", err)
-					}
+					node.log.Warn("failed to reload runtime config", "err", err)
 				} else {
 					node.log.Debug("reloaded runtime config", "l1_head", l1Head)
 				}
@@ -554,30 +530,21 @@ func initL1BeaconAPI(ctx context.Context, cfg *config.Config, node *OpNode) (*so
 	}
 }
 
-func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.EngineClient, interop.SubSystem, *driver.Driver, closableSafeDB, error) {
+func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.EngineClient, *driver.Driver, closableSafeDB, error) {
 	rpcClient, rpcCfg, err := cfg.L2.Setup(ctx, node.log, &cfg.Rollup, node.metrics)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to setup L2 execution-engine RPC client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to setup L2 execution-engine RPC client: %w", err)
 	}
 
 	rpcCfg.FetchWithdrawalRootFromState = cfg.FetchWithdrawalRootFromState
 
 	l2Source, err := sources.NewEngineClient(rpcClient, node.log, node.metrics.L2SourceCache, rpcCfg)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to create Engine client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create Engine client: %w", err)
 	}
 
 	if err := cfg.Rollup.ValidateL2Config(ctx, l2Source, cfg.Sync.SyncMode == sync.ELSync); err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	indexingMode := false
-	sys, err := cfg.InteropConfig.Setup(ctx, node.log, &node.cfg.Rollup, node.l1Source, l2Source, node.metrics)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to setup interop: %w", err)
-	} else if sys != nil { // we continue with legacy mode if no interop sub-system is set up.
-		_, indexingMode = sys.(*indexing.IndexingMode)
-		node.eventSys.Register("interop", sys)
+		return nil, nil, nil, err
 	}
 
 	var sequencerConductor conductor.SequencerConductor = &conductor.NoOpConductor{}
@@ -588,7 +555,7 @@ func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.Eng
 	// if altDA is not explicitly activated in the node CLI, the config + any error will be ignored.
 	rpCfg, err := cfg.Rollup.GetOPAltDAConfig()
 	if cfg.AltDA.Enabled && err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to get altDA config: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get altDA config: %w", err)
 	}
 	altDA := altda.NewAltDA(node.log, cfg.AltDA, rpCfg, node.metrics.AltDAMetrics)
 	var safeDB closableSafeDB
@@ -596,14 +563,14 @@ func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.Eng
 		node.log.Info("Safe head database enabled", "path", cfg.SafeDBPath)
 		safeDB, err = safedb.NewSafeDB(node.log, cfg.SafeDBPath)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to create safe head database at %v: %w", cfg.SafeDBPath, err)
+			return nil, nil, nil, fmt.Errorf("failed to create safe head database at %v: %w", cfg.SafeDBPath, err)
 		}
 	} else {
 		safeDB = safedb.Disabled
 	}
 
 	if cfg.Rollup.ChainOpConfig == nil {
-		return nil, nil, nil, nil, fmt.Errorf("cfg.Rollup.ChainOpConfig is nil. Please see https://github.com/ethereum-optimism/optimism/releases/tag/op-node/v1.11.0: %w", err)
+		return nil, nil, nil, fmt.Errorf("cfg.Rollup.ChainOpConfig is nil. Please see https://github.com/ethereum-optimism/optimism/releases/tag/op-node/v1.11.0: %w", err)
 	}
 
 	var upstreamFollowSource driver.UpstreamFollowSource
@@ -612,16 +579,9 @@ func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.Eng
 	}
 
 	l2Driver := driver.NewDriver(node.eventSys, node.eventDrain, &cfg.Driver, &cfg.Rollup, cfg.L1ChainConfig, cfg.DependencySet, l2Source, node.l1Source, upstreamFollowSource,
-		node.beacon, node, node, node.log, node.metrics, cfg.ConfigPersistence, safeDB, &cfg.Sync, sequencerConductor, altDA, indexingMode, cfg.HemitrapEnabled)
+		node.beacon, node, node, node.log, node.metrics, cfg.ConfigPersistence, safeDB, &cfg.Sync, sequencerConductor, altDA, cfg.HemitrapEnabled, node.superAuthority)
 
-	// Wire up IndexingMode to engine controller for direct procedure call
-	if sys != nil {
-		if indexingMode, ok := sys.(*indexing.IndexingMode); ok {
-			indexingMode.SetEngineController(l2Driver.SyncDeriver.Engine)
-		}
-	}
-
-	return l2Source, sys, l2Driver, safeDB, nil
+	return l2Source, l2Driver, safeDB, nil
 }
 
 func initFollowSource(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.FollowClient, error) {
@@ -764,12 +724,6 @@ func initP2PSigner(ctx context.Context, cfg *config.Config, node *OpNode) (p2p.S
 }
 
 func (n *OpNode) Start(ctx context.Context) error {
-	if n.interopSys != nil {
-		if err := n.interopSys.Start(ctx); err != nil {
-			n.log.Error("Could not start interop sub system", "err", err)
-			return err
-		}
-	}
 	n.log.Info("Starting execution engine driver")
 	// start driving engine: sync blocks by deriving them from L1 and driving them into the engine
 	if err := n.l2Driver.Start(); err != nil {
@@ -857,11 +811,11 @@ func (n *OpNode) Stop(ctx context.Context) error {
 		return ErrAlreadyClosed
 	}
 
-	var result *multierror.Error
+	var result error
 
 	if n.server != nil {
 		if err := n.server.Stop(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close RPC server: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close RPC server: %w", err))
 		}
 	}
 
@@ -875,14 +829,14 @@ func (n *OpNode) Stop(ctx context.Context) error {
 		case err == nil:
 			n.log.Info("stopped sequencer", "latestHead", latestHead)
 		default:
-			result = multierror.Append(result, fmt.Errorf("error stopping sequencer: %w", err))
+			result = errors.Join(result, fmt.Errorf("error stopping sequencer: %w", err))
 		}
 	}
 
 	n.p2pMu.Lock()
 	if n.p2pNode != nil {
 		if err := n.p2pNode.Close(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close p2p node: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close p2p node: %w", err))
 		}
 		// Prevent further use of p2p.
 		n.p2pNode = nil
@@ -891,7 +845,7 @@ func (n *OpNode) Stop(ctx context.Context) error {
 
 	if n.p2pSigner != nil {
 		if err := n.p2pSigner.Close(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close p2p signer: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close p2p signer: %w", err))
 		}
 	}
 
@@ -915,14 +869,7 @@ func (n *OpNode) Stop(ctx context.Context) error {
 	// close L2 driver
 	if n.l2Driver != nil {
 		if err := n.l2Driver.Close(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close L2 engine driver cleanly: %w", err))
-		}
-	}
-
-	// close the interop sub system
-	if n.interopSys != nil {
-		if err := n.interopSys.Stop(ctx); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close interop sub-system: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close L2 engine driver cleanly: %w", err))
 		}
 	}
 
@@ -932,7 +879,7 @@ func (n *OpNode) Stop(ctx context.Context) error {
 
 	if n.safeDB != nil {
 		if err := n.safeDB.Close(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close safe head db: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close safe head db: %w", err))
 		}
 	}
 
@@ -955,30 +902,19 @@ func (n *OpNode) Stop(ctx context.Context) error {
 		n.closed.Store(true)
 	}
 
-	if n.halted.Load() {
-		// if we had a halt upon initialization, idle for a while, with open metrics, to prevent a rapid restart-loop
-		tim := time.NewTimer(time.Minute * 5)
-		n.log.Warn("halted, idling to avoid immediate shutdown repeats")
-		defer tim.Stop()
-		select {
-		case <-tim.C:
-		case <-ctx.Done():
-		}
-	}
-
-	// Close metrics and pprof only after we are done idling
+	// Close metrics and pprof
 	if n.pprofService != nil {
 		if err := n.pprofService.Stop(ctx); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close pprof server: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close pprof server: %w", err))
 		}
 	}
 	if n.metricsSrv != nil {
 		if err := n.metricsSrv.Stop(ctx); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close metrics server: %w", err))
+			result = errors.Join(result, fmt.Errorf("failed to close metrics server: %w", err))
 		}
 	}
 
-	return result.ErrorOrNil()
+	return result
 }
 
 func (n *OpNode) Stopped() bool {
@@ -994,22 +930,6 @@ func (n *OpNode) HTTPEndpoint() string {
 
 func (n *OpNode) HTTPPort() (int, error) {
 	return n.server.Port()
-}
-
-func (n *OpNode) InteropRPC() (rpcEndpoint string, jwtSecret eth.Bytes32) {
-	m, ok := n.interopSys.(*indexing.IndexingMode)
-	if !ok {
-		return "", [32]byte{}
-	}
-	return m.WSEndpoint(), m.JWTSecret()
-}
-
-func (n *OpNode) InteropRPCPort() (int, error) {
-	m, ok := n.interopSys.(*indexing.IndexingMode)
-	if !ok {
-		return 0, fmt.Errorf("failed to fetch interop port for op-node")
-	}
-	return m.WSPort()
 }
 
 func (n *OpNode) getP2PNodeIfEnabled() *p2p.NodeP2P {

@@ -8,7 +8,10 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	"github.com/ethereum-optimism/optimism/op-core/interop"
+	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 // QueryFrontend handles supervisor query RPC methods
@@ -18,16 +21,30 @@ type QueryFrontend struct {
 
 // CheckAccessList validates interop executing messages
 func (f *QueryFrontend) CheckAccessList(ctx context.Context, inboxEntries []common.Hash,
-	minSafety types.SafetyLevel, executingDescriptor types.ExecutingDescriptor) error {
+	minSafety safety.Level, executingDescriptor messages.ExecutingDescriptor) error {
 
 	err := f.backend.CheckAccessList(ctx, inboxEntries, minSafety, executingDescriptor)
 	if err != nil {
 		return &rpc.JsonError{
-			Code:    types.GetErrorCode(err),
+			Code:    interop.GetErrorCode(err),
 			Message: err.Error(),
 		}
 	}
 	return nil
+}
+
+// GetBlockHashByNumber returns the latest ingested block hash or the block hash at a specific height.
+func (f *QueryFrontend) GetBlockHashByNumber(ctx context.Context, chainID eth.ChainID, blockNum rpc.BlockNumber) (common.Hash, error) {
+	return f.backend.GetBlockHashByNumber(chainID, blockNum)
+}
+
+// PublicAdminFrontend exposes read-only admin methods on the public port.
+type PublicAdminFrontend struct {
+	backend *Backend
+}
+
+func (p *PublicAdminFrontend) GetFailsafeEnabled(ctx context.Context) (bool, error) {
+	return p.backend.FailsafeEnabled(), nil
 }
 
 // AdminFrontend handles admin RPC methods

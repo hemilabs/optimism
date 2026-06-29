@@ -23,10 +23,8 @@ contract OPContractsManagerContainer {
     /// @notice Addresses of the implementation contracts.
     struct Implementations {
         address superchainConfigImpl;
-        address protocolVersionsImpl;
         address l1ERC721BridgeImpl;
         address optimismPortalImpl;
-        address optimismPortalInteropImpl;
         address ethLockboxImpl;
         address systemConfigImpl;
         address optimismMintableERC20FactoryImpl;
@@ -40,6 +38,7 @@ contract OPContractsManagerContainer {
         address permissionedDisputeGameV2Impl;
         address superFaultDisputeGameImpl;
         address superPermissionedDisputeGameImpl;
+        address zkDisputeGameImpl;
         address storageSetterImpl;
     }
 

@@ -120,10 +120,11 @@ func (t *testingT) shouldSkipFlakyFailure() bool {
 func (t *testingT) skipFlakyFailure(msg string) {
 	if t.reason != "" {
 		t.logger.Warn("Ignoring failure in flaky test", "reason", t.reason, "failure", msg)
+		t.t.Skipf("FLAKY_FAIL: %s: %s", t.reason, msg)
 	} else {
 		t.logger.Warn("Ignoring failure in flaky test", "failure", msg)
+		t.t.Skipf("FLAKY_FAIL: %s", msg)
 	}
-	t.t.SkipNow()
 }
 
 func (t *testingT) Error(args ...any) {
@@ -132,10 +133,10 @@ func (t *testingT) Error(args ...any) {
 		t.skipFlakyFailure(fmt.Sprintln(args...))
 		return
 	}
-	// Note: the test-logger catches panics when the test is logged to after test-end.
-	// Note: we do not use t.Error directly, to keep the log-formatting more consistent.
-	t.logger.Error(fmt.Sprintln(args...))
-	t.Fail()
+	// Write directly to testing.T, not the structured logger. The structured logger's
+	// terminal handler quotes messages containing '=' (via escapeMessage/strconv.Quote),
+	// which escapes all \n and \t, making testify's multi-line assertion diffs unreadable.
+	t.t.Error(args...)
 }
 
 func (t *testingT) Errorf(format string, args ...any) {
@@ -144,10 +145,10 @@ func (t *testingT) Errorf(format string, args ...any) {
 		t.skipFlakyFailure(fmt.Sprintf(format, args...))
 		return
 	}
-	// Note: the test-logger catches panics when the test is logged to after test-end.
-	// Note: we do not use t.Errorf directly, to keep the log-formatting more consistent.
-	t.logger.Error(fmt.Sprintf(format, args...))
-	t.Fail()
+	// Write directly to testing.T, not the structured logger. The structured logger's
+	// terminal handler quotes messages containing '=' (via escapeMessage/strconv.Quote),
+	// which escapes all \n and \t, making testify's multi-line assertion diffs unreadable.
+	t.t.Errorf(format, args...)
 }
 
 func (t *testingT) Fail() {
@@ -252,6 +253,15 @@ func (t *testingT) MarkFlaky(reason string) {
 	if reason != "" {
 		t.reason = reason
 	}
+	t.t.Cleanup(func() {
+		if !t.t.Failed() && !t.t.Skipped() && !mustFailFlakyTests() {
+			if t.reason != "" {
+				t.t.Skipf("FLAKY_PASS: %s", t.reason)
+			} else {
+				t.t.Skip("FLAKY_PASS")
+			}
+		}
+	})
 }
 
 func (t *testingT) Run(name string, fn func(T)) {
@@ -280,6 +290,17 @@ func (t *testingT) Run(name string, fn func(T)) {
 		}
 		subT.req = testreq.New(subT)
 		subT.gate = testreq.New(&gateAdapter{subT})
+		if subT.flaky {
+			subGoT.Cleanup(func() {
+				if !subGoT.Failed() && !subGoT.Skipped() && !mustFailFlakyTests() {
+					if subT.reason != "" {
+						subGoT.Skipf("FLAKY_PASS: %s", subT.reason)
+					} else {
+						subGoT.Skip("FLAKY_PASS")
+					}
+				}
+			})
+		}
 		fn(subT)
 	})
 }

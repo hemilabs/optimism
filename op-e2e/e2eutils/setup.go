@@ -6,8 +6,8 @@ import (
 	"path"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-e2e/config/secrets"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -219,6 +219,7 @@ func Setup(t require.TestingT, deployParams *DeployParams, alloc *AllocParams) *
 		PectraBlobScheduleTime: deployConf.PectraBlobScheduleTime(uint64(deployConf.L1GenesisBlockTimestamp)),
 		IsthmusTime:            deployConf.IsthmusTime(uint64(deployConf.L1GenesisBlockTimestamp)),
 		JovianTime:             deployConf.JovianTime(uint64(deployConf.L1GenesisBlockTimestamp)),
+		KarstTime:              deployConf.KarstTime(uint64(deployConf.L1GenesisBlockTimestamp)),
 		InteropTime:            deployConf.InteropTime(uint64(deployConf.L1GenesisBlockTimestamp)),
 		AltDAConfig:            pcfg,
 		ChainOpConfig: &params.OptimismConfig{
@@ -249,7 +250,8 @@ func SystemConfigFromDeployConfig(deployConfig *genesis.DeployConfig) eth.System
 }
 
 func ApplyDeployConfigForks(deployConfig *genesis.DeployConfig) {
-	isJovian := os.Getenv("OP_E2E_USE_JOVIAN") == "true"
+	isKarst := os.Getenv("OP_E2E_USE_KARST") == "true"
+	isJovian := isKarst || os.Getenv("OP_E2E_USE_JOVIAN") == "true"
 	isIsthmus := isJovian || os.Getenv("OP_E2E_USE_ISTHMUS") == "true"
 	isHolocene := isIsthmus || os.Getenv("OP_E2E_USE_HOLOCENE") == "true"
 	isGranite := isHolocene || os.Getenv("OP_E2E_USE_GRANITE") == "true"
@@ -276,6 +278,9 @@ func ApplyDeployConfigForks(deployConfig *genesis.DeployConfig) {
 	}
 	if isJovian {
 		deployConfig.L2GenesisJovianTimeOffset = new(hexutil.Uint64)
+	}
+	if isKarst {
+		deployConfig.L2GenesisKarstTimeOffset = new(hexutil.Uint64)
 	}
 	// Canyon and lower is activated by default
 	deployConfig.L2GenesisCanyonTimeOffset = new(hexutil.Uint64)

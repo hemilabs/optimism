@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-proposer/bindings"
 	"github.com/ethereum-optimism/optimism/op-proposer/contracts"
 	"github.com/ethereum-optimism/optimism/op-proposer/metrics"
 	"github.com/ethereum-optimism/optimism/op-proposer/proposer/source"
@@ -18,16 +17,12 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
 
-var (
-	ErrProposerNotRunning = errors.New("proposer is not running")
-)
+var ErrProposerNotRunning = errors.New("proposer is not running")
 
 type L1Client interface {
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
@@ -38,11 +33,6 @@ type L1Client interface {
 	// CallContract executes an Ethereum contract call with the specified data as the
 	// input.
 	CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
-}
-
-type L2OOContract interface {
-	Version(*bind.CallOpts) (string, error)
-	NextBlockNumber(*bind.CallOpts) (*big.Int, error)
 }
 
 type DGFContract interface {
@@ -80,9 +70,6 @@ type L2OutputSubmitter struct {
 
 	running atomic.Bool
 
-	l2ooContract L2OOContract
-	l2ooABI      *abi.ABI
-
 	dgfContract DGFContract
 }
 
@@ -98,46 +85,11 @@ func NewL2OutputSubmitter(setup DriverSetup) (_ *L2OutputSubmitter, err error) {
 		}
 	}()
 
-	if setup.Cfg.L2OutputOracleAddr != nil {
-		return newL2OOSubmitter(ctx, cancel, setup)
-	} else if setup.Cfg.DisputeGameFactoryAddr != nil {
-		return newDGFSubmitter(ctx, cancel, setup)
-	} else {
-		return nil, errors.New("neither the `L2OutputOracle` nor `DisputeGameFactory` addresses were provided")
-	}
-}
-
-func newL2OOSubmitter(ctx context.Context, cancel context.CancelFunc, setup DriverSetup) (*L2OutputSubmitter, error) {
-	l2ooContract, err := bindings.NewL2OutputOracleCaller(*setup.Cfg.L2OutputOracleAddr, setup.L1Client)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create L2OO at address %s: %w", setup.Cfg.L2OutputOracleAddr, err)
+	if setup.Cfg.DisputeGameFactoryAddr == nil {
+		return nil, errors.New("missing DisputeGameFactory address")
 	}
 
-	cCtx, cCancel := context.WithTimeout(ctx, setup.Cfg.NetworkTimeout)
-	defer cCancel()
-	version, err := l2ooContract.Version(&bind.CallOpts{Context: cCtx})
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	log.Info("Connected to L2OutputOracle", "address", setup.Cfg.L2OutputOracleAddr, "version", version)
-
-	parsed, err := bindings.L2OutputOracleMetaData.GetAbi()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	return &L2OutputSubmitter{
-		DriverSetup: setup,
-		done:        make(chan struct{}),
-		ctx:         ctx,
-		cancel:      cancel,
-
-		l2ooContract: l2ooContract,
-		l2ooABI:      parsed,
-	}, nil
+	return newDGFSubmitter(ctx, cancel, setup)
 }
 
 func newDGFSubmitter(ctx context.Context, cancel context.CancelFunc, setup DriverSetup) (*L2OutputSubmitter, error) {
@@ -202,59 +154,6 @@ func (l *L2OutputSubmitter) StopL2OutputSubmitting() error {
 
 	l.Log.Info("Proposer stopped")
 	return nil
-}
-
-// FetchL2OOOutput gets the next output proposal for the L2OO.
-// It queries the L2OO for the earliest next block number that should be proposed.
-// It returns the output to propose, and whether the proposal should be submitted at all.
-// The passed context is expected to be a lifecycle context. A network timeout
-// context will be derived from it.
-func (l *L2OutputSubmitter) FetchL2OOOutput(ctx context.Context) (source.Proposal, bool, error) {
-	if l.l2ooContract == nil {
-		return source.Proposal{}, false, fmt.Errorf("L2OutputOracle contract not set, cannot fetch next output info")
-	}
-
-	cCtx, cancel := context.WithTimeout(ctx, l.Cfg.NetworkTimeout)
-	defer cancel()
-	callOpts := &bind.CallOpts{
-		From:    l.Txmgr.From(),
-		Context: cCtx,
-	}
-	nextCheckpointBlockBig, err := l.l2ooContract.NextBlockNumber(callOpts)
-	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("querying next block number: %w", err)
-	}
-	nextCheckpointBlock := nextCheckpointBlockBig.Uint64()
-	// Fetch the current L2 heads
-	currentBlockNumber, err := l.FetchCurrentBlockNumber(ctx)
-	if err != nil {
-		return source.Proposal{}, false, err
-	}
-
-	// Ensure that we do not submit a block in the future
-	if currentBlockNumber < nextCheckpointBlock {
-		l.Log.Debug("Proposer submission interval has not elapsed", "currentBlockNumber", currentBlockNumber, "nextBlockNumber", nextCheckpointBlock)
-		return source.Proposal{}, false, nil
-	}
-
-	proposal, err := l.FetchOutput(ctx, nextCheckpointBlock)
-	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("fetching output: %w", err)
-	}
-	if proposal.IsSuperRootProposal() {
-		panic("L2 Output Submitter should not be configured for Super Root proposals")
-	}
-
-	// Always propose if it's part of the Finalized L2 chain. Or if allowed, if it's part of the safe L2 chain.
-	if proposal.SequenceNum > proposal.Legacy.FinalizedL2.Number && (!l.Cfg.AllowNonFinalized || proposal.SequenceNum > proposal.Legacy.SafeL2.Number) {
-		l.Log.Debug("Not proposing yet, L2 block is not ready for proposal",
-			"l2_proposal", proposal.SequenceNum,
-			"l2_safe", proposal.Legacy.SafeL2,
-			"l2_finalized", proposal.Legacy.FinalizedL2,
-			"allow_non_finalized", l.Cfg.AllowNonFinalized)
-		return proposal, false, nil
-	}
-	return proposal, true, nil
 }
 
 // FetchDGFOutput queries the DGF for the latest game and infers whether it is time to make another proposal
@@ -326,85 +225,24 @@ func (l *L2OutputSubmitter) FetchOutput(ctx context.Context, block uint64) (sour
 	return proposal, nil
 }
 
-// ProposeL2OutputTxData creates the transaction data for the ProposeL2Output function
-func (l *L2OutputSubmitter) ProposeL2OutputTxData(output source.Proposal) ([]byte, error) {
-	return proposeL2OutputTxData(l.l2ooABI, output)
-}
-
-// proposeL2OutputTxData creates the transaction data for the ProposeL2Output function
-func proposeL2OutputTxData(abi *abi.ABI, output source.Proposal) ([]byte, error) {
-	return abi.Pack(
-		"proposeL2Output",
-		output.Root,
-		new(big.Int).SetUint64(output.SequenceNum),
-		output.CurrentL1.Hash,
-		new(big.Int).SetUint64(output.CurrentL1.Number))
-}
-
 func (l *L2OutputSubmitter) ProposeL2OutputDGFTxCandidate(ctx context.Context, output source.Proposal) (txmgr.TxCandidate, error) {
 	cCtx, cancel := context.WithTimeout(ctx, l.Cfg.NetworkTimeout)
 	defer cancel()
 	return l.dgfContract.ProposalTx(cCtx, l.Cfg.DisputeGameType, output.Root, output.ExtraData())
 }
 
-// We wait until l1head advances beyond blocknum. This is used to make sure proposal tx won't
-// immediately fail when checking the l1 blockhash. Note that EstimateGas uses "latest" state to
-// execute the transaction by default, meaning inside the call, the head block is considered
-// "pending" instead of committed. In the case l1blocknum == l1head then, blockhash(l1blocknum)
-// will produce a value of 0 within EstimateGas, and the call will fail when the contract checks
-// that l1blockhash matches blockhash(l1blocknum).
-func (l *L2OutputSubmitter) waitForL1Head(ctx context.Context, blockNum uint64) error {
-	ticker := time.NewTicker(l.Cfg.PollInterval)
-	defer ticker.Stop()
-	l1head, err := l.Txmgr.BlockNumber(ctx)
-	if err != nil {
-		return err
-	}
-	for l1head <= blockNum {
-		l.Log.Debug("Waiting for l1 head > l1blocknum1+1", "l1head", l1head, "l1blocknum", blockNum)
-		select {
-		case <-ticker.C:
-			l1head, err = l.Txmgr.BlockNumber(ctx)
-			if err != nil {
-				return err
-			}
-		case <-l.done:
-			return fmt.Errorf("L2OutputSubmitter is done()")
-		}
-	}
-	return nil
-}
-
 // sendTransaction creates & sends transactions through the underlying transaction manager.
 func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.Proposal) error {
 	l.Log.Info("Proposing output root", "output", output.Root, "sequenceNum", output.SequenceNum, "extraData", output.ExtraData())
-	var receipt *types.Receipt
-	if l.Cfg.DisputeGameFactoryAddr != nil {
-		candidate, err := l.ProposeL2OutputDGFTxCandidate(ctx, output)
-		if err != nil {
-			return err
-		}
-		receipt, err = l.Txmgr.Send(ctx, candidate)
-		if err != nil {
-			return err
-		}
-	} else {
-		err := l.waitForL1Head(ctx, output.Legacy.HeadL1.Number+1)
-		if err != nil {
-			return err
-		}
-		data, err := l.ProposeL2OutputTxData(output)
-		if err != nil {
-			return err
-		}
-		receipt, err = l.Txmgr.Send(ctx, txmgr.TxCandidate{
-			TxData:   data,
-			To:       l.Cfg.L2OutputOracleAddr,
-			GasLimit: 0,
-		})
-		if err != nil {
-			return err
-		}
+
+	candidate, err := l.ProposeL2OutputDGFTxCandidate(ctx, output)
+	if err != nil {
+		return fmt.Errorf("failed to create DGF tx candidate: %w", err)
+	}
+
+	receipt, err := l.Txmgr.Send(ctx, candidate)
+	if err != nil {
+		return fmt.Errorf("failed to send proposal tx: %w", err)
 	}
 
 	if receipt.Status == types.ReceiptStatusFailed {
@@ -439,19 +277,12 @@ func (l *L2OutputSubmitter) loop() {
 			// A note on retrying: the outer ticker already runs on a short
 			// poll interval, which has a default value of 6 seconds. So no
 			// retry logic is needed around proposal fetching here.
-			var proposal source.Proposal
-			var shouldPropose bool
-			var err error
-			if l.dgfContract == nil {
-				proposal, shouldPropose, err = l.FetchL2OOOutput(ctx)
-			} else {
-				proposal, shouldPropose, err = l.FetchDGFOutput(ctx)
-			}
+			proposal, shouldPropose, err := l.FetchDGFOutput(ctx)
 			if err != nil {
 				l.Log.Warn("Error getting proposal", "err", err)
 				continue
 			} else if !shouldPropose {
-				// debug logging already in Fetch(DGF|L2OO)Output
+				// debug logging already in FetchDGFOutput
 				continue
 			}
 
@@ -460,7 +291,6 @@ func (l *L2OutputSubmitter) loop() {
 			return
 		}
 	}
-
 }
 
 func (l *L2OutputSubmitter) waitNodeSync() error {
@@ -472,10 +302,13 @@ func (l *L2OutputSubmitter) waitNodeSync() error {
 		return fmt.Errorf("failed to retrieve current L1 block number: %w", err)
 	}
 
-	return dial.WaitL1Sync(l.ctx, l.Log, l1head, time.Second*12, func(ctx context.Context) (eth.L1BlockRef, error) {
+	// CurrentL1 names the L1 block currently being processed: only blocks strictly
+	// below it are fully derived. Wait until the source reports CurrentL1 > l1head
+	// by setting the target one above l1head.
+	return dial.WaitL1Sync(l.ctx, l.Log, l1head+1, time.Second*12, func(ctx context.Context) (eth.BlockID, error) {
 		status, err := l.ProposalSource.SyncStatus(ctx)
 		if err != nil {
-			return eth.L1BlockRef{}, err
+			return eth.BlockID{}, err
 		}
 		return status.CurrentL1, nil
 	})

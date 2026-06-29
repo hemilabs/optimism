@@ -40,6 +40,9 @@ pub enum BatchDecodingError {
     /// Empty buffer
     #[error("Empty buffer")]
     EmptyBuffer,
+    /// Unknown batch type
+    #[error("Unknown batch type: {0}")]
+    UnknownBatchType(u8),
     /// Error decoding an Alloy RLP
     #[error("Error decoding an Alloy RLP: {0}")]
     AlloyRlpError(alloy_rlp::Error),
@@ -72,6 +75,9 @@ pub enum SpanDecodingError {
     /// Failed to decode transaction nonces
     #[error("Failed to decode transaction nonces")]
     TxNonces,
+    /// Failed to decode transaction gas limits
+    #[error("Failed to decode transaction gas limits")]
+    TxGases,
     /// Mismatch in length between the transaction type and signature arrays in a span batch
     /// transaction payload.
     #[error("Mismatch in length between the transaction type and signature arrays")]

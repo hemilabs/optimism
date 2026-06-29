@@ -2,73 +2,37 @@ package loadtest
 
 import (
 	"context"
-	"math/big"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	messages "github.com/ethereum-optimism/optimism/op-core/interop/messages"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
+	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/txinclude"
 	"github.com/ethereum-optimism/optimism/op-service/txintent"
 	"github.com/ethereum-optimism/optimism/op-service/txplan"
-	suptypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 )
-
-type makeInvalidInitMsgFn func(suptypes.Message) suptypes.Message
-
-func makeInvalidBlockNumber(msg suptypes.Message) suptypes.Message {
-	msg.Identifier.BlockNumber++
-	return msg
-}
-
-func makeInvalidChainID(msg suptypes.Message) suptypes.Message {
-	chainIDBig := msg.Identifier.ChainID.ToBig()
-	msg.Identifier.ChainID = eth.ChainIDFromBig(chainIDBig.Add(chainIDBig, big.NewInt(1)))
-	return msg
-}
-
-func makeInvalidLogIndex(msg suptypes.Message) suptypes.Message {
-	msg.Identifier.LogIndex++
-	return msg
-}
-
-func makeInvalidOrigin(msg suptypes.Message) suptypes.Message {
-	originBig := msg.Identifier.Origin.Big()
-	msg.Identifier.Origin = common.BigToAddress(originBig.Add(originBig, big.NewInt(1)))
-	return msg
-}
-
-func makeInvalidTimestamp(msg suptypes.Message) suptypes.Message {
-	msg.Identifier.Timestamp++
-	return msg
-}
-
-func makeInvalidPayloadHash(msg suptypes.Message) suptypes.Message {
-	hash := msg.PayloadHash.Big()
-	hash.Add(hash, big.NewInt(1))
-	msg.PayloadHash = common.BigToHash(hash)
-	return msg
-}
 
 // InvalidExecMsgSpammer spams invalid executing messages, aiming to stress mempool interop
 // filters.
 type InvalidExecMsgSpammer struct {
 	l2             *L2
 	eoa            *SyncEOA
-	validInitMsg   suptypes.Message
-	makeInvalidFns *RoundRobin[makeInvalidInitMsgFn]
+	validInitMsg   messages.Message
+	makeInvalidFns *RoundRobin[dsl.InvalidMsgFn]
 }
 
 var _ Spammer = (*InvalidExecMsgSpammer)(nil)
 
 // NewInvalidExecMsgSpammer returns an InvalidExecutor. It assumes  validInitMsg is a valid
 // initiating message on a source chain.
-func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg suptypes.Message) *InvalidExecMsgSpammer {
+func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg messages.Message) *InvalidExecMsgSpammer {
 	// Fund an EOA that will be spamming the invalid transactions. It should never need to spend
 	// any wei, but we don't want to trigger mempool balance checks.
 	eoa := l2.Wallet.NewEOA(l2.EL)
@@ -93,13 +57,13 @@ func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg suptypes.Message
 		l2:           l2,
 		eoa:          NewSyncEOA(includer, eoa.Plan()),
 		validInitMsg: validInitMsg,
-		makeInvalidFns: NewRoundRobin([]makeInvalidInitMsgFn{
-			makeInvalidBlockNumber,
-			makeInvalidChainID,
-			makeInvalidLogIndex,
-			makeInvalidOrigin,
-			makeInvalidTimestamp,
-			makeInvalidPayloadHash,
+		makeInvalidFns: NewRoundRobin([]dsl.InvalidMsgFn{
+			dsl.MakeInvalidBlockNumber,
+			dsl.MakeInvalidChainID,
+			dsl.MakeInvalidLogIndex,
+			dsl.MakeInvalidOrigin,
+			dsl.MakeInvalidTimestamp,
+			dsl.MakeInvalidPayloadHash,
 		}),
 	}
 }
@@ -119,7 +83,6 @@ func (ie *InvalidExecMsgSpammer) Spam(t devtest.T) error {
 // executing messages are also spammed. The number of invalid messages spammed per slot is
 // configurable via NAT_INVALID_MPS (default: 1_000).
 func TestRelayWithInvalidMessagesSteady(gt *testing.T) {
-	gt.Skip("Skipping Interop Acceptance Test")
 	t, l2A, l2B := setupLoadTest(gt)
 
 	// Emit a valid initiating message.
@@ -129,7 +92,7 @@ func TestRelayWithInvalidMessagesSteady(gt *testing.T) {
 		OpaqueData: []byte{34, 56},
 	}))
 	t.Require().NoError(err)
-	ref := l2A.EL.BlockRefByNumber(initTx.Receipt.BlockNumber.Uint64())
+	ref := l2A.EL.BlockRefByNumber(bigs.Uint64Strict(initTx.Receipt.BlockNumber))
 	out := new(txintent.InteropOutput)
 	t.Require().NoError(out.FromReceipt(t.Ctx(), initTx.Receipt, ref.BlockRef(), l2A.EL.ChainID()))
 	t.Require().Len(out.Entries, 1)
@@ -138,7 +101,6 @@ func TestRelayWithInvalidMessagesSteady(gt *testing.T) {
 	ctxInvalid, cancelInvalid := context.WithCancel(t.Ctx())
 	defer cancelInvalid()
 	var wg sync.WaitGroup
-	defer wg.Wait()
 
 	// Spam a fixed number of invalid messages per block time.
 	wg.Add(1)
@@ -162,4 +124,11 @@ func TestRelayWithInvalidMessagesSteady(gt *testing.T) {
 		s := NewSteady(l2B.EL.Escape().EthClient(), l2B.Config.ElasticityMultiplier(), l2B.BlockTime, WithAIMDObserver(observer))
 		s.Run(t, NewRelaySpammer(l2A, l2B))
 	}()
+
+	// Block until the goroutines exit (when t.Ctx() expires after the setupLoadTest
+	// timeout). Using an explicit Wait — rather than defer wg.Wait() — keeps the
+	// goroutines' ctxInvalid alive for the full test duration. A deferred closure
+	// that cancels ctxInvalid before waiting would race with the goroutine's
+	// startup, since the test body returns immediately after spawning them.
+	wg.Wait()
 }

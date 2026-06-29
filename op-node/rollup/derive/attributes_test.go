@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-core/forks"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -237,7 +237,6 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		epoch := l1Info.ID()
 		l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, seqNumber, l1Info, 0)
 		require.NoError(t, err)
-		require.NoError(t, err)
 
 		var l2Txs []eth.Data
 		l2Txs = append(l2Txs, l1InfoTx)
@@ -277,7 +276,6 @@ func TestPreparePayloadAttributes(t *testing.T) {
 		seqNumber := l2Parent.SequenceNumber + 1
 		epoch := l1Info.ID()
 		l1InfoTx, err := L1InfoDepositBytes(cfg, params.MergedTestChainConfig, testSysCfg, seqNumber, l1Info, 0)
-		require.NoError(t, err)
 		require.NoError(t, err)
 
 		var l2Txs []eth.Data

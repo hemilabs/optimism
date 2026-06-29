@@ -9,17 +9,16 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-node/flags"
 	"github.com/ethereum-optimism/optimism/op-node/node/tracer"
 	"github.com/ethereum-optimism/optimism/op-node/p2p"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -28,8 +27,6 @@ type Config struct {
 	L2 L2EndpointSetup
 
 	Beacon L1BeaconEndpointSetup
-
-	InteropConfig interop.Setup
 
 	Driver driver.Config
 
@@ -73,11 +70,7 @@ type Config struct {
 
 	Sync sync.Config
 
-	// To halt when detecting the node does not support a signaled protocol version
-	// change of the given severity (major/minor/patch). Disabled if empty.
-	RollupHalt string
-
-	// Cancel to request a premature shutdown of the node itself, e.g. when halting. This may be nil.
+	// Cancel to request a premature shutdown of the node itself. This may be nil.
 	Cancel context.CancelCauseFunc
 
 	// Conductor is used to determine this node is the leader sequencer.
@@ -94,6 +87,7 @@ type Config struct {
 	// Experimental. Enables new opstack RPC namespace. Used by op-test-sequencer.
 	ExperimentalOPStackAPI bool
 
+	// HemitrapEnabled enables hemi-specific hemitrap contract testing features.
 	HemitrapEnabled bool
 }
 
@@ -139,12 +133,6 @@ func (cfg *Config) Check() error {
 			return fmt.Errorf("misconfigured L1 Beacon API endpoint: %w", err)
 		}
 	}
-	if cfg.InteropConfig == nil {
-		return errors.New("missing interop config")
-	}
-	if err := cfg.InteropConfig.Check(); err != nil {
-		return fmt.Errorf("misconfigured interop: %w", err)
-	}
 	if err := cfg.Rollup.Check(); err != nil {
 		return fmt.Errorf("rollup config error: %w", err)
 	}
@@ -168,9 +156,6 @@ func (cfg *Config) Check() error {
 		if err := cfg.P2P.Check(); err != nil {
 			return fmt.Errorf("p2p config error: %w", err)
 		}
-	}
-	if !(cfg.RollupHalt == "" || cfg.RollupHalt == "major" || cfg.RollupHalt == "minor" || cfg.RollupHalt == "patch") {
-		return fmt.Errorf("invalid rollup halting option: %q", cfg.RollupHalt)
 	}
 	if cfg.ConductorEnabled {
 		if state, _ := cfg.ConfigPersistence.SequencerState(); state != StateUnset {

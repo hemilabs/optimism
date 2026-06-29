@@ -6,7 +6,7 @@ PYTHON := env('PYTHON', 'python3')
 
 TEST_TIMEOUT := env('TEST_TIMEOUT', '10m')
 
-TEST_PKGS := "./op-alt-da/... ./op-batcher/... ./op-chain-ops/... ./op-node/... ./op-proposer/... ./op-challenger/... ./op-faucet/... ./op-dispute-mon/... ./op-conductor/... ./op-program/... ./op-service/... ./op-supervisor/... ./op-test-sequencer/... ./op-fetcher/... ./op-e2e/system/... ./op-e2e/e2eutils/... ./op-e2e/opgeth/... ./op-e2e/interop/... ./op-e2e/actions/altda ./op-e2e/actions/batcher ./op-e2e/actions/derivation ./op-e2e/actions/helpers ./op-e2e/actions/interop ./op-e2e/actions/proofs ./op-e2e/actions/proposer ./op-e2e/actions/safedb ./op-e2e/actions/sequencer ./op-e2e/actions/sync ./op-e2e/actions/upgrades ./packages/contracts-bedrock/scripts/checks/... ./op-dripper/... ./op-devstack/... ./op-deployer/pkg/deployer/artifacts/... ./op-deployer/pkg/deployer/broadcaster/... ./op-deployer/pkg/deployer/clean/... ./op-deployer/pkg/deployer/integration_test/ ./op-deployer/pkg/deployer/integration_test/cli/... ./op-deployer/pkg/deployer/standard/... ./op-deployer/pkg/deployer/state/... ./op-deployer/pkg/deployer/verify/... ./op-sync-tester/... ./op-supernode/..."
+TEST_PKGS := "./op-alt-da/... ./op-batcher/... ./op-chain-ops/... ./op-core/... ./op-node/... ./op-proposer/... ./op-challenger/... ./op-faucet/... ./op-dispute-mon/... ./op-conductor/... ./op-program/... ./op-service/... ./op-test-sequencer/... ./op-fetcher/... ./op-e2e/system/... ./op-e2e/e2eutils/... ./op-e2e/opgeth/... ./op-e2e/interop/... ./op-e2e/actions/altda ./op-e2e/actions/batcher ./op-e2e/actions/derivation ./op-e2e/actions/helpers ./op-e2e/actions/proofs ./op-e2e/actions/proposer ./op-e2e/actions/safedb ./op-e2e/actions/sequencer ./op-e2e/actions/sync ./op-e2e/actions/upgrades ./packages/contracts-bedrock/scripts/checks/... ./ops/scripts/... ./op-dripper/... ./op-devstack/... ./op-deployer/pkg/deployer/artifacts/... ./op-deployer/pkg/deployer/broadcaster/... ./op-deployer/pkg/deployer/clean/... ./op-deployer/pkg/deployer/integration_test/ ./op-deployer/pkg/deployer/integration_test/cli/... ./op-deployer/pkg/deployer/standard/... ./op-deployer/pkg/deployer/state/... ./op-deployer/pkg/deployer/verify/... ./op-sync-tester/... ./op-supernode/..."
 
 FRAUD_PROOF_TEST_PKGS := "./op-e2e/faultproofs/..."
 
@@ -17,6 +17,13 @@ ALL_TEST_PACKAGES := TEST_PKGS + " " + RPC_TEST_PKGS + " " + FRAUD_PROOF_TEST_PK
 # Lists all available targets.
 help:
   @just --list
+
+# Builds op-core/superchain/superchain-configs.zip from the pinned commit in
+# op-core/superchain/superchain-registry-commit.txt. The zip is gitignored;
+# this recipe is the way to (re)materialise it for builds and tests. Skips work
+# if the existing zip already pins the same commit.
+sync-superchain:
+  bash op-core/superchain/sync-superchain.sh
 
 # Builds Go components and contracts-bedrock.
 build: build-go build-contracts
@@ -33,12 +40,12 @@ build-customlint:
   cd linter && just build
 
 # Lints Go code with specific linters.
-lint-go: build-customlint
+lint-go: build-customlint sync-superchain
   ./linter/bin/op-golangci-lint run ./...
   go mod tidy -diff
 
 # Lints Go code with specific linters and fixes reported issues.
-lint-go-fix: build-customlint
+lint-go-fix: build-customlint sync-superchain
   ./linter/bin/op-golangci-lint run ./... --fix
 
 # Checks that op-geth version in go.mod is valid.
@@ -56,7 +63,7 @@ golang-docker:
       --progress plain \
       --load \
       -f docker-bake.hcl \
-      op-node op-batcher op-proposer op-challenger op-dispute-mon op-supervisor
+      op-node op-batcher op-proposer op-challenger op-dispute-mon
 
 # Removes the Docker buildx builder.
 docker-builder-clean:
@@ -187,7 +194,7 @@ cannon-prestates: cannon op-program
 # Cleans up unused dependencies in Go modules.
 # Bypasses the Go module proxy for freshly released versions.
 # See https://proxy.golang.org/ for more info.
-mod-tidy:
+mod-tidy: sync-superchain
   GOPRIVATE="github.com/ethereum-optimism" go mod tidy
 
 # Removes all generated files under bin/.
@@ -232,7 +239,7 @@ make-pre-test:
 
 # Runs comprehensive Go tests across all packages.
 [script('bash')]
-go-tests: op-program-client op-program-host cannon build-contracts cannon-prestates make-pre-test
+go-tests: op-program-client op-program-host cannon build-contracts cannon-prestates make-pre-test sync-superchain
   set -euo pipefail
   export ENABLE_KURTOSIS=true
   export OP_E2E_CANNON_ENABLED="false"
@@ -243,7 +250,7 @@ go-tests: op-program-client op-program-host cannon build-contracts cannon-presta
 
 # Runs comprehensive Go tests with -short flag.
 [script('bash')]
-go-tests-short: op-program-client op-program-host cannon build-contracts cannon-prestates make-pre-test
+go-tests-short: op-program-client op-program-host cannon build-contracts cannon-prestates make-pre-test sync-superchain
   set -euo pipefail
   export ENABLE_KURTOSIS=true
   export OP_E2E_CANNON_ENABLED="false"
@@ -254,7 +261,7 @@ go-tests-short: op-program-client op-program-host cannon build-contracts cannon-
 
 # Internal: runs Go tests with gotestsum for CI.
 [script('bash')]
-_go-tests-ci-internal go_test_flags="":
+_go-tests-ci-internal go_test_flags="": sync-superchain
   set -euo pipefail
   (cd cannon && just cannon elf)
   echo "Setting up test directories..."
@@ -266,8 +273,7 @@ _go-tests-ci-internal go_test_flags="":
   export ENABLE_ANVIL=true
   export PARALLEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
   export OP_TESTLOG_FILE_LOGGER_OUTDIR=$(realpath ./tmp/testlogs)
-  export SEPOLIA_RPC_URL="https://ci-sepolia-l1-archive.optimism.io"
-  export MAINNET_RPC_URL="https://ci-mainnet-l1-archive.optimism.io"
+  source ./ops/scripts/source-ci-archive-rpcs.sh
   export NAT_INTEROP_LOADTEST_TARGET=10
   export NAT_INTEROP_LOADTEST_TIMEOUT=30s
   ALL_PACKAGES="{{ALL_TEST_PACKAGES}}"
@@ -277,25 +283,25 @@ _go-tests-ci-internal go_test_flags="":
       PARALLEL_PACKAGES=$(echo "$ALL_PACKAGES" | tr ' ' '\n' | awk -v idx="$NODE_INDEX" -v total="$NODE_TOTAL" 'NR % total == idx' | tr '\n' ' ')
       if [ -n "$PARALLEL_PACKAGES" ]; then
           echo "Node $NODE_INDEX/$NODE_TOTAL running packages: $PARALLEL_PACKAGES"
-          ./ops/scripts/gotestsum-split.sh --format=testname \
+          ./ops/scripts/gotestsum-split.sh --format=standard-verbose \
               --junitfile=./tmp/test-results/results-"$NODE_INDEX".xml \
               --jsonfile=./tmp/testlogs/log-"$NODE_INDEX".json \
               --rerun-fails=3 \
               --rerun-fails-max-failures=50 \
               --packages="$PARALLEL_PACKAGES" \
-              -- -parallel="$PARALLEL" -coverprofile=coverage-"$NODE_INDEX".out {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
+              -- -p=4 -parallel="$PARALLEL" {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
       else
           echo "ERROR: Node $NODE_INDEX/$NODE_TOTAL has no packages to run! Perhaps parallelism is set too high? (ALL_TEST_PACKAGES has $(echo "$ALL_PACKAGES" | wc -w) packages)"
           exit 1
       fi
   else
-      ./ops/scripts/gotestsum-split.sh --format=testname \
+      ./ops/scripts/gotestsum-split.sh --format=standard-verbose \
           --junitfile=./tmp/test-results/results.xml \
           --jsonfile=./tmp/testlogs/log.json \
           --rerun-fails=3 \
           --rerun-fails-max-failures=50 \
           --packages="$ALL_PACKAGES" \
-          -- -parallel="$PARALLEL" -coverprofile=coverage.out {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
+          -- -p=4 -parallel="$PARALLEL" {{go_test_flags}} -timeout={{TEST_TIMEOUT}} -tags="ci"
   fi
 
 # Runs short Go tests with gotestsum for CI.
@@ -305,10 +311,6 @@ go-tests-short-ci:
 # Runs comprehensive Go tests with gotestsum for CI.
 go-tests-ci:
   just _go-tests-ci-internal ""
-
-# Runs action tests for kona with gotestsum for CI.
-go-tests-ci-kona-action:
-  just _go-tests-ci-internal "-count=1 -timeout 60m -run Test_ProgramAction"
 
 # Runs fraud proofs Go tests with gotestsum for CI.
 [script('bash')]
@@ -323,17 +325,16 @@ go-tests-fraud-proofs-ci:
   export ENABLE_ANVIL=true
   export PARALLEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
   export OP_TESTLOG_FILE_LOGGER_OUTDIR=$(realpath ./tmp/testlogs)
-  export SEPOLIA_RPC_URL="https://ci-sepolia-l1-archive.optimism.io"
-  export MAINNET_RPC_URL="https://ci-mainnet-l1-archive.optimism.io"
+  source ./ops/scripts/source-ci-archive-rpcs.sh
   export NAT_INTEROP_LOADTEST_TARGET=10
   export NAT_INTEROP_LOADTEST_TIMEOUT=30s
-  ./ops/scripts/gotestsum-split.sh --format=testname \
+  ./ops/scripts/gotestsum-split.sh --format=standard-verbose \
       --junitfile=./tmp/test-results/results.xml \
       --jsonfile=./tmp/testlogs/log.json \
       --rerun-fails=3 \
       --rerun-fails-max-failures=50 \
       --packages="{{FRAUD_PROOF_TEST_PKGS}}" \
-      -- -parallel="$PARALLEL" -coverprofile=coverage.out -timeout={{TEST_TIMEOUT}}
+      -- -parallel="$PARALLEL" -timeout={{TEST_TIMEOUT}}
 
 # Runs comprehensive Go tests (alias for go-tests).
 test: go-tests
@@ -344,17 +345,26 @@ update-op-geth:
 
 # Build all Rust binaries (release) for sysgo tests.
 build-rust-release:
-  cd rust && cargo build --release --bin kona-node --bin kona-supervisor
-  cd op-rbuilder && cargo build --release -p op-rbuilder --bin op-rbuilder
-  cd rollup-boost && cargo build --release -p rollup-boost --bin rollup-boost
+  cd rust && cargo build --release --bin kona-node --bin kona-host --bin op-reth
+  cd rust/op-rbuilder && cargo build --release -p op-rbuilder --bin op-rbuilder
+  cd rust/rollup-boost && cargo build --release -p rollup-boost --bin rollup-boost
+
+# Checks that locked NUT bundles have not been modified.
+check-nut-locks:
+  go run ./ops/scripts/check-nut-locks
+
+# Snapshots current-upgrade-bundle.json as a fork's NUT bundle and updates the lock file.
+nut-snapshot-for fork:
+  go run ./ops/scripts/nut-snapshot-for {{fork}}
+
+# Verifies a fork's NUT bundle was correctly built from its recorded commit.
+nut-provenance-verify fork:
+  go run ./ops/scripts/nut-provenance-verify {{fork}}
+
 
 # Checks that TODO comments have corresponding issues.
 todo-checker:
   ./ops/scripts/todo-checker.sh
-
-# Runs semgrep on the entire monorepo.
-semgrep:
-  semgrep scan --config .semgrep/rules/ --error .
 
 # Runs semgrep tests.
 semgrep-test:
@@ -362,12 +372,12 @@ semgrep-test:
 
 # Runs shellcheck.
 shellcheck:
-  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -exec sh -c 'echo "Checking $1"; shellcheck "$1"' _ {} \;
-  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -exec shfmt --diff {} \;
+  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -not -path './docs/public-docs/*' -exec sh -c 'echo "Checking $1"; shellcheck "$1"' _ {} \;
+  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -not -path './docs/public-docs/*' -exec shfmt --diff {} \;
 
 # Format shell scripts with shfmt.
 shfmt-fix:
-  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -exec shfmt --write {} \;
+  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -not -path './docs/public-docs/*' -exec shfmt --write {} \;
 
 # Generates a table of contents for the README.md file.
 toc:
@@ -377,16 +387,112 @@ latest-versions:
   ./ops/scripts/latest-versions.sh
 
 # Usage:
-#   just update-op-geth 2f0528b
-#   just update-op-geth v1.101602.4
-#   just update-op-geth optimism
-update-op-geth ref:
-	@ref="{{ref}}"; \
-	if [ -z "$ref" ]; then echo "error: provide a hash/tag/branch"; exit 1; fi; \
-	tmpl=$(printf "\173\173.Version\175\175"); \
-	ver=$(go list -m -f "$tmpl" github.com/ethereum-optimism/op-geth@"$ref"); \
-	if [ -z "$ver" ]; then echo "error: couldn't resolve $ref"; exit 1; fi; \
-	go mod edit -replace=github.com/ethereum/go-ethereum=github.com/ethereum-optimism/op-geth@"$ver"; \
-	go mod tidy; \
-	echo "Updated op-geth to $ver"
+#   just update-op-geth-ref 2f0528b
+#   just update-op-geth-ref v1.101602.4
+#   just update-op-geth-ref optimism
+[script('bash')]
+update-op-geth-ref ref:
+    set -euo pipefail
+    ref="{{ref}}"
+    if [ -z "$ref" ]; then echo "error: provide a hash/tag/branch"; exit 1; fi
+    tmpl=$(printf "\173\173.Version\175\175")
+    ver=$(go list -m -f "$tmpl" github.com/ethereum-optimism/op-geth@"$ref")
+    if [ -z "$ver" ]; then echo "error: couldn't resolve $ref"; exit 1; fi
+    go mod edit -replace=github.com/ethereum/go-ethereum=github.com/ethereum-optimism/op-geth@"$ver"
+    go mod tidy
+    echo "Updated op-geth to $ver"
 
+# Prints the latest stable semver tag for a component (excludes pre-releases).
+latest-tag component:
+    @git tag -l '{{ component }}/v*' --sort=-v:refname | grep -E '^[^/]+/v[0-9]+\.[0-9]+\.[0-9]+$' | head -1
+
+# Prints the latest RC tag for a component.
+latest-rc-tag component:
+    @git tag -l '{{ component }}/v*' --sort=-v:refname | grep -E '^[^/]+/v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | head -1
+
+# Generates release notes between two tags using git-cliff.
+# <from> and <to> can be explicit tags (e.g. v1.16.5), or:
+#   'latest'    - resolves to the latest stable tag (vX.Y.Z)
+#   'latest-rc' - resolves to the latest RC tag (vX.Y.Z-rc.N)
+#   'develop'   - (only for <to>) uses the develop branch tip with --unreleased
+#
+# Set <mode> to 'offline' to skip GitHub API calls (faster, but no PR metadata).
+#
+# Examples:
+#   just release-notes op-node                          # latest stable -> latest RC (default)
+#   just release-notes op-node latest develop           # all unreleased changes since the latest stable release
+#   just release-notes op-node latest develop offline   # same, but without GitHub API calls
+#   just release-notes op-node v1.16.5 v1.16.6          # explicit tags
+#
+# Requires GITHUB_TOKEN for git-cliff's GitHub integration (unless mode=offline):
+#   GITHUB_TOKEN=$(gh auth token) just release-notes op-node
+[script('zsh')]
+release-notes component from='latest' to='latest-rc' mode='':
+    set -euo pipefail
+    if [ "{{ mode }}" != "offline" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+        echo "warning: GITHUB_TOKEN is not set. Set it like: GITHUB_TOKEN=\$(gh auth token) just release-notes ..."
+        exit 1
+    fi
+    resolve_tag() {
+        case "$1" in
+            latest)    git tag -l "{{ component }}/v*" --sort=-v:refname | grep -E '^[^/]+/v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 ;;
+            latest-rc) git tag -l "{{ component }}/v*" --sort=-v:refname | grep -E '^[^/]+/v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | head -1 ;;
+            v[0-9]*) echo "{{ component }}/$1" ;;
+            *)       echo "error: invalid tag '$1'; expected 'latest', 'latest-rc', or 'vX.Y.Z...'" >&2; return 1 ;;
+        esac
+    }
+    from_tag=$(resolve_tag "{{ from }}")
+    if [ -z "$from_tag" ]; then echo "error: could not resolve from tag '{{ from }}' for {{ component }}"; exit 1; fi
+    include_path_args=()
+    case "{{ component }}" in
+        op-node|op-batcher|op-proposer|op-challenger)
+            include_path_args=(
+                --include-path "{{ component }}/**/*"
+                --include-path "go.*"
+                --include-path "op-core/**/*"
+                --include-path "op-service/**/*"
+            )
+            ;;
+        op-reth)
+            include_path_args=(
+                --include-path "rust/{{ component }}/**/*"
+                --include-path "rust/Cargo.toml"
+                --include-path "rust/op-alloy/**/*"
+                --include-path "rust/alloy-op*/**/*"
+            )
+            ;;
+        kona-*)
+            include_path_args=(
+                --include-path "rust/kona/**/*"
+                --include-path "rust/Cargo.toml"
+                --include-path "rust/op-alloy/**/*"
+                --include-path "rust/alloy-op*/**/*"
+            )
+            ;;
+        *)
+            echo "error: component must be one of: op-node, op-batcher, op-proposer, op-challenger, op-reth, kona-*; is {{ component }}"
+            exit 1
+            ;;
+    esac
+    tag_args=()
+    if [ "{{ to }}" = "develop" ]; then
+        tag_args=(--unreleased)
+        range_end="develop"
+    else
+        to_tag=$(resolve_tag "{{ to }}")
+        if [ -z "$to_tag" ]; then echo "error: could not resolve to tag '{{ to }}' for {{ component }}"; exit 1; fi
+        tag_args=(--tag "$to_tag")
+        range_end="$to_tag"
+    fi
+    echo "Generating release notes for ${from_tag}..${range_end}"
+    offline_args=()
+    if [ "{{ mode }}" = "offline" ]; then
+        offline_args=(--offline)
+    fi
+    git cliff \
+        --config .github/cliff.toml \
+        "${include_path_args[@]}" \
+        --tag-pattern "${from_tag}" \
+        "${tag_args[@]}" \
+        "${offline_args[@]}" \
+        -- "${from_tag}..${range_end}"

@@ -56,11 +56,17 @@ pub use chain::{
     HardForkConfig, L1ChainConfig, OP_MAINNET_CHAIN_ID, OP_SEPOLIA_CHAIN_ID, Roles,
 };
 
+pub mod interop;
+pub use interop::{
+    ChainDependency, ClusterError, DependencySet, InteropConfig, MESSAGE_EXPIRY_WINDOW,
+    aggregate_clusters,
+};
+
 mod genesis;
 pub use genesis::ChainGenesis;
 
 mod rollup;
 pub use rollup::{
-    DEFAULT_INTEROP_MESSAGE_EXPIRY_WINDOW, FJORD_MAX_SEQUENCER_DRIFT, GRANITE_CHANNEL_TIMEOUT,
-    MAX_RLP_BYTES_PER_CHANNEL_BEDROCK, MAX_RLP_BYTES_PER_CHANNEL_FJORD, RollupConfig,
+    FJORD_MAX_SEQUENCER_DRIFT, GRANITE_CHANNEL_TIMEOUT, MAX_RLP_BYTES_PER_CHANNEL_BEDROCK,
+    MAX_RLP_BYTES_PER_CHANNEL_FJORD, RollupConfig,
 };

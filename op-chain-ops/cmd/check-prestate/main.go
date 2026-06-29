@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -18,7 +20,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/superchain"
 	"github.com/mattn/go-isatty"
-	"golang.org/x/exp/maps"
 )
 
 type FPProgramType interface {
@@ -65,7 +66,7 @@ func main() {
 		chainFilter = func(chainName string) bool {
 			return chains[chainName]
 		}
-		filteredChainNames = maps.Keys(chains)
+		filteredChainNames = slices.Collect(maps.Keys(chains))
 	}
 	prestateHash := common.HexToHash(prestateHashStr)
 	if prestateHash == (common.Hash{}) {
@@ -115,8 +116,8 @@ func main() {
 	}
 
 	knownChains := make(map[string]bool)
-	supportedChains := make([]string, 0) // Not null for json serialization
-	outdatedChains := make(map[string]types.OutdatedChain)
+	supportedChains := make([]string, 0)             // Not null for json serialization
+	outdatedChains := make([]types.OutdatedChain, 0) // Not null for json serialization
 	for _, name := range prestateNames {
 		if !chainFilter(name) {
 			continue
@@ -127,10 +128,10 @@ func main() {
 			log.Crit("Failed to check config", "chain", name, "err", err)
 		}
 		if diff != nil {
-			outdatedChains[name] = types.OutdatedChain{
+			outdatedChains = append(outdatedChains, types.OutdatedChain{
 				Name: name,
 				Diff: diff,
-			}
+			})
 		} else {
 			supportedChains = append(supportedChains, name)
 		}
@@ -158,7 +159,7 @@ func main() {
 		ExecutionClient:    elCommitInfo,
 		SuperchainRegistry: commitInfo("superchain-registry", commit, "main", "superchain"),
 		UpToDateChains:     supportedChains,
-		OutdatedChains:     maps.Values(outdatedChains),
+		OutdatedChains:     outdatedChains,
 		MissingChains:      missingChains,
 	}
 	encoder := json.NewEncoder(os.Stdout)

@@ -16,6 +16,7 @@ import { DisputeActor, HonestDisputeActor } from "test/actors/FaultDisputeActors
 // Libraries
 import { Types } from "src/libraries/Types.sol";
 import { Hashing } from "src/libraries/Hashing.sol";
+import { DevFeatures } from "src/libraries/DevFeatures.sol";
 import { RLPWriter } from "src/libraries/rlp/RLPWriter.sol";
 import { LibClock } from "src/dispute/lib/LibUDT.sol";
 import { LibPosition } from "src/dispute/lib/LibPosition.sol";
@@ -62,6 +63,11 @@ function _changeClaimStatus(Claim _claim, VMStatus _status) pure returns (Claim 
     }
 }
 
+/// @notice Helper to return a pseudo-random claim.
+function _dummyClaim() view returns (Claim) {
+    return Claim.wrap(keccak256(abi.encode(gasleft())));
+}
+
 /// @title BaseFaultDisputeGame_TestInit
 /// @notice Base test initializer that can be used by other contracts outside of this test suite.
 abstract contract BaseFaultDisputeGame_TestInit is DisputeGameFactory_TestInit {
@@ -86,7 +92,7 @@ abstract contract BaseFaultDisputeGame_TestInit is DisputeGameFactory_TestInit {
 
     function init(Claim rootClaim, Claim absolutePrestate, uint256 l2BlockNumber) public {
         // Set the time to a realistic date.
-        if (!isForkTest()) {
+        if (!isL1ForkTest()) {
             vm.warp(1690906994);
         }
 
@@ -145,7 +151,7 @@ abstract contract FaultDisputeGame_TestInit is BaseFaultDisputeGame_TestInit {
     /// @dev The root claim of the game.
     Claim internal ROOT_CLAIM;
     /// @dev An arbitrary root claim for testing.
-    Claim internal arbitaryRootClaim = Claim.wrap(bytes32(uint256(123)));
+    Claim internal arbitraryRootClaim = Claim.wrap(bytes32(uint256(123)));
 
     /// @dev The preimage of the absolute prestate claim
     bytes internal absolutePrestateData;
@@ -208,11 +214,6 @@ abstract contract FaultDisputeGame_TestInit is BaseFaultDisputeGame_TestInit {
         (,,,,, Position parent,) = gameProxy.claimData(_claimIndex);
         Position pos = parent.move(true);
         bond_ = gameProxy.getRequiredBond(pos);
-    }
-
-    /// @notice Helper to return a pseudo-random claim
-    function _dummyClaim() internal view returns (Claim) {
-        return Claim.wrap(keccak256(abi.encode(gasleft())));
     }
 
     /// @notice Helper to get the localized key for an identifier in the context of the game proxy.
@@ -368,7 +369,7 @@ contract FaultDisputeGame_Initialize_Test is FaultDisputeGame_TestInit {
             payable(
                 address(
                     disputeGameFactory.create{ value: _value }(
-                        GAME_TYPE, arbitaryRootClaim, abi.encode(validL2BlockNumber)
+                        GAME_TYPE, arbitraryRootClaim, abi.encode(validL2BlockNumber)
                     )
                 )
             )
@@ -1914,8 +1915,8 @@ contract FaultDisputeGame_Resolve_Test is FaultDisputeGame_TestInit {
         vm.deal(charlie, bal);
 
         // Make claims with bob, charlie and the test contract on defense, and alice as the
-        // challenger charlie is successfully countered by alice alice is successfully countered by
-        // both bob and the test contract
+        // challenger. Charlie is successfully countered by alice. Alice is successfully countered
+        // by both bob and the test contract.
         uint256 firstBond = _getRequiredBond(0);
         (,,,, Claim disputed,,) = gameProxy.claimData(0);
         vm.prank(alice);
@@ -1983,6 +1984,8 @@ contract FaultDisputeGame_Resolve_Test is FaultDisputeGame_TestInit {
     /// @notice Static unit test asserting that the anchor state updates when the game resolves in
     ///         favor of the defender and the anchor state is older than the game state.
     function test_resolve_validNewerStateUpdatesAnchor_succeeds() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
         // Confirm that the anchor state is older than the game state.
         (Hash root, uint256 l2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
         assert(l2BlockNumber < gameProxy.l2BlockNumber());
@@ -2381,6 +2384,8 @@ contract FaultDisputeGame_CloseGame_Test is FaultDisputeGame_TestInit {
 
     /// @notice Tests that closeGame succeeds for a proper game (normal distribution)
     function test_closeGame_properGame_succeeds() public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
         // Resolve the game
         vm.warp(block.timestamp + 3 days + 12 hours);
         gameProxy.resolveClaim(0, 0);
@@ -2452,6 +2457,8 @@ contract FaultDisputeGame_CloseGame_Test is FaultDisputeGame_TestInit {
     ///      AnchorStateRegistry but successfully execute the remainder of the function.
     /// @param _gas Amount of gas to provide to closeGame.
     function testFuzz_closeGame_canUpdateAnchorStateAndDoes_succeeds(uint256 _gas) public {
+        skipIfDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
         // Resolve and close the game first
         vm.warp(block.timestamp + 3 days + 12 hours);
         gameProxy.resolveClaim(0, 0);
@@ -3076,7 +3083,7 @@ contract FaultDispute_1v1_Actors_Test is FaultDisputeGame_TestInit {
     )
         internal
     {
-        if (isForkTest()) {
+        if (isL1ForkTest()) {
             // Mock the call anchorStateRegistry.getAnchorRoot() to return 0 as the block number
             (Hash root,) = anchorStateRegistry.getAnchorRoot();
             vm.mockCall(

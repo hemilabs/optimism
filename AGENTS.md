@@ -15,6 +15,9 @@ When this happens, offer to submit the improvement to the relevant file in `docs
 
 ## Repository Overview
 
+- **Default branch**: `develop` (not `main`)
+- **Build system**: migrating from Make to [Just](https://github.com/casey/just) — shared justfile infra lives in `justfiles/`
+
 This repository contains multiple components spanning different technologies:
 
 ### Go Services
@@ -26,7 +29,7 @@ The rollup node software and associated services, including:
 - **op-proposer**: L2 output submitter
 - **op-challenger**: Dispute game challenge agent
 - **op-conductor**: High-availability sequencer service
-- **op-supervisor**: Cross-chain message safety monitor (DEPRECATED)
+- **op-supernode**: Multi-chain consensus-layer host that runs multiple OP Stack chains in a single process and performs in-process cross-chain safety verification
 
 ### Smart Contracts (`packages/contracts-bedrock`)
 
@@ -51,14 +54,24 @@ The OP Stack includes significant Rust implementations:
 - **op-e2e**: End-to-end testing framework
 - **op-acceptance-tests**: Acceptance test suite
 
+## Subdirectory Instructions
+
+Some subdirectories have their own CLAUDE.md with domain-specific conventions. Read the relevant file before working in that area — do not read them all upfront.
+
+- `rust/kona/CLAUDE.md` — Kona Rust workspace: build commands (`just b/t/l/f`), code style, architecture overview
+
 ## Additional Documentation
 
 More detailed guidance for AI agents can be found in:
 
 - [docs/ai/ci-ops.md](docs/ai/ci-ops.md) - CI/CD operations
 - [docs/ai/contract-dev.md](docs/ai/contract-dev.md) - Smart contract development
+- [docs/ai/flake-prevention.md](docs/ai/flake-prevention.md) - Guidance for preventing flaky tests
 - [docs/ai/go-dev.md](docs/ai/go-dev.md) - Go service development
 - [docs/ai/rust-dev.md](docs/ai/rust-dev.md) - Rust development (kona, op-reth, alloy crates)
+- [docs/ai/acceptance-tests.md](docs/ai/acceptance-tests.md) - Building and running acceptance tests locally
+- [docs/ai/writing-acceptance-tests.md](docs/ai/writing-acceptance-tests.md) - Writing new acceptance tests: DSL patterns, naming, what to avoid
+- [docs/ai/opgeth-decoupling.md](docs/ai/opgeth-decoupling.md) - op-geth decoupling plan: consult when migrating OP Stack–specific code out of op-geth into `op-core/*` so the monorepo can depend on upstream go-ethereum (scope: op-node, op-service, op-batcher, op-proposer, op-challenger, op-faucet, op-supernode, cannon, op-e2e, op-acceptance-tests, op-devstack)
 
 ## External References
 

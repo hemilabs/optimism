@@ -14,11 +14,11 @@ import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 import { Constants } from "src/libraries/Constants.sol";
 import { Types } from "scripts/libraries/Types.sol";
 import { Blueprint } from "src/libraries/Blueprint.sol";
-import { GameTypes } from "src/dispute/lib/Types.sol";
+import { GameType, GameTypes } from "src/dispute/lib/Types.sol";
 import { Hash } from "src/dispute/lib/Types.sol";
-
 // Interfaces
-import { IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
 import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
@@ -26,15 +26,17 @@ import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.s
 import { IOptimismPortal2 as IOptimismPortal } from "interfaces/L1/IOptimismPortal2.sol";
 import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
-import { ProtocolVersion, IProtocolVersions } from "interfaces/L1/IProtocolVersions.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IPreimageOracle } from "interfaces/cannon/IPreimageOracle.sol";
 import { IMIPS64 } from "interfaces/cannon/IMIPS64.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
-import { IProxyAdminOwnedBase } from "interfaces/L1/IProxyAdminOwnedBase.sol";
+import { IProxyAdminOwnedBase } from "interfaces/universal/IProxyAdminOwnedBase.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
+import { IZKDisputeGame } from "interfaces/dispute/zk/IZKDisputeGame.sol";
 
 library ChainAssertions {
     Vm internal constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
@@ -110,7 +112,9 @@ library ChainAssertions {
         // Depends on start block being set to 0 in `initialize`
         require(config.startBlock() == block.number, "CHECK-SCFG-140");
         require(
-            config.batchInbox() == IOPContractsManager(_doi.opcm).chainIdToBatchInboxAddress(_doi.l2ChainId),
+            config.batchInbox()
+                == IOPContractsManagerUtils(IOPContractsManagerV2(address(_doi.opcm)).opcmUtils())
+                    .chainIdToBatchInboxAddress(_doi.l2ChainId),
             "CHECK-SCFG-150"
         );
         // Check _addresses
@@ -171,12 +175,13 @@ library ChainAssertions {
         require(address(_bridge.systemConfig()) == address(0), "CHECK-L1SB-110");
     }
 
-    /// @notice Asserts that the DisputeGameFactory is setup correctly
+    /// @notice Asserts that the DisputeGameFactory is setup correctly with a specific game type.
     function checkDisputeGameFactory(
         IDisputeGameFactory _factory,
         address _expectedOwner,
         address _permissionedDisputeGame,
-        bool _isProxy
+        bool _isProxy,
+        GameType _permGameType
     )
         internal
         view
@@ -192,11 +197,9 @@ library ChainAssertions {
         DeployUtils.assertInitialized({ _contractAddress: address(_factory), _isProxy: _isProxy, _slot: 0, _offset: 0 });
 
         if (_isProxy) {
-            require(
-                address(_factory.gameImpls(GameTypes.PERMISSIONED_CANNON)) == _permissionedDisputeGame, "CHECK-DG-20"
-            );
+            require(address(_factory.gameImpls(_permGameType)) == _permissionedDisputeGame, "CHECK-DG-20");
         } else {
-            require(address(_factory.gameImpls(GameTypes.PERMISSIONED_CANNON)) == address(0), "CHECK-DG-20");
+            require(address(_factory.gameImpls(_permGameType)) == address(0), "CHECK-DG-20");
             // The same check is made for both proxy and implementation
             require(_factory.owner() == _expectedOwner, "CHECK-DG-30");
         }
@@ -308,37 +311,6 @@ library ChainAssertions {
         require(_ethLockbox.authorizedPortals(_portal) == false, "CHECK-ELB-60");
     }
 
-    /// @notice Asserts that the ProtocolVersions is setup correctly
-    function checkProtocolVersions(
-        Types.ContractSet memory _contracts,
-        DeployConfig _cfg,
-        bool _isProxy
-    )
-        internal
-        view
-    {
-        IProtocolVersions versions = IProtocolVersions(_contracts.ProtocolVersions);
-        console.log(
-            "Running chain assertions on the ProtocolVersions %s at %s",
-            _isProxy ? "proxy" : "implementation",
-            address(versions)
-        );
-        require(address(versions) != address(0), "CHECK-PV-10");
-
-        // Check that the contract is initialized
-        DeployUtils.assertInitialized({ _contractAddress: address(versions), _isProxy: _isProxy, _slot: 0, _offset: 0 });
-
-        if (_isProxy) {
-            require(versions.owner() == _cfg.finalSystemOwner(), "CHECK-PV-20");
-            require(ProtocolVersion.unwrap(versions.required()) == _cfg.requiredProtocolVersion(), "CHECK-PV-30");
-            require(ProtocolVersion.unwrap(versions.recommended()) == _cfg.recommendedProtocolVersion(), "CHECK-PV-40");
-        } else {
-            require(versions.owner() == address(0), "CHECK-PV-50");
-            require(ProtocolVersion.unwrap(versions.required()) == 0, "CHECK-PV-60");
-            require(ProtocolVersion.unwrap(versions.recommended()) == 0, "CHECK-PV-70");
-        }
-    }
-
     /// @notice Asserts that the SuperchainConfig is setup correctly
     function checkSuperchainConfig(
         Types.ContractSet memory _contracts,
@@ -374,8 +346,7 @@ library ChainAssertions {
     /// @notice Asserts that the OPContractsManager is setup correctly
     function checkOPContractsManager(
         Types.ContractSet memory _impls,
-        Types.ContractSet memory _proxies,
-        IOPContractsManager _opcm,
+        IOPContractsManagerV2 _opcm,
         IMIPS64 _mips
     )
         internal
@@ -385,11 +356,8 @@ library ChainAssertions {
         require(address(_opcm) != address(0), "CHECK-OPCM-10");
 
         require(bytes(_opcm.version()).length > 0, "CHECK-OPCM-15");
-        require(address(_opcm.protocolVersions()) == _proxies.ProtocolVersions, "CHECK-OPCM-17");
-        require(address(_opcm.superchainConfig()) == _proxies.SuperchainConfig, "CHECK-OPCM-19");
-
         // Ensure that the OPCM impls are correctly saved
-        IOPContractsManager.Implementations memory impls = _opcm.implementations();
+        IOPContractsManagerContainer.Implementations memory impls = _opcm.implementations();
         require(impls.l1ERC721BridgeImpl == _impls.L1ERC721Bridge, "CHECK-OPCM-50");
         require(impls.optimismPortalImpl == _impls.OptimismPortal, "CHECK-OPCM-60");
         require(impls.systemConfigImpl == _impls.SystemConfig, "CHECK-OPCM-70");
@@ -400,31 +368,38 @@ library ChainAssertions {
         require(impls.delayedWETHImpl == _impls.DelayedWETH, "CHECK-OPCM-120");
         require(impls.mipsImpl == address(_mips), "CHECK-OPCM-130");
         require(impls.superchainConfigImpl == _impls.SuperchainConfig, "CHECK-OPCM-140");
-        require(impls.protocolVersionsImpl == _impls.ProtocolVersions, "CHECK-OPCM-150");
 
         // Verify that initCode is correctly set into the blueprints
-        IOPContractsManager.Blueprints memory blueprints = _opcm.blueprints();
+        IOPContractsManagerContainer.Blueprints memory blueprints = _opcm.blueprints();
         Blueprint.Preamble memory addressManagerPreamble =
             Blueprint.parseBlueprintPreamble(address(blueprints.addressManager).code);
-        require(keccak256(addressManagerPreamble.initcode) == keccak256(vm.getCode("AddressManager")), "CHECK-OPCM-160");
+        require(
+            keccak256(addressManagerPreamble.initcode) == keccak256(DeployUtils.getCode("AddressManager")),
+            "CHECK-OPCM-160"
+        );
 
         Blueprint.Preamble memory proxyPreamble = Blueprint.parseBlueprintPreamble(address(blueprints.proxy).code);
-        require(keccak256(proxyPreamble.initcode) == keccak256(vm.getCode("Proxy")), "CHECK-OPCM-170");
+        require(keccak256(proxyPreamble.initcode) == keccak256(DeployUtils.getCode("Proxy")), "CHECK-OPCM-170");
 
         Blueprint.Preamble memory proxyAdminPreamble =
             Blueprint.parseBlueprintPreamble(address(blueprints.proxyAdmin).code);
-        require(keccak256(proxyAdminPreamble.initcode) == keccak256(vm.getCode("ProxyAdmin")), "CHECK-OPCM-180");
+        require(
+            keccak256(proxyAdminPreamble.initcode) == keccak256(DeployUtils.getCode("ProxyAdmin")), "CHECK-OPCM-180"
+        );
 
         Blueprint.Preamble memory l1ChugSplashProxyPreamble =
             Blueprint.parseBlueprintPreamble(address(blueprints.l1ChugSplashProxy).code);
         require(
-            keccak256(l1ChugSplashProxyPreamble.initcode) == keccak256(vm.getCode("L1ChugSplashProxy")),
+            keccak256(l1ChugSplashProxyPreamble.initcode) == keccak256(DeployUtils.getCode("L1ChugSplashProxy")),
             "CHECK-OPCM-190"
         );
 
         Blueprint.Preamble memory rdProxyPreamble =
             Blueprint.parseBlueprintPreamble(address(blueprints.resolvedDelegateProxy).code);
-        require(keccak256(rdProxyPreamble.initcode) == keccak256(vm.getCode("ResolvedDelegateProxy")), "CHECK-OPCM-200");
+        require(
+            keccak256(rdProxyPreamble.initcode) == keccak256(DeployUtils.getCode("ResolvedDelegateProxy")),
+            "CHECK-OPCM-200"
+        );
     }
 
     function checkAnchorStateRegistryProxy(IAnchorStateRegistry _anchorStateRegistryProxy, bool _isProxy) internal {
@@ -452,6 +427,13 @@ library ChainAssertions {
         }
     }
 
+    /// @notice Asserts that the ZKDisputeGame implementation is setup correctly.
+    function checkZKDisputeGameImpl(IZKDisputeGame _impl) internal view {
+        console.log("Running chain assertions on the ZKDisputeGame implementation at %s", address(_impl));
+        require(address(_impl) != address(0), "CHECK-ZKDG-10");
+        require(bytes(_impl.version()).length > 0, "CHECK-ZKDG-20");
+    }
+
     /// @notice Converts variables needed from the DeployConfig to a DeployOPChainInput contract
     function dioToContractSet(DeployImplementations.Output memory _output)
         internal
@@ -471,7 +453,6 @@ library ChainAssertions {
             ETHLockbox: address(_output.ethLockboxImpl),
             SystemConfig: address(_output.systemConfigImpl),
             L1ERC721Bridge: address(_output.l1ERC721BridgeImpl),
-            ProtocolVersions: address(_output.protocolVersionsImpl),
             SuperchainConfig: address(_output.superchainConfigImpl)
         });
     }

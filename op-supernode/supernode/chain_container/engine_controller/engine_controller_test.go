@@ -2,17 +2,19 @@ package engine_controller
 
 import (
 	"context"
-	"math/big"
+	"fmt"
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	gethlog "github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 )
 
-// unified mock covers both payload/output paths and SafeBlockAtTimestamp path
+// unified mock covers both payload/output paths and BlockAtTimestamp path
 
 func TestOutputV0AtBlockNumber_UsesPayloadWhenAvailable(t *testing.T) {
 	t.Parallel()
@@ -48,6 +50,86 @@ func TestOutputV0AtBlockNumber_FallsBackWithoutWithdrawalsRoot(t *testing.T) {
 	require.Equal(t, 1, l2.outputCalls)
 }
 
+func TestOutputV0ByBlockHash_PostIsthmus(t *testing.T) {
+	t.Parallel()
+	hash := common.Hash{0xaa}
+	l2 := &mockL2{
+		payload: &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{
+			StateRoot:       eth.Bytes32{0xaa},
+			WithdrawalsRoot: func() *common.Hash { h := common.Hash{0xbb}; return &h }(),
+			BlockHash:       hash,
+		}},
+	}
+	ec := &simpleEngineController{l2: l2, rollup: &rollup.Config{}, log: gethlog.New()}
+	out, err := ec.OutputV0ByBlockHash(context.Background(), hash)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Equal(t, hash, out.BlockHash)
+	require.Equal(t, 1, l2.payloadCalls)
+	require.Equal(t, 0, l2.outputCalls) // post-Isthmus: no eth_getProof fallback
+}
+
+func TestOutputV0ByBlockHash_PreIsthmus(t *testing.T) {
+	t.Parallel()
+	hash := common.Hash{0xaa}
+	l2 := &mockL2{
+		// pre-Isthmus: payload has nil WithdrawalsRoot, forces fallback to eth_getProof
+		payload: &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{BlockHash: hash}},
+		output:  &eth.OutputV0{StateRoot: eth.Bytes32{0x01}, MessagePasserStorageRoot: eth.Bytes32{0x02}, BlockHash: hash},
+	}
+	ec := &simpleEngineController{l2: l2, rollup: &rollup.Config{}, log: gethlog.New()}
+	out, err := ec.OutputV0ByBlockHash(context.Background(), hash)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Equal(t, 1, l2.payloadCalls)
+	require.Equal(t, 1, l2.outputCalls)
+}
+
+func TestOutputV0ByBlockHash_PayloadError(t *testing.T) {
+	t.Parallel()
+	hash := common.Hash{0xaa}
+	l2 := &mockL2{
+		payloadErr: fmt.Errorf("payload fetch failed"),
+		output:     &eth.OutputV0{BlockHash: hash},
+	}
+	ec := &simpleEngineController{l2: l2, rollup: &rollup.Config{}, log: gethlog.New()}
+	out, err := ec.OutputV0ByBlockHash(context.Background(), hash)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Equal(t, 1, l2.payloadCalls)
+	require.Equal(t, 1, l2.outputCalls) // fell back when PayloadByHash errored
+}
+
+func TestOutputV0ByBlockHash_NotFound(t *testing.T) {
+	t.Parallel()
+	hash := common.Hash{0xaa}
+	l2 := &mockL2{
+		payloadErr: ethereum.NotFound,
+		outputErr:  ethereum.NotFound,
+	}
+	ec := &simpleEngineController{l2: l2, rollup: &rollup.Config{}, log: gethlog.New()}
+	out, err := ec.OutputV0ByBlockHash(context.Background(), hash)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ethereum.NotFound)
+	require.Nil(t, out)
+}
+
+func TestOutputV0ByBlockHash_PreIsthmus_StatePruned(t *testing.T) {
+	t.Parallel()
+	hash := common.Hash{0xaa}
+	// Pre-Isthmus payload (nil WithdrawalsRoot) → falls through to
+	// l2.OutputV0AtBlock, which errors because the EL has pruned state.
+	// The transport error must propagate; it must NOT be silently swallowed.
+	l2 := &mockL2{
+		payload:   &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{BlockHash: hash}},
+		outputErr: fmt.Errorf("eth_getProof: missing trie node"),
+	}
+	ec := &simpleEngineController{l2: l2, rollup: &rollup.Config{}, log: gethlog.New()}
+	_, err := ec.OutputV0ByBlockHash(context.Background(), hash)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "eth_getProof")
+}
+
 type mockL2 struct {
 	// Block ref path
 	lastNum uint64
@@ -61,49 +143,129 @@ type mockL2 struct {
 	outputErr    error
 	payloadCalls int
 	outputCalls  int
+
+	// Block ref by label support
+	refsByLabel    map[eth.BlockLabel]eth.L2BlockRef
+	refByLabelErr  error
+	labelCallCount int
+	// labelOverrides, when set, overrides the label response for specific labels.
+	// Used by tests to simulate incorrect engine state for specific heads.
+	labelOverrides map[eth.BlockLabel]eth.L2BlockRef
+
+	// Block ref by number support (map for multiple blocks)
+	refsByNumber map[uint64]eth.L2BlockRef
+
+	// Payload by number support (map for multiple blocks)
+	payloadsByNumber map[uint64]*eth.ExecutionPayloadEnvelope
+
+	// NewPayload tracking
+	newPayloadCalls    int
+	newPayloadStatus   *eth.PayloadStatusV1
+	newPayloadStatuses []*eth.PayloadStatusV1 // per-call status overrides; entry i is used for the i-th call (1-indexed) when present and non-nil
+	newPayloadErr      error
+	lastNewPayload     *eth.ExecutionPayload
+
+	// ForkchoiceUpdate tracking
+	fcuCalls     int
+	fcuResult    *eth.ForkchoiceUpdatedResult
+	fcuErr       error
+	lastFCUState *eth.ForkchoiceState
 }
 
 func (m *mockL2) L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error) {
+	m.labelCallCount++
+	if m.refByLabelErr != nil {
+		return eth.L2BlockRef{}, m.refByLabelErr
+	}
+	// Test-injected overrides take priority — used to simulate incorrect engine state.
+	if m.labelOverrides != nil {
+		if ref, ok := m.labelOverrides[label]; ok {
+			return ref, nil
+		}
+	}
+	// After any FCU, return refs matching the last FCU state so verifyRewindState passes.
+	// This simulates a well-behaved engine that immediately reflects forkchoice updates.
+	if m.lastFCUState != nil {
+		var hash common.Hash
+		switch label {
+		case eth.Unsafe:
+			hash = m.lastFCUState.HeadBlockHash
+		case eth.Safe:
+			hash = m.lastFCUState.SafeBlockHash
+		case eth.Finalized:
+			hash = m.lastFCUState.FinalizedBlockHash
+		}
+		return eth.L2BlockRef{Hash: hash}, nil
+	}
+	if m.refsByLabel != nil {
+		if ref, ok := m.refsByLabel[label]; ok {
+			return ref, nil
+		}
+	}
 	return eth.L2BlockRef{Number: 999}, nil
 }
 func (m *mockL2) L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error) {
+	if m.refErr != nil {
+		return eth.L2BlockRef{}, m.refErr
+	}
 	m.lastNum = num
-	return m.ref, m.refErr
+	if m.refsByNumber != nil {
+		if ref, ok := m.refsByNumber[num]; ok {
+			return ref, nil
+		}
+	}
+	return m.ref, nil
 }
 func (m *mockL2) OutputV0AtBlockNumber(ctx context.Context, blockNum uint64) (*eth.OutputV0, error) {
 	m.outputCalls++
 	return m.output, m.outputErr
 }
+func (m *mockL2) OutputV0AtBlock(ctx context.Context, blockHash common.Hash) (*eth.OutputV0, error) {
+	m.outputCalls++
+	return m.output, m.outputErr
+}
 func (m *mockL2) PayloadByNumber(ctx context.Context, number uint64) (*eth.ExecutionPayloadEnvelope, error) {
+	m.payloadCalls++
+	if m.payloadsByNumber != nil {
+		if payload, ok := m.payloadsByNumber[number]; ok {
+			return payload, nil
+		}
+	}
+	return m.payload, m.payloadErr
+}
+func (m *mockL2) PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error) {
 	m.payloadCalls++
 	return m.payload, m.payloadErr
 }
+func (m *mockL2) ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, payloadAttributes *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error) {
+	m.fcuCalls++
+	m.lastFCUState = state
+	if m.fcuErr != nil {
+		return nil, m.fcuErr
+	}
+	if m.fcuResult != nil {
+		return m.fcuResult, nil
+	}
+	return &eth.ForkchoiceUpdatedResult{PayloadStatus: eth.PayloadStatusV1{Status: eth.ExecutionValid}}, nil
+}
+func (m *mockL2) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {
+	return nil, nil, nil
+}
 func (m *mockL2) Close() {
 }
-
-func TestEngineController_TargetBlockNumber(t *testing.T) {
-	t.Parallel()
-	rcfg := &rollup.Config{Genesis: rollup.Genesis{L2: eth.BlockID{Number: 0}, L2Time: 1_000}, BlockTime: 2, L2ChainID: big.NewInt(420)}
-	m := &mockL2{ref: eth.L2BlockRef{Number: 0, Time: 0}}
-	ec := &simpleEngineController{l2: m, rollup: rcfg, log: gethlog.New()}
-
-	// ts = genesis + 2*3 => block #3, with safe head above target
-	numRef, err := ec.SafeBlockAtTimestamp(context.Background(), 1_000+2*3)
-	require.NoError(t, err)
-	require.Equal(t, uint64(3), m.lastNum)
-	require.Equal(t, m.ref, numRef)
-	// ts = genesis + 2*1000 => block #1000, with safe head now below target
-	_, err = ec.SafeBlockAtTimestamp(context.Background(), 1_000+2*1000)
-	require.ErrorIs(t, err, ErrNotFound)
+func (m *mockL2) NewPayload(ctx context.Context, payload *eth.ExecutionPayload, parentBeaconBlockRoot *common.Hash) (*eth.PayloadStatusV1, error) {
+	m.newPayloadCalls++
+	m.lastNewPayload = payload
+	if m.newPayloadErr != nil {
+		return nil, m.newPayloadErr
+	}
+	if idx := m.newPayloadCalls - 1; idx < len(m.newPayloadStatuses) && m.newPayloadStatuses[idx] != nil {
+		return m.newPayloadStatuses[idx], nil
+	}
+	if m.newPayloadStatus != nil {
+		return m.newPayloadStatus, nil
+	}
+	return &eth.PayloadStatusV1{Status: eth.ExecutionValid}, nil
 }
 
-func TestEngineController_SentinelErrors(t *testing.T) {
-	t.Parallel()
-	ec := &simpleEngineController{l2: nil, rollup: nil}
-	_, err := ec.SafeBlockAtTimestamp(context.Background(), 0)
-	require.ErrorIs(t, err, ErrNoEngineClient)
-
-	ec = &simpleEngineController{l2: &mockL2{}, rollup: nil}
-	_, err = ec.SafeBlockAtTimestamp(context.Background(), 0)
-	require.ErrorIs(t, err, ErrNoRollupConfig)
-}
+var _ l2Provider = (*mockL2)(nil)

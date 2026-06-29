@@ -3,6 +3,7 @@
 use crate::fpvm_evm::FpvmOpEvmFactory;
 use alloc::sync::Arc;
 use alloy_consensus::Sealed;
+use alloy_op_evm::post_exec::PostExecEvmFactoryAdapter;
 use alloy_primitives::B256;
 use core::fmt::Debug;
 use kona_derive::{EthereumDataSource, PipelineErrorKind};
@@ -82,9 +83,26 @@ where
         ));
     }
 
-    // In the case where the agreed upon L2 output root is the same as the claimed L2 output root,
-    // trace extension is detected and we can skip the derivation and execution steps.
-    if boot.agreed_l2_output_root == boot.claimed_l2_output_root {
+    // If the claim targets the safe head block itself, then no derivation is required. This can
+    // happen at trace-extension leaves where the trace is capped at the root-claim block number.
+    //
+    // In this case, the only valid output root is the agreed output root (a zero-step transition).
+    if boot.claimed_l2_block_number == safe_head.number {
+        if boot.claimed_l2_output_root != boot.agreed_l2_output_root {
+            error!(
+                target: "client",
+                claimed = boot.claimed_l2_block_number,
+                safe = safe_head.number,
+                expected_output_root = ?boot.agreed_l2_output_root,
+                claimed_output_root = ?boot.claimed_l2_output_root,
+                "Claimed output root does not match agreed output root at safe head",
+            );
+            return Err(FaultProofProgramError::InvalidClaim(
+                boot.agreed_l2_output_root,
+                boot.claimed_l2_output_root,
+            ));
+        }
+
         info!(
             target: "client",
             "Trace extension detected. State transition is already agreed upon.",
@@ -100,6 +118,7 @@ where
     let cursor = new_oracle_pipeline_cursor(
         rollup_config.as_ref(),
         safe_head,
+        boot.agreed_l2_output_root,
         &mut l1_provider,
         &mut l2_provider,
     )
@@ -110,7 +129,8 @@ where
     })?;
     l2_provider.set_cursor(cursor.clone());
 
-    let evm_factory = FpvmOpEvmFactory::new(hint_client, oracle_client);
+    let evm_factory =
+        PostExecEvmFactoryAdapter::new(FpvmOpEvmFactory::new(hint_client, oracle_client));
     let da_provider =
         EthereumDataSource::new_from_parts(l1_provider.clone(), beacon, &rollup_config);
     let pipeline = OraclePipeline::new(
@@ -121,6 +141,10 @@ where
         da_provider,
         l1_provider.clone(),
         l2_provider.clone(),
+        // Single-chain fault proof: no interop dependency set. If this chain
+        // ever schedules interop, the StatefulAttributesBuilder constructor
+        // will panic.
+        None,
     )
     .await?;
 
@@ -181,6 +205,12 @@ where
     caching_oracle
         .get_exact(PreimageKey::new_keccak256(*agreed_l2_output_root), output_preimage.as_mut())
         .await?;
+
+    if output_preimage[..32] != [0u8; 32] {
+        return Err(OracleProviderError::UnknownOutputVersion(B256::from_slice(
+            &output_preimage[..32],
+        )));
+    }
 
     output_preimage[96..128].try_into().map_err(OracleProviderError::SliceConversion)
 }
