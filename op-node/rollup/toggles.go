@@ -9,6 +9,10 @@ package rollup
 // 	return c.IsJovian(time) // Replace with return false to disable
 // }
 
+func (c *Config) IsMinBaseFee(time uint64) bool {
+	return c.IsJovian(time)
+}
+
 // IsL2CM gates the L2 Contracts Manager upgrade transactions at the Karst fork.
 // Replace with return false to disable NUT bundle execution during development.
 func (c *Config) IsL2CM(time uint64) bool {

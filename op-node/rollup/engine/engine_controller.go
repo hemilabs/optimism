@@ -7,10 +7,12 @@ import (
 	gosync "sync"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	opmetrics "github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -59,6 +61,15 @@ type ExecEngine interface {
 	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	L2BlockRefByHash(ctx context.Context, hash common.Hash) (eth.L2BlockRef, error)
 	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
+	PayloadByNumber(context.Context, uint64) (*eth.ExecutionPayloadEnvelope, error)
+	PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error)
+	NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error)
+	PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error)
+}
+
+type opgethNotification struct {
+	unsafeL2             eth.ExecutionPayload
+	unsafeL2PrevKeystone eth.L2BlockRef
 }
 
 // Metrics interface for CLSync functionality
@@ -154,6 +165,8 @@ type EngineController struct {
 	// Embed SyncDeriver into EngineController after initializing SyncDeriver
 	SyncDeriver SyncDeriver
 
+	opgethNotifierCh chan *opgethNotification
+
 	// Components that need to be notified during force reset
 	attributesResetter     AttributesForceResetter
 	pipelineResetter       PipelineForceResetter
@@ -179,21 +192,26 @@ func NewEngineController(ctx context.Context, engine ExecEngine, log log.Logger,
 		syncStatus = syncStatusWillStartEL
 	}
 
-	return &EngineController{
-		engine:         engine,
-		log:            log,
-		metrics:        m,
-		chainSpec:      rollup.NewChainSpec(rollupCfg),
-		rollupCfg:      rollupCfg,
-		syncCfg:        syncCfg,
-		syncStatus:     syncStatus,
-		clock:          clock.SystemClock,
-		l1:             l1,
-		ctx:            ctx,
-		emitter:        emitter,
-		superAuthority: superAuthority,
-		unsafePayloads: NewPayloadsQueue(log, maxUnsafePayloadsMemory, payloadMemSize),
+	e := &EngineController{
+		engine:           engine,
+		log:              log,
+		metrics:          m,
+		chainSpec:        rollup.NewChainSpec(rollupCfg),
+		rollupCfg:        rollupCfg,
+		syncCfg:          syncCfg,
+		syncStatus:       syncStatus,
+		clock:            clock.SystemClock,
+		l1:               l1,
+		ctx:              ctx,
+		emitter:          emitter,
+		superAuthority:   superAuthority,
+		unsafePayloads:   NewPayloadsQueue(log, maxUnsafePayloadsMemory, payloadMemSize),
+		opgethNotifierCh: make(chan *opgethNotification),
 	}
+
+	go e.opgethNotifier()
+
+	return e
 }
 
 // SafeL2Head returns the safe L2 head.
@@ -607,6 +625,16 @@ func (e *EngineController) tryUpdateEngineInternal(ctx context.Context) error {
 		// Remove backupUnsafeHead because this backup will be never used after consolidation.
 		e.SetBackupUnsafeL2Head(eth.L2BlockRef{}, false)
 	}
+
+	envelope, err := e.engine.PayloadByHash(ctx, e.unsafeHead.Hash)
+	if err != nil {
+		return derive.NewTemporaryError(fmt.Errorf("could not get envelope for hash %s", e.unsafeHead.Hash))
+	}
+
+	if err := e.parseAndNotifyOpgeth(ctx, envelope); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -1344,4 +1372,112 @@ func (e *EngineController) FollowSource(eSafeBlockRef, eLocalSafeRef, eFinalized
 	// Reorging may trigger EL Sync, or updating the EL Sync target.
 	logger.Warn("Follow Source: Reorg. May Trigger EL sync")
 	followExternalRefs(true)
+}
+
+func (e *EngineController) opgethNotifier() {
+	ctx := context.Background()
+	for {
+		bn := <-e.opgethNotifierCh
+
+		var l1OriginNumber uint64
+
+		unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+		if err != nil {
+			e.log.Warn(err.Error())
+		} else {
+			l1OriginNumber = unsafeL2BlockRef.L1Origin.Number
+		}
+
+		// Keystone based on L2 block number
+		if bn.unsafeL2.BlockNumber == 0 || bn.unsafeL2.BlockNumber%hemi.KeystoneHeaderPeriod != 0 {
+			continue
+		}
+
+		e.log.Info(fmt.Sprintf("Sending opgeth keystone notification for L2 block %v with L1 origin %v",
+			bn.unsafeL2.BlockNumber, l1OriginNumber))
+
+		if err := e.notifyOpgethKeystone(ctx, bn); err != nil {
+			e.log.Warn("Failed to notify opgeth of keystone", "err", err)
+			continue
+		}
+		e.log.Info("opgeth notified of keystone")
+	}
+}
+
+func (e *EngineController) notifyOpgethKeystone(ctx context.Context, bn *opgethNotification) error {
+	prevKeystoneHash := [common.HashLength]byte{}
+
+	if &bn.unsafeL2PrevKeystone != nil {
+		prevKeystoneHash = bn.unsafeL2PrevKeystone.Hash
+	}
+
+	unsafeL2BlockRef, err := derive.PayloadToBlockRef(e.rollupCfg, &bn.unsafeL2)
+	if err != nil {
+		return err
+	}
+
+	l2Keystone := hemi.L2Keystone{
+		Version:            0x01,
+		L1BlockNumber:      uint32(unsafeL2BlockRef.L1Origin.Number),
+		L2BlockNumber:      uint32(unsafeL2BlockRef.Number),
+		ParentEPHash:       unsafeL2BlockRef.ParentHash[:],
+		PrevKeystoneEPHash: prevKeystoneHash[:],
+		StateRoot:          bn.unsafeL2.StateRoot[:],
+		EPHash:             unsafeL2BlockRef.Hash[:],
+	}
+
+	e.log.Info("Sending notification to opgeth of new keystone", "L1BlockNumber", l2Keystone.L1BlockNumber,
+		"L2BlockNumber", l2Keystone.L2BlockNumber, "ParentEPHash", fmt.Sprintf("%x", l2Keystone.ParentEPHash),
+		"PrevKeystoneEPHash", fmt.Sprintf("%x", l2Keystone.PrevKeystoneEPHash),
+		"StateRoot", fmt.Sprintf("%x", l2Keystone.StateRoot),
+		"EPHash", fmt.Sprintf("%x", l2Keystone.EPHash))
+
+	_, err = e.engine.NewKeystone(ctx, l2Keystone)
+	if err != nil {
+		e.log.Warn("Failed to insert keystone in opgeth", "err", err)
+		return err
+	}
+
+	return nil
+}
+
+func (e *EngineController) parseAndNotifyOpgeth(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
+	bn := &opgethNotification{
+		unsafeL2: *envelope.ExecutionPayload,
+	}
+
+	l2BlockHeight := envelope.ExecutionPayload.BlockNumber
+
+	prevKeystoneHeight := int64(l2BlockHeight-(l2BlockHeight%hemi.KeystoneHeaderPeriod)) - hemi.KeystoneHeaderPeriod
+	if l2BlockHeight%hemi.KeystoneHeaderPeriod != 0 {
+		prevKeystoneHeight = prevKeystoneHeight + hemi.KeystoneHeaderPeriod
+	}
+
+	e.log.Info(fmt.Sprintf("For block %d, previous keystone height=%d", l2BlockHeight, prevKeystoneHeight))
+
+	var prevKeystoneRef *eth.L2BlockRef = nil
+	if prevKeystoneHeight > 0 && e.syncCfg.SyncMode == sync.CLSync {
+		prevKeystone, err := e.engine.PayloadByNumber(ctx, uint64(prevKeystoneHeight))
+		if err != nil {
+			return derive.NewResetError(fmt.Errorf("failed to fetch previous keystone from engine at index %d", prevKeystoneHeight))
+		}
+
+		ref, err := derive.PayloadToBlockRef(e.rollupCfg, prevKeystone.ExecutionPayload)
+		if err != nil {
+			return derive.NewResetError(fmt.Errorf("failed to convert payload at height %d to block ref", prevKeystoneHeight))
+		}
+		prevKeystoneRef = &ref
+	}
+
+	if prevKeystoneRef != nil {
+		bn.unsafeL2PrevKeystone = *prevKeystoneRef
+	}
+
+	select {
+	case e.opgethNotifierCh <- bn:
+	default:
+		e.log.Warn("opgeth notifier channel full, dropping event...")
+	}
+
+	return nil
 }

@@ -12,6 +12,11 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// postExecTxType is the EIP-2718 transaction type for PostExec transactions (0x7D).
+// The upstream op-geth defines this as types.PostExecTxType; it is not present in
+// the version of op-geth this build targets, so we define it locally.
+const postExecTxType = 0x7D
+
 type spanBatchTxData interface {
 	txType() byte // returns the type ID
 }
@@ -62,7 +67,7 @@ type spanBatchPostExecTxData struct {
 	Data []byte
 }
 
-func (txData *spanBatchPostExecTxData) txType() byte { return types.PostExecTxType }
+func (txData *spanBatchPostExecTxData) txType() byte { return postExecTxType }
 
 // EncodeRLP writes the opaque post-exec payload bytes directly. Unlike other typed
 // span batch tx data, the post-exec payload is not wrapped in an RLP list.
@@ -136,7 +141,7 @@ func (tx *spanBatchTx) decodeTyped(b []byte) (spanBatchTxData, error) {
 			return nil, fmt.Errorf("failed to decode spanBatchSetCodeTxData: %w", err)
 		}
 		return &inner, nil
-	case types.PostExecTxType:
+	case postExecTxType:
 		var inner spanBatchPostExecTxData
 		err := rlp.DecodeBytes(b[1:], &inner)
 		if err != nil {
@@ -239,9 +244,8 @@ func (tx *spanBatchTx) convertToFullTx(nonce, gas uint64, to *common.Address, ch
 			R:          uint256.MustFromBig(R),
 			S:          uint256.MustFromBig(S),
 		}
-	case types.PostExecTxType:
-		postExecTxInner := tx.inner.(*spanBatchPostExecTxData)
-		inner = &types.PostExecTx{Data: common.CopyBytes(postExecTxInner.Data)}
+	case postExecTxType:
+		return nil, fmt.Errorf("PostExec transactions not supported by this op-geth version")
 	default:
 		return nil, fmt.Errorf("invalid tx type: %d", tx.Type())
 	}
@@ -282,7 +286,7 @@ func newSpanBatchTx(tx *types.Transaction) (*spanBatchTx, error) {
 			AccessList:        tx.AccessList(),
 			AuthorizationList: tx.SetCodeAuthorizations(),
 		}
-	case types.PostExecTxType:
+	case postExecTxType:
 		inner = &spanBatchPostExecTxData{Data: common.CopyBytes(tx.Data())}
 	default:
 		return nil, fmt.Errorf("invalid tx type: %d", tx.Type())

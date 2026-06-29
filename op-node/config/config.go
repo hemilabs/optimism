@@ -86,6 +86,9 @@ type Config struct {
 
 	// Experimental. Enables new opstack RPC namespace. Used by op-test-sequencer.
 	ExperimentalOPStackAPI bool
+
+	// HemitrapEnabled enables hemi-specific hemitrap contract testing features.
+	HemitrapEnabled bool
 }
 
 // ConductorRPCFunc retrieves the endpoint. The RPC may not immediately be available.

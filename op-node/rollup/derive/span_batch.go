@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 
@@ -659,7 +658,7 @@ func DeriveSpanBatch(batchData *BatchData, cfg *rollup.Config) (*SpanBatch, erro
 			continue
 		}
 		for _, raw := range b.Transactions {
-			if len(raw) > 0 && raw[0] == types.PostExecTxType {
+			if len(raw) > 0 && raw[0] == postExecTxType {
 				return nil, fmt.Errorf("span batch contains PostExec tx at block ts=%d but SDM is not active", b.Timestamp)
 			}
 		}

@@ -274,7 +274,7 @@ func (btx *spanBatchTxs) recoverV(chainID *big.Int) error {
 		case types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
 			// For non-legacy tx types, v is just the y-parity bit (0 or 1).
 			v = big.NewInt(int64(bit))
-		case types.PostExecTxType:
+		case postExecTxType:
 			// PostExec txs are synthetic, unsigned, and chain-agnostic.
 			v = big.NewInt(0)
 		default:
@@ -391,7 +391,7 @@ func convertVToYParity(v *big.Int, txType int) (uint, error) {
 		}
 	case types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
 		yParityBit = uint(bigs.Uint64Strict(v))
-	case types.PostExecTxType:
+	case postExecTxType:
 		yParityBit = 0
 	default:
 		return 0, fmt.Errorf("invalid tx type: %d", txType)
@@ -443,7 +443,7 @@ func (sbtx *spanBatchTxs) AddTxs(txs [][]byte, chainID *big.Int) error {
 			sbtx.protectedBits.SetBit(sbtx.protectedBits, int(sbtx.totalLegacyTxCount), protectedBit)
 			sbtx.totalLegacyTxCount++
 		}
-		if tx.Type() != types.PostExecTxType && tx.Protected() && tx.ChainId().Cmp(chainID) != 0 {
+		if tx.Type() != postExecTxType && tx.Protected() && tx.ChainId().Cmp(chainID) != 0 {
 			return fmt.Errorf("protected tx has chain ID %d, but expected chain ID %d", tx.ChainId(), chainID)
 		}
 		var txSig spanBatchSignature

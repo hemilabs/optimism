@@ -1020,6 +1020,8 @@ type DeployConfig struct {
 
 	// Legacy, ignored, here for strict-JSON decoding to be accepted.
 	LegacyDeployConfig `evm:"-"`
+
+	RequiredProtocolVersion string `json:"requiredProtocolVersion"`
 }
 
 // Copy will deeply copy the DeployConfig. This does a JSON roundtrip to copy

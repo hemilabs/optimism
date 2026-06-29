@@ -62,7 +62,7 @@ func NewChannelManager(log log.Logger, metr metrics.Metricer, cfgProvider Channe
 		log:         log,
 		metr:        metr,
 		cfgProvider: cfgProvider,
-		defaultCfg:  cfgProvider.ChannelConfig(false, false),
+		defaultCfg:  cfgProvider.ChannelConfig(false),
 		rollupCfg:   rollupCfg,
 		outFactory:  NewChannelOut,
 		txChannels:  make(map[string]*channel),
@@ -236,7 +236,7 @@ func (s *channelManager) TxData(l1Head eth.BlockID, isPectra bool, isThrottling 
 	}
 
 	// Call provider method to reassess optimal DA type
-	newCfg := s.cfgProvider.ChannelConfig(isPectra, isThrottling)
+	newCfg := s.cfgProvider.ChannelConfig(isPectra)
 
 	// No change:
 	if newCfg.UseBlobs == s.defaultCfg.UseBlobs {

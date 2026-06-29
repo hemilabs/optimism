@@ -10,7 +10,7 @@ import (
 	actionsHelpers "github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
 	"github.com/ethereum-optimism/optimism/op-e2e/actions/proofs/helpers"
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -67,7 +67,7 @@ func TestJovianMinBaseFee(gt *testing.T) {
 		require.True(t, isJovian, "GPO should report that Jovian is active")
 
 		activationBlock := env.Engine.L2Chain().GetBlockByHash(env.Sequencer.L2Unsafe().Hash)
-		require.Equal(t, rollup.EncodeJovianExtraData(250, 6, 0), activationBlock.Extra(), "activation block should have Jovian extraData")
+		require.Equal(t, eip1559.EncodeJovianExtraData(250, 6, 0), activationBlock.Extra(), "activation block should have Jovian extraData")
 
 		// Set the minimum base fee
 		setMinBaseFeeViaSystemConfig(t, env, minBaseFee)
@@ -88,11 +88,11 @@ func TestJovianMinBaseFee(gt *testing.T) {
 		// Block after the SystemConfig change
 		env.Sequencer.ActL2EmptyBlock(t)
 		blockAfterSystemConfigChange := env.Engine.L2Chain().GetBlockByHash(env.Sequencer.L2Unsafe().Hash)
-		expectedJovianExtraDataWithMinFee := rollup.EncodeJovianExtraData(250, 6, minBaseFee)
+		expectedJovianExtraDataWithMinFee := eip1559.EncodeJovianExtraData(250, 6, minBaseFee)
 		require.Equal(t, expectedJovianExtraDataWithMinFee, blockAfterSystemConfigChange.Extra(), "block should have updated Jovian extraData with min base fee")
 
 		// Verify base fee is clamped
-		require.GreaterOrEqual(t, blockAfterSystemConfigChange.BaseFee().Uint64(), minBaseFee, "base fee should be >= minimum base fee")
+		require.GreaterOrEqual(t, bigs.Uint64Strict(blockAfterSystemConfigChange.BaseFee()), minBaseFee, "base fee should be >= minimum base fee")
 
 		if !jovianAtGenesis {
 			// Verify Jovian fork activation occurred by checking for the activation log

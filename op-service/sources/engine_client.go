@@ -3,10 +3,13 @@ package sources
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/hemilabs/heminetwork/hemi"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/client"
@@ -117,6 +120,38 @@ func (s *EngineAPIClient) NewPayload(ctx context.Context, payload *eth.Execution
 		e.Error("Payload execution failed", "err", err)
 		return nil, fmt.Errorf("failed to execute payload: %w", err)
 	}
+	return &result, nil
+}
+
+// PopPayoutsByL2Keystone retrieves PoP payout data from the execution layer for a given L2 keystone.
+func (s *EngineAPIClient) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
+	e := s.log.New("hash", abrevHash)
+	e.Trace("asking for payouts for keystone")
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var result []eth.PopPayout
+
+	err := s.RPC.CallContext(execCtx, &result, string(eth.GetPayouts), abrevHash)
+	if err != nil {
+		e.Error("Error retrieving payouts", "err", err)
+		return nil, fmt.Errorf("failed to retrieve payouts: %w", err)
+	}
+	e.Trace("Received payouts for keystone")
+	return result, nil
+}
+
+// NewKeystone submits a new L2 keystone to the execution engine.
+func (s *EngineAPIClient) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
+	e := s.log.New("keystone", keystone)
+	e.Trace("submitting new keystone")
+	var result eth.KeystoneStatus
+	err := s.RPC.CallContext(ctx, &result, string(eth.NewKeystone), keystone)
+	if err != nil {
+		e.Error("Failed to submit keystone", "err", err)
+		return nil, fmt.Errorf("failed to submit keystone: %w", err)
+	}
+	e.Trace("Submitted keystone")
 	return &result, nil
 }
 
