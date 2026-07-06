@@ -254,6 +254,7 @@ abstract contract DisputeGameFactory_TestInit is CommonTest {
         });
 
         _setGame(gameImpl_, GameTypes.CANNON, immutableArgs);
+        _setGame(gameImpl_, GameTypes.CANNON_KONA, immutableArgs);
     }
 
     function setupPermissionedDisputeGame(
