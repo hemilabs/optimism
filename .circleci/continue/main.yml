@@ -120,7 +120,7 @@ parameters:
   c-run_l2_fork_test:
     type: boolean
     default: false
-  c-run_scheduled_weekly_tests:
+  c-run_scheduled_daily_tests:
     type: boolean
     default: false
   c-run_contracts_feature_tests:
@@ -1535,6 +1535,16 @@ jobs:
           working_directory: packages/contracts-bedrock
       - notify-failures-on-develop:
           mentions: "@security-oncall"
+
+  l2-chains-sync-check:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    steps:
+      - utils/checkout-with-mise:
+          enable-mise-cache: false
+      - run:
+          name: Check l2-rpcs.json and daily matrix are in sync
+          command: bash .circleci/scripts/check-l2-chains-sync.sh
 
   todo-issues:
     parameters:
@@ -2971,8 +2981,8 @@ workflows:
             - circleci-repo-rpc-secrets
             - slack
 
-  scheduled-weekly-tests:
-    when: << pipeline.parameters.c-run_scheduled_weekly_tests >>
+  scheduled-daily-tests:
+    when: << pipeline.parameters.c-run_scheduled_daily_tests >>
     jobs:
       - prep-go-modules:
           context:
@@ -2988,12 +2998,9 @@ workflows:
                 - ink
                 - mode
                 - metal
-                - arena-z
-                - swell
                 - unichain
                 - soneium
                 - world-chain
-                - base
                 - xlayer
           test_profile: ci
           context:
