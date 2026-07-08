@@ -13,6 +13,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/cmd/batch_decoder/reassemble"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-node/superchain"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum/go-ethereum/common"
@@ -103,7 +105,7 @@ func main() {
 				var inbox, sender common.Address
 				if cliCtx.IsSet("l2-chain-id") {
 					l2ChainID := cliCtx.Uint64("l2-chain-id")
-					rcfg, err := rollup.LoadOPStackRollupConfig(l2ChainID)
+					rcfg, err := superchain.LoadOPStackRollupConfig(l2ChainID)
 					if err != nil {
 						return err
 					}
@@ -162,7 +164,7 @@ func main() {
 				var rollupCfg *rollup.Config
 				if cliCtx.IsSet("l2-chain-id") {
 					l2ChainID := new(big.Int).SetUint64(cliCtx.Uint64("l2-chain-id"))
-					cfg, err := rollup.LoadOPStackRollupConfig(l2ChainID.Uint64())
+					cfg, err := superchain.LoadOPStackRollupConfig(bigs.Uint64Strict(l2ChainID))
 					if err != nil {
 						return err
 					}
