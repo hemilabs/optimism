@@ -98,6 +98,10 @@ contract DisputeGames is FeatureFlags {
     }
 
     function permissionedGameChallenger(IDisputeGameFactory _dgf) internal view returns (address challenger_) {
+        if (address(_dgf.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0)) {
+            return address(0);
+        }
+
         GameType gameType = GameTypes.PERMISSIONED_CANNON;
         (bool gameArgsExist, bytes memory gameArgsData) = _getGameArgs(_dgf, gameType);
         if (gameArgsExist) {
@@ -109,6 +113,12 @@ contract DisputeGames is FeatureFlags {
     }
 
     function permissionedGameProposer(IDisputeGameFactory _dgf) internal view returns (address proposer_) {
+        if (address(_dgf.gameImpls(GameTypes.SUPER_PERMISSIONED)) != address(0)) {
+            LibGameArgs.SuperPermissionedGameArgs memory gameArgs =
+                LibGameArgs.decodeSuperPermissioned(_dgf.gameArgs(GameTypes.SUPER_PERMISSIONED));
+            return gameArgs.proposer;
+        }
+
         GameType gameType = GameTypes.PERMISSIONED_CANNON;
         (bool gameArgsExist, bytes memory gameArgsData) = _getGameArgs(_dgf, gameType);
         if (gameArgsExist) {
@@ -117,12 +127,6 @@ contract DisputeGames is FeatureFlags {
         } else {
             proposer_ = IPermissionedDisputeGame(address(_dgf.gameImpls(gameType))).proposer();
         }
-    }
-
-    function superPermissionedGameProposer(IDisputeGameFactory _dgf) internal view returns (address proposer_) {
-        LibGameArgs.SuperPermissionedGameArgs memory gameArgs =
-            LibGameArgs.decodeSuperPermissioned(_dgf.gameArgs(GameTypes.SUPER_PERMISSIONED));
-        proposer_ = gameArgs.proposer;
     }
 
     function superPermissionedGameAnchorStateRegistry(IDisputeGameFactory _dgf)
