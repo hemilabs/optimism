@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { Claim, Duration, GameType } from "src/dispute/lib/Types.sol";
+import { Claim, Duration, GameType, Hash } from "src/dispute/lib/Types.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 
 library Types {
     /// @notice Represents a set of L1 contracts. Used to represent a set of proxies.
@@ -30,7 +31,6 @@ library Types {
         address unsafeBlockSigner;
         address proposer;
         address challenger;
-        // TODO Add fault proofs inputs in a future PR.
         uint32 basefeeScalar;
         uint32 blobBaseFeeScalar;
         uint256 l2ChainId;
@@ -40,6 +40,8 @@ library Types {
         // Configurable dispute game inputs
         GameType disputeGameType;
         Claim disputeAbsolutePrestate;
+        Hash startingAnchorRoot;
+        Claim cannonAbsolutePrestate;
         uint256 disputeMaxGameDepth;
         uint256 disputeSplitDepth;
         Duration disputeClockExtension;
