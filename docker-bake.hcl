@@ -312,6 +312,9 @@ target "kona-node" {
     REPO_LOCATION = "local"
     BIN_TARGET = "kona-node"
     BUILD_PROFILE = "release"
+    GIT_VERSION = "${GIT_VERSION}"
+    GIT_COMMIT = "${GIT_COMMIT}"
+    GIT_DATE = "${GIT_DATE}"
   }
   platforms = split(",", PLATFORMS)
   tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-node:${tag}"]
@@ -358,7 +361,9 @@ target "op-reth" {
   }
   args = {
     BUILD_PROFILE = "maxperf"
-    FEATURES = ""
+    GIT_VERSION = "${GIT_VERSION}"
+    GIT_COMMIT = "${GIT_COMMIT}"
+    GIT_DATE = "${GIT_DATE}"
   }
   platforms = split(",", PLATFORMS)
   tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-reth:${tag}"]
