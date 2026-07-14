@@ -16,13 +16,13 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/pipeline"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
@@ -150,6 +150,11 @@ func Apply(ctx context.Context, cfg ApplyConfig) error {
 		return fmt.Errorf("failed to read state: %w", err)
 	}
 
+	// A state produced by the prepare pipeline MUST not be used with apply.
+	if err := st.CheckNotPrepared(); err != nil {
+		return err
+	}
+
 	if err := ApplyPipeline(ctx, ApplyPipelineOpts{
 		L1RPCUrl:           cfg.L1RPCUrl,
 		DeploymentTarget:   cfg.DeploymentTarget,
@@ -193,10 +198,10 @@ func ApplyPipeline(
 	opts ApplyPipelineOpts,
 ) error {
 	intent := opts.Intent
-	if err := intent.Check(); err != nil {
+	st := opts.State
+	if err := pipeline.ValidateInputs(intent, st); err != nil {
 		return err
 	}
-	st := opts.State
 
 	l1ArtifactsFS, err := artifacts.Download(ctx, intent.L1ContractsLocator, ioutil.BarProgressor(), opts.CacheDir)
 	if err != nil {
@@ -219,7 +224,7 @@ func ApplyPipeline(
 		L2: l2ArtifactsFS,
 	}
 
-	deployer := common.Address{0x01}
+	deployer := standard.PlaceholderAddress
 	if opts.DeployerPrivateKey != nil {
 		deployer = crypto.PubkeyToAddress(opts.DeployerPrivateKey.PublicKey)
 	}
