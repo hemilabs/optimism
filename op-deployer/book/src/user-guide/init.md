@@ -1,4 +1,8 @@
-# The Init Command
+---
+title: Init Command
+description: Learn how to initialize intent and state files for your OP Stack deployment.
+diataxis: reference
+---
 
 The `init` command is used to create a new intent and state file in the specified directory. This command is the
 starting point of each new deployment.

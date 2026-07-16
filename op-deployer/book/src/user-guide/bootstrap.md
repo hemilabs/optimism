@@ -1,4 +1,8 @@
-# The Bootstrap Commands
+---
+title: Bootstrap Commands
+description: Learn how to deploy global singletons and implementation contracts for new OP Stack deployments.
+diataxis: reference
+---
 
 > Note: if you are joining an existing superchain, you can skip to the `init` and `apply` commands to create your L2 chain(s)
 

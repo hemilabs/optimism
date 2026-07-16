@@ -1,4 +1,8 @@
-# The Verify Command
+---
+title: Verify Command
+description: Learn how to verify deployed contract source code on block explorers.
+diataxis: reference
+---
 
 Once you have deployed contracts via [bootstrap][bootstrap] or [apply][apply], you can use the `verify` command to verify the source code on block explorers like Etherscan or Blockscout. The command uses the `forge verify-contract` binary, which automatically handles constructor argument detection and source code verification.
 

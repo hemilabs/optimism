@@ -1,4 +1,8 @@
-# Introduction
+---
+title: OP Deployer
+description: A CLI tool for deploying and upgrading smart contracts for OP Stack chains.
+diataxis: explanation
+---
 
 OP Deployer is a CLI tool that simplifies deploying and upgrading smart contracts for OP Stack chains. It also
 exposes a suite of libraries that allow developers to easily manage smart contracts from their applications.
