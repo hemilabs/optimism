@@ -626,7 +626,7 @@ func TestGetMissingTxnHashes(t *testing.T) {
 	for i := 0; i < len(depositTxs); i++ {
 		rng := rand.New(rand.NewSource(1234 + int64(i)))
 		safeDeposit := testutils.GenerateDeposit(testutils.RandomHash(rng), rng)
-		depositTxs[i] = types.NewTx(safeDeposit)
+		depositTxs[i] = testutils.TxFromDeposit(safeDeposit)
 	}
 
 	tests := []struct {

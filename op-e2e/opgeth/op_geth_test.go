@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
 
 var (
@@ -409,7 +410,7 @@ func TestPreregolith(t *testing.T) {
 			systemTx.IsSystemTransaction = true
 			require.NoError(t, err)
 
-			_, err = opGeth.AddL2Block(ctx, types.NewTx(systemTx))
+			_, err = opGeth.AddL2Block(ctx, testutils.TxFromDeposit(systemTx))
 			require.NoError(t, err, "should allow blocks containing system tx")
 		})
 	}
@@ -601,8 +602,8 @@ func TestRegolith(t *testing.T) {
 			systemTx.IsSystemTransaction = true
 			require.NoError(t, err)
 
-			_, err = opGeth.AddL2Block(ctx, types.NewTx(systemTx))
-			require.ErrorIs(t, err, ErrNewPayloadNotValid, "should reject blocks containing system tx")
+			_, err = opGeth.AddL2Block(ctx, testutils.TxFromDeposit(systemTx))
+			require.ErrorIs(t, err, ErrForkChoiceUpdated, "should reject blocks containing system tx")
 		})
 
 		t.Run("IncludeGasRefunds_"+test.name, func(t *testing.T) {
