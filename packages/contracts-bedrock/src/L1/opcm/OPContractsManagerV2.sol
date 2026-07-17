@@ -171,9 +171,9 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     ///         - Major bump: New required sequential upgrade
     ///         - Minor bump: Replacement OPCM for same upgrade
     ///         - Patch bump: Development changes (expected for normal dev work)
-    /// @custom:semver 7.2.1
+    /// @custom:semver 7.2.2
     function version() public pure returns (string memory) {
-        return "7.2.1";
+        return "7.2.2";
     }
 
     /// @param _contractsContainer The container of blueprint and implementation contract addresses.
@@ -272,6 +272,52 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
 
         // Execute the upgrade.
         return _apply(cfg, cts, false);
+    }
+
+    /// @notice Migrates one or more OP Stack chains to use the Super Root dispute games and shared
+    ///         dispute game contracts.
+    /// @dev WARNING: This is a one-way operation. You cannot easily undo this operation without a
+    ///      smart contract upgrade. Do not call this function unless you are 100% confident that
+    ///      you know what you're doing and that you are prepared to fully execute this migration.
+    ///      You SHOULD NOT CALL THIS FUNCTION IN PRODUCTION unless you are absolutely sure that
+    ///      you know what you are doing.
+    /// @dev WARNING: Executing this function WILL result in all prior withdrawal proofs being
+    ///      invalidated. Users will have to submit new proofs for their withdrawals in the
+    ///      OptimismPortal contract. THIS IS EXPECTED BEHAVIOR.
+    /// @dev NOTE: Unlike other functions in OPCM, this is a one-off function used to serve the
+    ///      temporary need to support the interop migration action. It will likely be removed in
+    ///      the near future once interop support is baked more directly into OPCM. It does NOT
+    ///      look or function like all of the other functions in OPCMv2.
+    /// @param _input The input parameters for the migration.
+    function migrate(IOPContractsManagerMigrator.MigrateInput calldata _input) public {
+        _onlyDelegateCall();
+
+        // Delegatecall to the migrator contract.
+        (bool success, bytes memory result) =
+            address(opcmMigrator).delegatecall(abi.encodeCall(IOPContractsManagerMigrator.migrate, (_input)));
+        if (!success) {
+            assembly {
+                revert(add(result, 0x20), mload(result))
+            }
+        }
+    }
+
+    /// @notice Re-points the shared dispute games of an already-interop set to a new respected super
+    ///         game (current use: transition to a shared super ZKDisputeGame). Delegates to the
+    ///         migrator. Transitional, like migrate().
+    /// @param _input The input parameters for the dispute game re-point.
+    function setInteropDisputeGames(IOPContractsManagerMigrator.MigrateInput calldata _input) public {
+        _onlyDelegateCall();
+
+        // Delegatecall to the migrator contract.
+        (bool success, bytes memory result) = address(opcmMigrator).delegatecall(
+            abi.encodeCall(IOPContractsManagerMigrator.setInteropDisputeGames, (_input))
+        );
+        if (!success) {
+            assembly {
+                revert(add(result, 0x20), mload(result))
+            }
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////
