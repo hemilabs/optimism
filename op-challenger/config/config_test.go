@@ -29,7 +29,7 @@ var (
 	validDatadir                          = "/tmp/data"
 	validL2Rpc                            = "http://localhost:9545"
 	validRollupRpc                        = "http://localhost:8555"
-	validSupervisorRpc                    = "http://localhost/supervisor"
+	validSuperRootRpc                     = "http://localhost/super"
 
 	validAsteriscBin                        = "./bin/asterisc"
 	validAsteriscOpProgramBin               = "./bin/op-program"
@@ -126,7 +126,7 @@ func applyValidConfigForCannonKona(t *testing.T, cfg *Config) {
 }
 
 func applyValidConfigForSuperCannonKona(t *testing.T, cfg *Config) {
-	cfg.SupervisorRPC = validSupervisorRpc
+	cfg.SuperRootRPC = validSuperRootRpc
 	applyValidConfigForCannonKona(t, cfg)
 }
 
@@ -843,19 +843,20 @@ func TestRollupRpcNotRequiredForInterop(t *testing.T) {
 	})
 }
 
-func TestSupervisorRpc(t *testing.T) {
+func TestSuperRootRpc(t *testing.T) {
 	for _, gameType := range gameTypes.SupportedGameTypes {
 		gameType := gameType
 		if gameType == gameTypes.SuperCannonKonaGameType {
 			t.Run("RequiredFor"+gameType.String(), func(t *testing.T) {
 				config := validConfig(t, gameType)
-				config.SupervisorRPC = ""
-				require.ErrorIs(t, config.Check(), ErrMissingSupervisorRpc)
+				config.SuperRootRPC = ""
+				require.ErrorIs(t, config.Check(), ErrMissingSuperRootRpc)
+				require.EqualError(t, config.Check(), "missing super root RPC URL")
 			})
 		} else {
 			t.Run("NotRequiredFor"+gameType.String(), func(t *testing.T) {
 				config := validConfig(t, gameType)
-				config.SupervisorRPC = ""
+				config.SuperRootRPC = ""
 				require.NoError(t, config.Check())
 			})
 		}

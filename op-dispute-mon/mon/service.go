@@ -39,9 +39,9 @@ type Service struct {
 
 	cl clock.Clock
 
-	game              *extract.GameCallerCreator
-	rollupClients     []*sources.RollupClient
-	supervisorClients []*sources.SupervisorClient
+	game             *extract.GameCallerCreator
+	rollupClients    []*sources.RollupClient
+	superRootClients []*sources.SuperNodeClient
 
 	l1RPC    rpcclient.RPC
 	l1Client *sources.L1Client
@@ -85,8 +85,8 @@ func (s *Service) initFromConfig(ctx context.Context, cfg *config.Config) error 
 	if err := s.initOutputRollupClient(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init rollup client: %w", err)
 	}
-	if err := s.initSupervisorClients(ctx, cfg); err != nil {
-		return fmt.Errorf("failed to init supervisor clients: %w", err)
+	if err := s.initSuperRootClients(ctx, cfg); err != nil {
+		return fmt.Errorf("failed to init super root clients: %w", err)
 	}
 
 	s.initGameCallerCreator() // Must be called before initForecast
@@ -112,8 +112,8 @@ func (s *Service) outputRollupClients() []extract.OutputRollupClient {
 }
 
 func (s *Service) asSuperRootProviders() []extract.SuperRootProvider {
-	clients := make([]extract.SuperRootProvider, len(s.supervisorClients))
-	for i, client := range s.supervisorClients {
+	clients := make([]extract.SuperRootProvider, len(s.superRootClients))
+	for i, client := range s.superRootClients {
 		clients[i] = client
 	}
 	return clients
@@ -133,16 +133,16 @@ func (s *Service) initOutputRollupClient(ctx context.Context, cfg *config.Config
 	return nil
 }
 
-func (s *Service) initSupervisorClients(ctx context.Context, cfg *config.Config) error {
-	if len(cfg.SupervisorRpcs) == 0 {
+func (s *Service) initSuperRootClients(ctx context.Context, cfg *config.Config) error {
+	if len(cfg.SuperRootRpcs) == 0 {
 		return nil
 	}
-	for _, rpc := range cfg.SupervisorRpcs {
-		client, err := dial.DialSupervisorClientWithTimeout(ctx, s.logger, rpc, rpcclient.WithLazyDial())
+	for _, rpc := range cfg.SuperRootRpcs {
+		client, err := dial.DialSuperNodeClientWithTimeout(ctx, s.logger, rpc, rpcclient.WithLazyDial())
 		if err != nil {
-			return fmt.Errorf("failed to dial supervisor client %s: %w", rpc, err)
+			return fmt.Errorf("failed to dial super root client %s: %w", rpc, err)
 		}
-		s.supervisorClients = append(s.supervisorClients, client)
+		s.superRootClients = append(s.superRootClients, client)
 	}
 	return nil
 }
