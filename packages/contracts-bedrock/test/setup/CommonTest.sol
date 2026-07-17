@@ -85,7 +85,16 @@ abstract contract CommonTest is Test, Setup, Events {
             deploy.cfg().setOperatorFeeVaultWithdrawalNetwork(1);
         }
 
-        if (isForkTest()) {
+        if (useInteropOverride) {
+            console.log("CommonTest: enabling interop");
+            devFeatureBitmap |= DevFeatures.OPTIMISM_PORTAL_INTEROP;
+            deploy.cfg().setUseInterop(true);
+        }
+
+        // Sync the bitmap to deploy config after overrides
+        deploy.cfg().setDevFeatureBitmap(devFeatureBitmap);
+
+        if (isL1ForkTest()) {
             // Skip any test suite which uses a nonstandard configuration.
             if (useAltDAOverride || useInteropOverride) {
                 vm.skip(true);

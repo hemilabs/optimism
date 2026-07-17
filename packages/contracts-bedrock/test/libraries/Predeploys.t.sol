@@ -197,7 +197,7 @@ contract Predeploys_Uncategorized_Test is Predeploys_TestInit {
     ///         and the proxied accounts have the correct admin. Using custom gas token.
     function test_predeploys_customGasToken_succeeds() external {
         skipIfSysFeatureDisabled(Features.CUSTOM_GAS_TOKEN);
-        _test_predeploys(Fork.ISTHMUS, false, true);
+        _test_predeploys(Fork.ISTHMUS, true, false);
     }
 }
 
