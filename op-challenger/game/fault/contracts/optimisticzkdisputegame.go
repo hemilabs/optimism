@@ -62,6 +62,7 @@ type OptimisticZKDisputeGameContract interface {
 	ChallengeTx(ctx context.Context) (txmgr.TxCandidate, error)
 	GetProposal(ctx context.Context) (common.Hash, uint64, error)
 	GetChallengerMetadata(ctx context.Context, block rpcblock.Block) (ChallengerMetadata, error)
+	IsClosed(ctx context.Context) (bool, error)
 	GetCredit(ctx context.Context, recipient common.Address) (*big.Int, gameTypes.GameStatus, error)
 	ClaimCreditTx(ctx context.Context, recipient common.Address) (txmgr.TxCandidate, error)
 }
@@ -72,7 +73,15 @@ type OptimisticZKDisputeGameContractLatest struct {
 	contract    *batching.BoundContract
 }
 
-func (g *OptimisticZKDisputeGameContractLatest) GetCredit(ctx context.Context, recipient common.Address) (*big.Int, gameTypes.GameStatus, error) {
+func (g *ZKDisputeGameContractLatest) IsClosed(ctx context.Context) (bool, error) {
+	mode, err := g.GetBondDistributionMode(ctx, rpcblock.Latest)
+	if err != nil {
+		return false, err
+	}
+	return mode != types.UndecidedDistributionMode, nil
+}
+
+func (g *ZKDisputeGameContractLatest) GetCredit(ctx context.Context, recipient common.Address) (*big.Int, gameTypes.GameStatus, error) {
 	defer g.metrics.StartContractRequest("GetCredit")()
 	results, err := g.multiCaller.Call(ctx, rpcblock.Latest,
 		g.contract.Call(methodCredit, recipient),

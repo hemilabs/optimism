@@ -271,7 +271,76 @@ func TestZKGame_ClaimCreditTx(t *testing.T) {
 	}
 }
 
-func setupZKDisputeGameTest(t *testing.T, version contractVersion) (*batchingTest.AbiBasedRpc, OptimisticZKDisputeGameContract) {
+func TestZKGame_GetBondDistributionMode(t *testing.T) {
+	for _, version := range zkVersions {
+		version := version
+		t.Run(version.String(), func(t *testing.T) {
+			stubRpc, game := setupZKDisputeGameTest(t, version)
+			stubRpc.SetResponse(zkGameAddr, methodBondDistributionMode, rpcblock.Latest, nil, []interface{}{uint8(faultTypes.NormalDistributionMode)})
+
+			mode, err := game.GetBondDistributionMode(context.Background(), rpcblock.Latest)
+			require.NoError(t, err)
+			require.Equal(t, faultTypes.NormalDistributionMode, mode)
+		})
+	}
+}
+
+func TestZKGame_IsClosed(t *testing.T) {
+	modes := []struct {
+		name   string
+		mode   faultTypes.BondDistributionMode
+		closed bool
+	}{
+		{name: "Undecided", mode: faultTypes.UndecidedDistributionMode, closed: false},
+		{name: "Normal", mode: faultTypes.NormalDistributionMode, closed: true},
+		{name: "Refund", mode: faultTypes.RefundDistributionMode, closed: true},
+		{name: "Legacy", mode: faultTypes.LegacyDistributionMode, closed: true},
+	}
+	for _, version := range zkVersions {
+		version := version
+		t.Run(version.String(), func(t *testing.T) {
+			for _, test := range modes {
+				test := test
+				t.Run(test.name, func(t *testing.T) {
+					stubRpc, game := setupZKDisputeGameTest(t, version)
+					stubRpc.SetResponse(zkGameAddr, methodBondDistributionMode, rpcblock.Latest, nil, []interface{}{uint8(test.mode)})
+
+					closed, err := game.IsClosed(context.Background())
+
+					require.NoError(t, err)
+					require.Equal(t, test.closed, closed)
+				})
+			}
+		})
+	}
+}
+
+func TestZKGame_CloseGameTx(t *testing.T) {
+	for _, version := range zkVersions {
+		version := version
+		t.Run(version.String(), func(t *testing.T) {
+			t.Run("Success", func(t *testing.T) {
+				stubRpc, game := setupZKDisputeGameTest(t, version)
+				stubRpc.SetResponse(zkGameAddr, methodCloseGame, rpcblock.Latest, nil, nil)
+
+				tx, err := game.CloseGameTx(context.Background())
+				require.NoError(t, err)
+				stubRpc.VerifyTxCandidate(tx)
+			})
+
+			t.Run("SimulationFails", func(t *testing.T) {
+				stubRpc, game := setupZKDisputeGameTest(t, version)
+				stubRpc.SetError(zkGameAddr, methodCloseGame, rpcblock.Latest, nil, errors.New("game not ready"))
+
+				tx, err := game.CloseGameTx(context.Background())
+				require.ErrorIs(t, err, ErrSimulationFailed)
+				require.Equal(t, txmgr.TxCandidate{}, tx)
+			})
+		})
+	}
+}
+
+func setupZKDisputeGameTest(t *testing.T, version contractVersion) (*batchingTest.AbiBasedRpc, ZKDisputeGameContract) {
 	fdgAbi := version.loadAbi()
 
 	vmAbi := snapshots.LoadMIPSABI()
