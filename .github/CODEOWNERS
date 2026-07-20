@@ -40,4 +40,14 @@
 /packages/contracts-bedrock/**/*.md      @ethereum-optimism/contract-reviewers
 
 # Security docs
-/docs @ethereum-optimism/evm-safety
+/docs/security-reviews @ethereum-optimism/evm-safety
+
+# Public developer documentation
+/docs/public-docs/  @ethereum-optimism/solutions
+
+# CI workflows
+/.github/workflows/ @ethereum-optimism/cloud-security
+/.github/actions/   @ethereum-optimism/cloud-security
+
+# Must come last to avoid being overridden
+/.github/CODEOWNERS  @ethereum-optimism/cloud-security
