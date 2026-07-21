@@ -13428,6 +13428,7 @@ dependencies = [
  "reth-tasks",
  "reth-trie-common",
  "ringbuffer",
+ "rustls",
  "serde_json",
  "test-case",
  "tokio",
