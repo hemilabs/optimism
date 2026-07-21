@@ -30,6 +30,14 @@ type Env struct {
 	Deployer     common.Address
 	Logger       log.Logger
 	Scripts      *opcm.Scripts
+	ForgeClient  *forge.Client
+	UseForge     bool
+	// AllowUnoptimizedContracts permits contract artifacts that exceed the EIP-170 code-size limit.
+	// It is only enabled for genesis-mode deployments, which execute scripts against an in-memory host.
+	AllowUnoptimizedContracts bool
+	L1RPCUrl                  string
+	PrivateKey                string
+	Context                   context.Context
 }
 
 type StateWriter interface {
