@@ -125,6 +125,7 @@ func NewBackend(parentCtx context.Context, params BackendParams) *Backend {
 	if b.failsafeLogInterval <= 0 {
 		b.failsafeLogInterval = defaultFailsafeLogInterval
 	}
+	b.metrics.RecordPassthroughEnabled(b.passthrough)
 
 	// Initialize so the first benign refresh (state == off) does not log a
 	// spurious "cleared" transition.
@@ -196,6 +197,11 @@ func (b *Backend) Stop(ctx context.Context) error {
 // FailsafeEnabled returns whether failsafe is enabled
 func (b *Backend) FailsafeEnabled() bool {
 	return b.manualFailsafe.Load() || len(b.GetChainErrors()) > 0 || b.crossValidator.Error() != nil
+}
+
+// PassthroughEnabled returns whether passthrough mode is enabled.
+func (b *Backend) PassthroughEnabled() bool {
+	return b.passthrough
 }
 
 // SetFailsafeEnabled sets the manual failsafe override.

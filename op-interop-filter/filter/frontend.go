@@ -57,7 +57,12 @@ func (a *AdminFrontend) GetFailsafeEnabled(ctx context.Context) (bool, error) {
 	return a.backend.FailsafeEnabled(), nil
 }
 
-// SetFailsafeEnabled enables or disables failsafe mode (TODO: implement)
+// GetPassthroughEnabled returns whether passthrough mode is enabled.
+func (a *AdminFrontend) GetPassthroughEnabled(ctx context.Context) (bool, error) {
+	return a.backend.PassthroughEnabled(), nil
+}
+
+// SetFailsafeEnabled enables or disables failsafe mode
 func (a *AdminFrontend) SetFailsafeEnabled(ctx context.Context, enabled bool) error {
 	return errors.New("SetFailsafeEnabled not yet implemented")
 }
