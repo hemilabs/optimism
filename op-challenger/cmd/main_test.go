@@ -104,9 +104,13 @@ func TestSuperRootRpc(t *testing.T) {
 		verifyArgsInvalid(t, "flag superroot-rpc is required", addRequiredArgsExcept(gameTypes.SuperCannonKonaGameType, "--superroot-rpc"))
 	})
 
+	t.Run("RequiredForZK", func(t *testing.T) {
+		verifyArgsInvalid(t, "flag superroot-rpc is required", addRequiredArgsExcept(gameTypes.ZKDisputeGameType, "--superroot-rpc"))
+	})
+
 	for _, gameType := range gameTypes.PlayableGameTypes {
 		gameType := gameType
-		if gameType == gameTypes.SuperCannonKonaGameType {
+		if gameType == gameTypes.SuperCannonKonaGameType || gameType == gameTypes.ZKDisputeGameType {
 			continue
 		}
 
@@ -118,6 +122,12 @@ func TestSuperRootRpc(t *testing.T) {
 	t.Run("Valid-SuperCannonKona", func(t *testing.T) {
 		url := "http://localhost/super"
 		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.SuperCannonKonaGameType, "--superroot-rpc", "--superroot-rpc", url))
+		require.Equal(t, url, cfg.SuperRootRPC)
+	})
+
+	t.Run("Valid-ZK", func(t *testing.T) {
+		url := "http://localhost/super"
+		cfg := configForArgs(t, addRequiredArgsExcept(gameTypes.ZKDisputeGameType, "--superroot-rpc", "--superroot-rpc", url))
 		require.Equal(t, url, cfg.SuperRootRPC)
 	})
 }
@@ -1232,7 +1242,7 @@ func TestRollupRpc(t *testing.T) {
 	for _, gameType := range gameTypes.PlayableGameTypes {
 		gameType := gameType
 
-		if gameType == gameTypes.SuperCannonKonaGameType {
+		if gameType == gameTypes.SuperCannonKonaGameType || gameType == gameTypes.ZKDisputeGameType {
 			t.Run(fmt.Sprintf("NotRequiredFor-%v", gameType), func(t *testing.T) {
 				configForArgs(t, addRequiredArgsExcept(gameType, "--rollup-rpc"))
 			})
@@ -1417,9 +1427,9 @@ func requiredArgs(gameType gameTypes.GameType) map[string]string {
 		addRequiredCannonKonaArgs(args)
 	case gameTypes.SuperCannonKonaGameType:
 		addRequiredSuperCannonKonaArgs(args)
-	case gameTypes.SuperAsteriscKonaGameType:
-		addRequiredSuperAsteriscKonaArgs(args)
-	case gameTypes.OptimisticZKGameType, gameTypes.AlphabetGameType, gameTypes.FastGameType:
+	case gameTypes.ZKDisputeGameType:
+		addRequiredSuperRootArgs(args)
+	case gameTypes.AlphabetGameType, gameTypes.FastGameType:
 		addRequiredOutputRootArgs(args)
 	}
 	return args
@@ -1437,6 +1447,10 @@ func addRequiredCannonKonaArgs(args map[string]string) {
 
 func addRequiredOutputRootArgs(args map[string]string) {
 	args["--rollup-rpc"] = rollupRpc
+}
+
+func addRequiredSuperRootArgs(args map[string]string) {
+	args["--superroot-rpc"] = superRootRpc
 }
 
 func addRequiredCannonBaseArgs(args map[string]string) {

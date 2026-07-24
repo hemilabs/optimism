@@ -313,46 +313,9 @@ func (c Config) Check() error {
 			return err
 		}
 	}
-	if c.GameTypeEnabled(gameTypes.AsteriscGameType) {
-		if c.RollupRpc == "" {
-			return ErrMissingRollupRpc
-		}
-		if err := c.Asterisc.Check(); err != nil {
-			return fmt.Errorf("asterisc: %w", err)
-		}
-		if c.AsteriscAbsolutePreState == "" && c.AsteriscAbsolutePreStateBaseURL == nil {
-			return ErrMissingAsteriscAbsolutePreState
-		}
-		if c.Asterisc.SnapshotFreq == 0 {
-			return ErrMissingAsteriscSnapshotFreq
-		}
-		if c.Asterisc.InfoFreq == 0 {
-			return ErrMissingAsteriscInfoFreq
-		}
-	}
-	if c.GameTypeEnabled(gameTypes.AsteriscKonaGameType) {
-		if c.RollupRpc == "" {
-			return ErrMissingRollupRpc
-		}
-		if err := c.validateBaseAsteriscKonaOptions(); err != nil {
-			return err
-		}
-	}
-	if c.GameTypeEnabled(gameTypes.SuperAsteriscKonaGameType) {
-		if c.SupervisorRPC == "" {
-			return ErrMissingSupervisorRpc
-		}
-
-		if len(c.AsteriscKona.Networks) == 0 && c.AsteriscKona.DepsetConfigPath == "" {
-			return ErrMissingDepsetConfig
-		}
-		if err := c.validateBaseAsteriscKonaOptions(); err != nil {
-			return err
-		}
-	}
-	if c.GameTypeEnabled(gameTypes.OptimisticZKGameType) {
-		if c.RollupRpc == "" {
-			return ErrMissingRollupRpc
+	if c.GameTypeEnabled(gameTypes.ZKDisputeGameType) {
+		if c.SuperRootRPC == "" {
+			return ErrMissingSuperRootRpc
 		}
 	}
 	if c.GameTypeEnabled(gameTypes.AlphabetGameType) || c.GameTypeEnabled(gameTypes.FastGameType) {

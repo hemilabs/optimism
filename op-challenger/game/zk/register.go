@@ -48,11 +48,11 @@ func RegisterGameTypes(
 	clients *client.Provider,
 	gameStatusProvider GameStatusProvider,
 ) error {
-	if cfg.GameTypeEnabled(gameTypes.OptimisticZKGameType) {
-		registry.RegisterGameType(gameTypes.OptimisticZKGameType, func(game gameTypes.GameMetadata, dir string) (scheduler.GamePlayer, error) {
-			rollupClient, syncValidator, err := clients.RollupClients()
+	if cfg.GameTypeEnabled(gameTypes.ZKDisputeGameType) {
+		registry.RegisterGameType(gameTypes.ZKDisputeGameType, func(game gameTypes.GameMetadata, dir string) (scheduler.GamePlayer, error) {
+			superNodeClient, syncValidator, err := clients.SuperchainClients()
 			if err != nil {
-				return nil, fmt.Errorf("failed to create rollup clients: %w", err)
+				return nil, fmt.Errorf("failed to create superchain clients: %w", err)
 			}
 			contract, err := contracts.NewOptimisticZKDisputeGameContract(m, game.Proxy, clients.MultiCaller())
 			if err != nil {
@@ -66,7 +66,7 @@ func RegisterGameTypes(
 				syncValidator,
 				nil,
 				clients.L1Client(),
-				ActorCreator(l1Clock, rollupClient, gameStatusProvider, contract, txSender),
+				ActorCreator(l1Clock, superNodeClient, gameStatusProvider, contract, txSender),
 			)
 		})
 	}
