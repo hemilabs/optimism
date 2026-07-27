@@ -171,9 +171,9 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     ///         - Major bump: New required sequential upgrade
     ///         - Minor bump: Replacement OPCM for same upgrade
     ///         - Patch bump: Development changes (expected for normal dev work)
-    /// @custom:semver 7.2.2
+    /// @custom:semver 7.2.3
     function version() public pure returns (string memory) {
-        return "7.2.2";
+        return "7.2.3";
     }
 
     /// @param _contractsContainer The container of blueprint and implementation contract addresses.
@@ -785,8 +785,6 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             }
 
             if (_cfg.disputeGameConfigs[i].enabled && (isCannonGame || isCannonKonaGame || isSuperCannonKonaGame)) {
-                // TODO(#20912): Remove once deploy pipelines provide real anchor roots.
-                // A permissionless initial deployment must not use the placeholder anchor root.
                 if (
                     _isInitialDeployment
                         && _cfg.startingAnchorRoot.root.raw() == Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT
