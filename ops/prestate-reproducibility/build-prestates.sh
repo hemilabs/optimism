@@ -26,96 +26,17 @@ mkdir -p "${STATES_DIR}" "${LOGS_DIR}"
 
 cd "${REPO_DIR}"
 
-# Legacy kona versions that were tagged in the old op-rs/kona repo before migration
-LEGACY_KONA_VERSIONS=(
-  "kona-client/v1.1.6"
-  "kona-client/v1.1.7"
-  "kona-client/v1.2.2"
-  "kona-client/v1.2.4"
-  "kona-client/v1.2.5"
-  "kona-client/v1.2.7"
-)
-LEGACY_KONA_REPO="https://github.com/op-rs/kona"
-LEGACY_KONA_DIR="${TMP_DIR}/kona-legacy"
-
-# Each attempt is time-bounded so a stalled clone fails and retries instead of
-# hanging silently until CI's no-output watchdog kills the job.
-function clone_legacy_kona() {
+function build_prestates() {
   local version=$1
   local log_file=$2
-  local attempt
-  for attempt in 1 2 3; do
-    if timeout 300 git clone -b "${version}" "${LEGACY_KONA_REPO}" kona >> "${log_file}" 2>&1; then
-      return 0
-    fi
-    rm -rf kona
-    echo "Clone attempt ${attempt}/3 of ${LEGACY_KONA_REPO} failed"
-    if ((attempt < 3)); then
-      sleep 5
-    fi
-  done
-  return 1
-}
+  local short_version="${version#*/v}"
+  echo "Building version: ${version} Logs: ${log_file}"
 
-# Legacy kona prestates are built from the old op-rs/kona repo.
-function build_legacy_kona_prestate() {
-  local version=$1
-  if [[ -z "${version}" ]]; then
-    echo "Error: version is required"
-    exit 1
-  fi
-  local short_version
-  short_version=$(echo "${version}" | cut -c 14-)
-  local log_file="${LOGS_DIR}/build-kona-${short_version}.txt"
-  echo "Building Version: ${version} Logs: ${log_file}"
+  git checkout --force "${version}" > "${log_file}" 2>&1
 
-  mkdir -p kona-prestate-build
-  cd kona-prestate-build
-
-  if [[ -d kona ]]; then
-    cd kona
-    git checkout --force "${version}" > "${log_file}" 2>&1
-  else
-    clone_legacy_kona "${version}" "${log_file}"
-    cd kona
-  fi
-  # kona doesn't define a just dependency in its mise config.
-  # but the monorepo does and it should be preinstalled by now. So let's setup the just shim.
-  MISE_DEFAULT_CONFIG_FILENAME="${REPO_DIR}"/mise.toml mise use just > "${log_file}" 2>&1
-
-  cd docker/fpvm-prestates
-  rm -rf ../../prestate-artifacts-cannon
-  just cannon kona-client "${version}" "$(cat ../../.config/cannon_tag)" >> "${log_file}" 2>&1
-  local prestate_hash
-  prestate_hash=$(cat ../../prestate-artifacts-cannon/prestate-proof.json | jq -r .pre)
-  cp ../../prestate-artifacts-cannon/prestate.bin.gz "${STATES_DIR}/${prestate_hash}.bin.gz"
-  VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${short_version}\", \"hash\": \"${prestate_hash}\", \"type\": \"cannon64-kona\"}]")
-  echo "Built kona ${version}: ${prestate_hash}"
-
-  rm ../../prestate-artifacts-cannon/prestate-proof.json
-  just cannon kona-client-int "${version}" "$(cat ../../.config/cannon_tag)" >> "${log_file}" 2>&1
-  prestate_hash=$(cat ../../prestate-artifacts-cannon/prestate-proof.json | jq -r .pre)
-  cp ../../prestate-artifacts-cannon/prestate.bin.gz "${STATES_DIR}/${prestate_hash}.bin.gz"
-  VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${short_version}\", \"hash\": \"${prestate_hash}\", \"type\": \"cannon64-kona-interop\"}]")
-  echo "Built kona-interop ${version}: ${prestate_hash}"
-}
-
-function build_op_program_prestate() {
-  local VERSION=$1
-  if [[ -z "${VERSION}" ]]; then
-    echo "Error: VERSION is required"
-    exit 1
-  fi
-  local SHORT_VERSION # declared separately from assignment to avoid masking failures
-  SHORT_VERSION=$(echo "${VERSION}" | cut -c 13-)
-  local LOG_FILE="${LOGS_DIR}/build-${SHORT_VERSION}.txt"
-  echo "Building Version: ${VERSION} Logs: ${LOG_FILE}"
-  # use --force to overwrite any mise.toml changes
-  git checkout --force "${VERSION}" > "${LOG_FILE}" 2>&1
   if [ -f mise.toml ]; then
     echo "Install dependencies with mise" >> "${log_file}"
-    # Install only the host-side tools: go (for op-program), just (for kona), jq
-    # (for extracting hashes).
+    # Install only the host-side tools needed to build prestates and extract hashes.
     mise trust
     mise install -v -y go just jq >> "${log_file}" 2>&1
   fi
@@ -125,18 +46,6 @@ function build_op_program_prestate() {
     just reproducible-prestate >> "${log_file}" 2>&1
   else
     make reproducible-prestate >> "${log_file}" 2>&1
-  fi
-
-  if [ -f "${BIN_DIR}/prestate-proof.json" ]; then
-    local HASH
-    HASH=$(cat "${BIN_DIR}/prestate-proof.json" | jq -r .pre)
-    if [ -f "${BIN_DIR}/prestate.bin.gz" ]; then
-      cp "${BIN_DIR}/prestate.bin.gz" "${STATES_DIR}/${HASH}.bin.gz"
-    else
-      cp "${BIN_DIR}/prestate.json" "${STATES_DIR}/${HASH}.json"
-    fi
-    VERSIONS_JSON=$(echo "${VERSIONS_JSON}" | jq ". += [{\"version\": \"${SHORT_VERSION}\", \"hash\": \"${HASH}\", \"type\": \"cannon32\"}]")
-    echo "Built cannon32 ${VERSION}: ${HASH}"
   fi
 
   if [[ "${version}" =~ ^kona-client/v ]]; then
@@ -160,27 +69,11 @@ function build_op_program_prestate() {
 
 # this global is written to by build_op_program_prestate and build_kona_prestate
 VERSIONS_JSON="[]"
-readarray -t VERSIONS < <(git tag --list 'op-program/v*' --sort taggerdate)
+readarray -t VERSIONS < <(git tag --list 'kona-client/v*' --sort=taggerdate)
 
 for i in "${!VERSIONS[@]}"; do
   pushd .
   build_op_program_prestate "${VERSIONS[i]}"
-  popd
-  if [ "${CIRCLECI:-}" = "true" ]; then
-    if (((i + 1) % 10 == 0)); then
-      echo "Pruning docker build artifacts after ${i} builds"
-      docker system prune -f
-    fi
-  fi
-done
-
-# Build legacy kona prestates from the old op-rs/kona repo.
-for i in "${!LEGACY_KONA_VERSIONS[@]}"; do
-  tag="${LEGACY_KONA_VERSIONS[i]}"
-  log_file="${LOGS_DIR}/build-legacy-${tag//\//-}.txt"
-
-  pushd .
-  build_legacy_kona_prestate "${tag}" "${log_file}"
   popd
   if [ "${CIRCLECI:-}" = "true" ]; then
     if (((i + 1) % 10 == 0)); then
