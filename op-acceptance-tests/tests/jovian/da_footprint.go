@@ -25,9 +25,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-type CalldataSpammer struct {
-	eoa *loadtest.SyncEOA
-}
+func SpamCalldata(t devtest.T, l2BlockTime time.Duration, el *dsl.L2ELNode, wallet *dsl.HDWallet, funder *dsl.FunderEOA) {
+	eoas := loadtest.FundEOAs(t, eth.HundredEther, 25, l2BlockTime, el, wallet, funder)
+	rr := loadtest.NewRoundRobin(eoas)
 
 func NewCalldataSpammer(eoa *loadtest.SyncEOA) *CalldataSpammer {
 	return &CalldataSpammer{
@@ -163,26 +163,7 @@ func TestDAFootprint(gt *testing.T) {
 			}
 			env.expectL1BlockDAFootprintGasScalar(t, tc.expected)
 
-			var wg sync.WaitGroup
-			defer wg.Wait()
-
-			ctx, cancel := context.WithTimeout(t.Ctx(), time.Minute)
-			defer cancel()
-			t = t.WithCtx(ctx)
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				eoa := sys.FunderL2.NewFundedEOA(eth.OneTenthEther)
-				includer := txinclude.NewPersistent(txinclude.NewPkSigner(eoa.Key().Priv(), eoa.ChainID().ToBig()), struct {
-					*txinclude.Resubmitter
-					*txinclude.Monitor
-				}{
-					txinclude.NewResubmitter(ethClient, l2BlockTime),
-					txinclude.NewMonitor(ethClient, l2BlockTime),
-				})
-				loadtest.NewBurst(l2BlockTime).Run(t, NewCalldataSpammer(loadtest.NewSyncEOA(includer, eoa.Plan())))
-			}()
+			SpamCalldata(t, l2BlockTime, sys.L2EL, sys.Wallet, sys.FunderL2)
 
 			rollupCfg := sys.L2Chain.Escape().RollupConfig()
 			gasTarget := rollupCfg.Genesis.SystemConfig.GasLimit / rollupCfg.ChainOpConfig.EIP1559Elasticity

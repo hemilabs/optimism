@@ -58,7 +58,7 @@ func makeInvalidPayloadHash(msg suptypes.Message) suptypes.Message {
 // filters.
 type InvalidExecMsgSpammer struct {
 	l2             *L2
-	eoa            *SyncEOA
+	eoa            *dsl.SyncEOA
 	validInitMsg   messages.Message
 	makeInvalidFns *RoundRobin[dsl.InvalidMsgFn]
 }
@@ -90,7 +90,7 @@ func NewInvalidExecMsgSpammer(t devtest.T, l2 *L2, validInitMsg messages.Message
 
 	return &InvalidExecMsgSpammer{
 		l2:           l2,
-		eoa:          NewSyncEOA(includer, eoa.Plan()),
+		eoa:          dsl.NewSyncEOA(includer, eoa.Plan()),
 		validInitMsg: validInitMsg,
 		makeInvalidFns: NewRoundRobin([]makeInvalidInitMsgFn{
 			makeInvalidBlockNumber,

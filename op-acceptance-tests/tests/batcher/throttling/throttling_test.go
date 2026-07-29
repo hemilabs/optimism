@@ -79,35 +79,7 @@ func TestDABlockThrottling(gt *testing.T) {
 
 func spamTxs(ctx context.Context, sys *presets.Minimal) {
 	l2BlockTime := time.Duration(sys.L2Chain.Escape().RollupConfig().BlockTime) * time.Second
-
-	// Fund a lot of spammer EOAs. The funder provided by the devstack isn't very reliable when
-	// funding lots of different accounts. We fund one account from the faucet and then use that
-	// account to fund all the others.
-	const numAccounts = 50
-	totalETH := eth.OneEther.Mul(numAccounts)
-	spammerELClient := txinclude.NewReliableEL(sys.L2EL.Escape().EthClient(), l2BlockTime)
-	funder := newSyncEOA(sys.FunderL2.NewFundedEOA(totalETH), spammerELClient)
-	totalETH = totalETH.Sub(totalETH.Div(50)) // Reserve 2% of the balance for gas.
-	ethPerAccount := totalETH.Div(numAccounts)
-	var eoas []*loadtest.SyncEOA
-	var mu sync.Mutex
-	var wgEOA sync.WaitGroup
-	for range numAccounts {
-		wgEOA.Add(1)
-		go func() {
-			defer wgEOA.Done()
-			eoa := sys.Wallet.NewEOA(sys.L2EL)
-			addr := eoa.Address()
-			_, err := funder.Include(sys.T, txplan.WithTo(&addr), txplan.WithValue(ethPerAccount))
-			sys.T.Require().NoError(err)
-
-			mu.Lock()
-			defer mu.Unlock()
-			eoas = append(eoas, newSyncEOA(eoa, spammerELClient))
-		}()
-	}
-	wgEOA.Wait()
-
+	eoas := loadtest.FundEOAs(sys.T, eth.HundredEther, 50, l2BlockTime, sys.L2EL, sys.Wallet, sys.FunderL2)
 	eoasRR := loadtest.NewRoundRobin(eoas)
 	spammer := loadtest.SpammerFunc(func(t devtest.T) error {
 		_, err := eoasRR.Get().Include(t, txplan.WithTo(&predeploys.L1BlockAddr), txplan.WithData(make([]byte, 0)), txplan.WithGasLimit(70_000))

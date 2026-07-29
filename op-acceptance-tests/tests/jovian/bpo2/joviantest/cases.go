@@ -253,26 +253,7 @@ func RunDAFootprint(gt *testing.T, setup SetupFn) {
 			}
 			env.expectL1BlockDAFootprintGasScalar(t, tc.expected)
 
-			var wg sync.WaitGroup
-			defer wg.Wait()
-
-			ctx, cancel := context.WithTimeout(t.Ctx(), time.Minute)
-			defer cancel()
-			t = t.WithCtx(ctx)
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				eoa := sys.FunderL2.NewFundedEOA(eth.OneTenthEther)
-				includer := txinclude.NewPersistent(txinclude.NewPkSigner(eoa.Key().Priv(), eoa.ChainID().ToBig()), struct {
-					*txinclude.Resubmitter
-					*txinclude.Monitor
-				}{
-					txinclude.NewResubmitter(ethClient, l2BlockTime),
-					txinclude.NewMonitor(ethClient, l2BlockTime),
-				})
-				loadtest.NewBurst(l2BlockTime).Run(t, newCalldataSpammer(loadtest.NewSyncEOA(includer, eoa.Plan())))
-			}()
+			jovian.SpamCalldata(t, l2BlockTime, sys.L2EL, sys.Wallet, sys.FunderL2)
 
 			rollupCfg := sys.L2Chain.Escape().RollupConfig()
 			gasTarget := rollupCfg.Genesis.SystemConfig.GasLimit / rollupCfg.ChainOpConfig.EIP1559Elasticity
