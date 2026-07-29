@@ -385,8 +385,8 @@ func newTwoL2SupernodeRuntimeWithConfigAndSequencerMode(t devtest.T, enableInter
 		connectL2CLPeers(t, t.Logger(), l2BCL, supernodeL2BCL)
 		// EL P2P: block bodies sync between each sequencer EL and its paired
 		// supernode EL (required for the ELSync follow path).
-		connectL2ELPeers(t, t.Logger(), supernodeL2AEL.UserRPC(), seqL2AEL.UserRPC(), false)
-		connectL2ELPeers(t, t.Logger(), supernodeL2BEL.UserRPC(), seqL2BEL.UserRPC(), false)
+		connectL2ELPeers(t, t.Logger(), supernodeL2AEL.UserRPC(), seqL2AEL.UserRPC())
+		connectL2ELPeers(t, t.Logger(), supernodeL2BEL.UserRPC(), seqL2BEL.UserRPC())
 	}
 
 	// Batchers follow the active sequencer's CL + EL so the L1-derived safe chain stays
@@ -551,7 +551,7 @@ func addMultiChainFollowL2Node(t devtest.T, runtime *MultiChainRuntime, chainKey
 		SyncMode: nodeSync.ELSync,
 	})
 
-	connectL2ELPeers(t, t.Logger(), chain.EL.UserRPC(), l2EL.UserRPC(), false)
+	connectL2ELPeers(t, t.Logger(), chain.EL.UserRPC(), l2EL.UserRPC())
 	connectL2CLPeers(t, t.Logger(), chain.CL, l2CL)
 
 	node := &SingleChainNodeRuntime{
