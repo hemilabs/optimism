@@ -4,6 +4,10 @@ pragma solidity ^0.8.0;
 // Interfaces
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
+import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
+import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 
 /// @title OPContractsManagerUtilsCaller
 /// @notice OPContractsManagerUtilsCaller is an abstract contract that exists to hide all of the
@@ -180,6 +184,17 @@ abstract contract OPContractsManagerUtilsCaller {
             abi.encodeCall(
                 IOPContractsManagerUtils.upgrade, (_proxyAdmin, _target, _implementation, _data, _slot, _offset)
             )
+        );
+    }
+
+    /// @notice Resolves the SystemConfig a target proxy is already bound to, falling back to
+    ///         _default when it can't report one. See OPContractsManagerUtils.systemConfigFor.
+    /// @param _default Fallback SystemConfig for not-yet-initialized proxies.
+    /// @param _target The proxy whose bound SystemConfig should be resolved.
+    /// @return The bound SystemConfig.
+    function _systemConfigFor(ISystemConfig _default, address _target) internal view returns (ISystemConfig) {
+        return abi.decode(
+            _staticcall(abi.encodeCall(IOPContractsManagerUtils.systemConfigFor, (_default, _target))), (ISystemConfig)
         );
     }
 

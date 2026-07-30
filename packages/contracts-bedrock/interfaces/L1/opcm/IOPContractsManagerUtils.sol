@@ -7,6 +7,7 @@ import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 import { IZKVerifier } from "interfaces/dispute/zk/IZKVerifier.sol";
 import { Claim, Duration, GameType } from "src/dispute/lib/Types.sol";
 
@@ -150,6 +151,20 @@ interface IOPContractsManagerUtils {
         uint8 _offset
     )
         external;
+
+    function getGameImpl(GameType _gameType) external view returns (IDisputeGame);
+
+    function makeGameArgs(
+        uint256 _l2ChainId,
+        IAnchorStateRegistry _anchorStateRegistry,
+        IDelayedWETH _delayedWETH,
+        DisputeGameConfig memory _gcfg
+    )
+        external
+        view
+        returns (bytes memory);
+
+    function systemConfigFor(ISystemConfig _default, address _target) external view returns (ISystemConfig);
 
     function __constructor__(IOPContractsManagerContainer _contractsContainer) external;
 }
