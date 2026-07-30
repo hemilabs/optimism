@@ -89,6 +89,7 @@ func main() {
 		sn, err := supernode.New(ctx,
 			l,
 			Version,
+			GitCommit,
 			close,
 			cfg,
 			vnCfgs)
