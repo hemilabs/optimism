@@ -55,6 +55,18 @@ The OP Stack includes significant Rust implementations:
 - **op-e2e**: End-to-end testing framework
 - **op-acceptance-tests**: Acceptance test suite
 
+## Subdirectory Instructions
+
+Some subdirectories have their own CLAUDE.md with domain-specific conventions. Read the relevant file before working in that area — do not read them all upfront.
+
+- `rust/kona/CLAUDE.md` — Kona Rust workspace: build commands (`just b/t/l/f`), code style, architecture overview
+- `rust/` — read before working in that area; links to [docs/ai/rust-dev.md](docs/ai/rust-dev.md)
+- `packages/contracts-bedrock/` — read before working in that area; links to [docs/ai/contract-dev.md](docs/ai/contract-dev.md)
+- `op-acceptance-tests/` — read before working in that area; links to [docs/ai/acceptance-tests.md](docs/ai/acceptance-tests.md)
+- `op-node/rollup/derive/` — read before working in that area; links to [docs/ai/derivation.md](docs/ai/derivation.md)
+- `rust/kona/crates/protocol/` — read before working in that area; links to [docs/ai/derivation.md](docs/ai/derivation.md)
+- `.circleci/` and `.github/` — read before editing CI config; links to [docs/ai/ci-config-review.md](docs/ai/ci-config-review.md)
+
 ## Additional Documentation
 
 More detailed guidance for AI agents can be found in:
