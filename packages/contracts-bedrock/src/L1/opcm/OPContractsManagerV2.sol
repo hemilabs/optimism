@@ -171,9 +171,9 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     ///         - Major bump: New required sequential upgrade
     ///         - Minor bump: Replacement OPCM for same upgrade
     ///         - Patch bump: Development changes (expected for normal dev work)
-    /// @custom:semver 7.2.4
+    /// @custom:semver 7.2.5
     function version() public pure returns (string memory) {
-        return "7.2.4";
+        return "7.2.5";
     }
 
     /// @param _contractsContainer The container of blueprint and implementation contract addresses.
@@ -1061,7 +1061,6 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
                 _cfg.gasLimit,
                 _cfg.unsafeBlockSigner,
                 _cfg.resourceConfig,
-                _chainIdToBatchInboxAddress(_cfg.l2ChainId),
                 addrs,
                 _cfg.l2ChainId,
                 _cfg.superchainConfig
