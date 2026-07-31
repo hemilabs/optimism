@@ -184,7 +184,11 @@ contract L2Genesis is Script {
             return;
         }
 
-        if (forkEquals(_fork, Fork.INTEROP)) {
+        if (forkEquals(_fork, Fork.KARST)) {
+            return;
+        }
+
+        if (forkEquals(_fork, Fork.LAGOON)) {
             return;
         }
     }
@@ -391,7 +395,7 @@ contract L2Genesis is Script {
 
     /// @notice Returns true when interop should be active in the genesis state.
     function _isGenesisInteropEnabled(Input memory _input) internal pure returns (bool) {
-        return _input.fork >= uint256(Fork.INTEROP) && _input.useInterop
+        return _input.fork >= uint256(Fork.LAGOON) && _input.useInterop
             && DevFeatures.isDevFeatureEnabled(_input.devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP);
     }
 
@@ -474,7 +478,7 @@ contract L2Genesis is Script {
             _setImplementationCode(Predeploys.L1_BLOCK_ATTRIBUTES);
         }
         // Only set the runtime INTEROP feature flag at genesis if the chain is being born at or
-        // beyond the Interop fork.
+        // beyond the Lagoon fork.
         if (_isGenesisInteropEnabled(_input)) {
             IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).setFeature(Features.INTEROP);
         }
