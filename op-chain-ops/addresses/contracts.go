@@ -45,6 +45,7 @@ type ImplementationsContracts struct {
 	PermissionedDisputeGameImpl      common.Address
 	ZkDisputeGameImpl                common.Address
 	StorageSetterImpl                common.Address
+	SP1PlonkAdapterImpl              common.Address
 	SuperFaultDisputeGameImpl        common.Address
 	SuperPermissionedDisputeGameImpl common.Address
 }
