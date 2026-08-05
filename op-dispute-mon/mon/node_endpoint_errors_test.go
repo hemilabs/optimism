@@ -12,10 +12,10 @@ import (
 )
 
 func TestCheckNodeEndpointErrors_NoErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}}, RollupEndpointErrors: nil},
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x22}}, RollupEndpointErrors: make(map[string]bool)},
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x33}}}, // No RollupEndpointErrors field set
+	games := []*types.CommonGameData{
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}}, NodeEndpointErrors: nil},
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x22}}, NodeEndpointErrors: make(map[string]bool)},
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x33}}}, // No NodeEndpointErrors field set
 	}
 
 	metrics := &stubNodeEndpointErrorsMetrics{}
@@ -28,7 +28,7 @@ func TestCheckNodeEndpointErrors_NoErrors(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrors_SingleGameWithErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
+	games := []*types.CommonGameData{
 		{
 			GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}},
 			RollupEndpointErrors: map[string]bool{
@@ -49,7 +49,7 @@ func TestCheckNodeEndpointErrors_SingleGameWithErrors(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrors_MultipleGamesWithOverlappingErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
+	games := []*types.CommonGameData{
 		{
 			GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}},
 			RollupEndpointErrors: map[string]bool{
@@ -83,8 +83,8 @@ func TestCheckNodeEndpointErrors_MultipleGamesWithOverlappingErrors(t *testing.T
 }
 
 func TestCheckNodeEndpointErrors_MixedGamesWithAndWithoutErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}}, RollupEndpointErrors: nil},
+	games := []*types.CommonGameData{
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}}, NodeEndpointErrors: nil},
 		{
 			GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x22}},
 			RollupEndpointErrors: map[string]bool{
@@ -110,7 +110,7 @@ func TestCheckNodeEndpointErrors_MixedGamesWithAndWithoutErrors(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrors_EmptyGamesList(t *testing.T) {
-	games := []*types.EnrichedGameData{}
+	games := []*types.CommonGameData{}
 
 	metrics := &stubNodeEndpointErrorsMetrics{}
 	logger := testlog.Logger(t, log.LvlDebug)
