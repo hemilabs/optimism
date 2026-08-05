@@ -11,6 +11,8 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts"
 	keccakTypes "github.com/ethereum-optimism/optimism/op-challenger/game/keccak/types"
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/common"
@@ -336,6 +338,8 @@ func setupFetcherTest(t *testing.T) (*InputFetcher, *stubOracle, *stubL1Source) 
 		proposals: make(map[byte]*proposalConfig),
 	}
 	l1Source := &stubL1Source{
+		blocks:     make(map[uint64]common.Hash),
+		rcpts:      make(map[common.Hash]optypes.Receipts),
 		txs:        make(map[uint64]types.Transactions),
 		rcptStatus: make(map[common.Hash]uint64),
 		logs:       make(map[common.Hash][]*types.Log),
@@ -420,6 +424,11 @@ func (o *stubOracle) createProposal(input keccakTypes.InputData) *proposalConfig
 
 type stubL1Source struct {
 	nextTxId uint64
+
+	// Map block number to block hash
+	blocks map[uint64]common.Hash
+	// Map block hash to receipts
+	rcpts map[common.Hash]optypes.Receipts
 	// Map block number to tx
 	txs map[uint64]types.Transactions
 	// Map txHash to receipt
@@ -440,8 +449,8 @@ func (s *stubL1Source) BlockByNumber(_ context.Context, number *big.Int) (*types
 	return (&types.Block{}).WithBody(types.Body{Transactions: txs}), nil
 }
 
-func (s *stubL1Source) TransactionReceipt(_ context.Context, txHash common.Hash) (*types.Receipt, error) {
-	rcptStatus, ok := s.rcptStatus[txHash]
+func (s *stubL1Source) FetchReceipts(_ context.Context, blockHash common.Hash) (eth.BlockInfo, optypes.Receipts, error) {
+	rcpts, ok := s.rcpts[blockHash]
 	if !ok {
 		rcptStatus = types.ReceiptStatusSuccessful
 	} else if rcptStatus == MissingReceiptStatus {
@@ -452,7 +461,16 @@ func (s *stubL1Source) TransactionReceipt(_ context.Context, txHash common.Hash)
 	return &types.Receipt{Status: rcptStatus, Logs: logs}, nil
 }
 
-func (s *stubL1Source) createTx(blockNum uint64, key *ecdsa.PrivateKey, txMod TxModifier) *types.Transaction {
+func uint64ToHash(num uint64) common.Hash {
+	data := make([]byte, 8)
+	binary.BigEndian.PutUint64(data, num)
+	return crypto.Keccak256Hash(data)
+}
+
+func (s *stubL1Source) createReceipt(blockNum uint64, status uint64, proposals ...*proposalConfig) *optypes.Receipt {
+	// Make the block exist
+	s.blocks[blockNum] = uint64ToHash(blockNum)
+
 	txId := s.nextTxId
 	s.nextTxId++
 
@@ -466,40 +484,9 @@ func (s *stubL1Source) createTx(blockNum uint64, key *ecdsa.PrivateKey, txMod Tx
 		Gas:       3,
 		Data:      []byte{},
 	}
-	txMod(inner)
-	tx := types.MustSignNewTx(key, types.LatestSignerForChainID(inner.ChainID), inner)
-
-	// Track tx internally
-	txSet := s.txs[blockNum]
-	txSet = append(txSet, tx)
-	s.txs[blockNum] = txSet
-
-	return tx
-}
-
-func (s *stubL1Source) createLog(tx *types.Transaction, proposal *proposalConfig) *types.Log {
-	// Concat the claimant address and the proposal id
-	// These will be split back into address and id in fetcher.extractRelevantLeavesFromTx
-	data := append(proposal.claimantAddr[:], proposal.id)
-
-	txLog := &types.Log{
-		Address: oracleAddr,
-		Data:    data,
-		Topics:  []common.Hash{},
-
-		// ignored (zeroed):
-		BlockNumber: 0,
-		TxHash:      common.Hash{},
-		TxIndex:     0,
-		BlockHash:   common.Hash{},
-		Index:       0,
-		Removed:     false,
-	}
-
-	// Track tx log
-	logSet := s.logs[tx.Hash()]
-	logSet = append(logSet, txLog)
-	s.logs[tx.Hash()] = logSet
-
-	return txLog
+	rcpt := &optypes.Receipt{Receipt: types.Receipt{TxHash: uint64ToHash(txId), Status: status, Logs: logs}}
+	blockHash := s.blocks[blockNum]
+	rcpts := s.rcpts[blockHash]
+	s.rcpts[blockHash] = append(rcpts, rcpt)
+	return rcpt
 }

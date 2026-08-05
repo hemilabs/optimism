@@ -130,7 +130,7 @@ func TestRelayWithInvalidMessagesSteady(gt *testing.T) {
 	t.Require().NoError(err)
 	ref := l2A.EL.BlockRefByNumber(initTx.Receipt.BlockNumber.Uint64())
 	out := new(txintent.InteropOutput)
-	t.Require().NoError(out.FromReceipt(t.Ctx(), initTx.Receipt, ref.BlockRef(), l2A.EL.ChainID()))
+	t.Require().NoError(out.FromReceipt(t.Ctx(), &initTx.Receipt.Receipt, ref.BlockRef(), l2A.EL.ChainID()))
 	t.Require().Len(out.Entries, 1)
 	validInitMsg := out.Entries[0]
 
