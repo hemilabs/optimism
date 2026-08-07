@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"errors"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -107,10 +108,15 @@ func (s *L2Sequencer) ActL2StartBlock(t Testing) {
 		t.InvalidAction("already started building L2 block")
 		return
 	}
-	s.synchronousEvents.Emit(t.Ctx(), sequencing.SequencerActionEvent{})
-	require.NoError(t, s.drainer.DrainUntil(event.Is[engine.BuildStartedEvent], false),
-		"failed to start block building")
-
+	s.sequencer.RunAction()
+	if err := s.drainer.Drain(); err != nil {
+		return err
+	}
+	// Assert the job exists rather than that some event was seen: several
+	// failure paths also emit a forkchoice update without starting a build.
+	if s.sequencer.Building().Info.ID == (eth.PayloadID{}) {
+		return errors.New("sequencer did not start a block-building job")
+	}
 	s.l2Building = true
 }
 
@@ -122,8 +128,8 @@ func (s *L2Sequencer) ActL2EndBlock(t Testing) eth.L2BlockRef {
 	}
 	s.l2Building = false
 
-	s.synchronousEvents.Emit(t.Ctx(), sequencing.SequencerActionEvent{})
-	require.NoError(t, s.drainer.DrainUntil(event.Is[engine.PayloadSuccessEvent], false),
+	s.sequencer.RunAction()
+	require.NoError(t, s.drainer.DrainUntil(event.Is[engine.UnsafeUpdateEvent], false),
 		"failed to complete block building")
 
 	// After having built a L2 block, make sure to get an engine update processed,
