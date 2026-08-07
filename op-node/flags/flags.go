@@ -485,6 +485,7 @@ var optionalFlags = []cli.Flag{
 	L2EngineKind,
 	L2EngineRpcTimeout,
 	L2FollowSource,
+	L2FollowSourceRpcTimeout,
 	InteropDependencySet,
 	IgnoreMissingPectraBlobSchedule,
 	ExperimentalOPStackAPI,
