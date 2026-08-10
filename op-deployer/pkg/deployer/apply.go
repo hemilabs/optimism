@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 
@@ -201,6 +202,7 @@ type ApplyPipelineOpts struct {
 	DeployMockSP1Verifier bool
 	PrivateKey            string
 	Workdir               string
+	ReceiptQueryInterval  time.Duration
 }
 
 func ApplyPipeline(
@@ -249,11 +251,12 @@ func ApplyPipeline(
 		signer := opcrypto.SignerFnFromBind(opcrypto.PrivateKeySignerFn(opts.DeployerPrivateKey, chainID))
 
 		bcaster, err = broadcaster.NewKeyedBroadcaster(broadcaster.KeyedBroadcasterOpts{
-			Logger:  opts.Logger,
-			ChainID: new(big.Int).SetUint64(intent.L1ChainID),
-			Client:  l1Client,
-			Signer:  signer,
-			From:    deployer,
+			Logger:               opts.Logger,
+			ChainID:              new(big.Int).SetUint64(intent.L1ChainID),
+			Client:               l1Client,
+			Signer:               signer,
+			From:                 deployer,
+			ReceiptQueryInterval: opts.ReceiptQueryInterval,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create broadcaster: %w", err)
