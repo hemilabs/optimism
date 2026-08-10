@@ -41,3 +41,4 @@
 
 # Must come last to avoid being overridden
 /.github/CODEOWNERS  @ethereum-optimism/cloud-security
+/.github/dependency-review-config.yml @ethereum-optimism/cloud-security
