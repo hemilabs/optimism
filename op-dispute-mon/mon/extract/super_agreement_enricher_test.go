@@ -28,7 +28,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		validator.clients = nil // Set to nil to test the error case
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 0,
@@ -39,8 +39,8 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		require.ErrorContains(t, err, "super root RPC required")
 	})
 
-	t.Run("SkipOutputRootGameTypes", func(t *testing.T) {
-		gameTypes := []uint32{0, 1, 2, 3, 6, 254, 255, 1337}
+	t.Run("SkipUnsupportedGameTypes", func(t *testing.T) {
+		gameTypes := []uint32{0, 1, 2, 3, 4, 6, 7, 8, 10, 11, 254, 255, 1337, 49812}
 		for _, gameType := range gameTypes {
 			gameType := gameType
 			t.Run(fmt.Sprintf("GameType_%d", gameType), func(t *testing.T) {
@@ -61,8 +61,11 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		}
 	})
 
-	t.Run("FetchAllNonOutputRootGameTypes", func(t *testing.T) {
-		gameTypes := []uint32{4, 5, 7, 9, 11, 49812} // Treat unknown game types as using super roots
+	t.Run("FetchSupportedSuperRootGameTypes", func(t *testing.T) {
+		gameTypes := []uint32{
+			uint32(challengerTypes.SuperPermissionedGameType),
+			uint32(challengerTypes.SuperCannonKonaGameType),
+		}
 		for _, gameType := range gameTypes {
 			gameType := gameType
 			t.Run(fmt.Sprintf("GameType_%d", gameType), func(t *testing.T) {
@@ -87,7 +90,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		rollup.outputErr = errors.New("boom")
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        100,
 			L2SequenceNumber: 0,
@@ -105,7 +108,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		validator, _, metrics := setupSuperValidatorTest(t)
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        100,
 			L2SequenceNumber: 0,
@@ -123,7 +126,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		client.derivedFromL1BlockNum = 200
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 0,
@@ -141,7 +144,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		client.derivedFromL1BlockNum = 199
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 0,
@@ -159,7 +162,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		client.derivedFromL1BlockNum = 101
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        100,
 			L2SequenceNumber: 0,
@@ -177,7 +180,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		client.derivedFromL1BlockNum = 201
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 100,
@@ -195,7 +198,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		client.notFound = true
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        100,
 			L2SequenceNumber: 42984924,
@@ -215,7 +218,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		}
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        100,
 			L2SequenceNumber: 0,
@@ -236,7 +239,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		}
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        100,
 			L2SequenceNumber: 0,
@@ -256,7 +259,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		clients[2].outputErr = nil
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 0,
@@ -277,7 +280,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		clients[2].superRoot = divergedRoot
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 0,
@@ -297,7 +300,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		clients[2].derivedFromL1BlockNum = 201
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 0,
@@ -320,7 +323,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		clients[3].derivedFromL1BlockNum = 150 // Safe because L1HeadNum is 200
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 50,
@@ -343,7 +346,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 		clients[2].derivedFromL1BlockNum = 150
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 50,
@@ -366,7 +369,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 50,
@@ -390,7 +393,7 @@ func TestDetector_CheckSuperRootAgreement(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:        200,
 			L2SequenceNumber: 50,
@@ -459,7 +462,7 @@ func TestSuperRootEndpointTracking(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999, // Super root game type
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:          200,
 			L2SequenceNumber:   0,
@@ -487,7 +490,7 @@ func TestSuperRootEndpointTracking(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:          200,
 			L2SequenceNumber:   0,
@@ -518,7 +521,7 @@ func TestSuperRootEndpointTracking(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:          200,
 			L2SequenceNumber:   0,
@@ -548,7 +551,7 @@ func TestSuperRootEndpointTracking(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:          200,
 			L2SequenceNumber:   0,
@@ -573,7 +576,7 @@ func TestSuperRootEndpointTracking(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:          200,
 			L2SequenceNumber:   0,
@@ -595,7 +598,7 @@ func TestSuperRootEndpointTracking(t *testing.T) {
 
 		game := &types.CommonGameData{
 			GameMetadata: challengerTypes.GameMetadata{
-				GameType: 999,
+				GameType: uint32(challengerTypes.SuperPermissionedGameType),
 			},
 			L1HeadNum:          200,
 			L2SequenceNumber:   0,
