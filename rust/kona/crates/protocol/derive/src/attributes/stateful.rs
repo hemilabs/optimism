@@ -93,7 +93,7 @@ where
 
         let mut sys_config = self
             .config_fetcher
-            .system_config_by_number(l2_parent.block_info.number, self.rollup_cfg.clone())
+            .system_config_by_l2_hash(l2_parent.block_info.hash, self.rollup_cfg.clone())
             .await
             .map_err(Into::into)?;
 
@@ -421,7 +421,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header::default();
         let hash = header.hash_slow();
@@ -447,7 +447,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header::default();
         let hash = header.hash_slow();
@@ -474,7 +474,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let hash = header.hash_slow();
@@ -506,7 +506,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let prev_randao = header.mix_hash;
@@ -560,7 +560,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let prev_randao = header.mix_hash;
@@ -614,7 +614,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let parent_beacon_block_root = Some(header.parent_beacon_block_root.unwrap_or_default());
@@ -669,7 +669,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let prev_randao = header.mix_hash;
@@ -756,7 +756,7 @@ mod tests {
 
         let l2_number = 1u64;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
 
         let mut builder =
             StatefulAttributesBuilder::new(cfg.clone(), l1_cfg, fetcher, provider, None);
@@ -826,7 +826,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let hash = header.hash_slow();
@@ -877,7 +877,7 @@ mod tests {
         let l1_cfg = Arc::new(L1Config::sepolia().into());
         let l2_number = 1;
         let mut fetcher = TestSystemConfigL2Fetcher::default();
-        fetcher.insert(l2_number, SystemConfig::default());
+        fetcher.insert(B256::ZERO, SystemConfig::default());
         let mut provider = TestChainProvider::default();
         let header = Header { timestamp, ..Default::default() };
         let hash = header.hash_slow();
