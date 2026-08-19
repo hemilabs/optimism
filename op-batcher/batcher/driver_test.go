@@ -9,8 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -248,8 +248,11 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 	testThrottlingEndpoints := func(numHealthyServers, numUnhealthyServers int) func(t *testing.T) {
 
 		return func(t *testing.T) {
-			healthyCalls := make([]int, numHealthyServers)
-			unHealthyCalls := make([]int, numUnhealthyServers)
+			// The call counters and the shutdown error are written by the test
+			// servers' handler goroutines and read by the test goroutine, so
+			// every one of them has to be accessed atomically.
+			healthyCalls := make([]atomic.Int64, numHealthyServers)
+			unHealthyCalls := make([]atomic.Int64, numUnhealthyServers)
 
 			healthyServers := make([]*httptest.Server, numHealthyServers)
 			unhealthyServers := make([]*httptest.Server, numUnhealthyServers)
@@ -257,14 +260,23 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 			urls := make([]string, 0, numHealthyServers+numUnhealthyServers)
 
 			for i := range healthyCalls {
-				healthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { healthyCalls[i]++ }, noFailure))
+				healthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { healthyCalls[i].Add(1) }, noFailure))
 				urls = append(urls, healthyServers[i].URL)
 				defer healthyServers[i].Close()
 			}
 			for i := range unHealthyCalls {
-				unhealthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { unHealthyCalls[i]++ }, internalError))
+				unhealthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { unHealthyCalls[i].Add(1) }, internalError))
 				urls = append(urls, unhealthyServers[i].URL)
 				defer unhealthyServers[i].Close()
+			}
+
+			anyUncalled := func(calls []atomic.Int64) bool {
+				for i := range calls {
+					if calls[i].Load() == 0 {
+						return true
+					}
+				}
+				return false
 			}
 
 			// Setup test context
@@ -275,11 +287,44 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 
 			t.Log("Throttling endpoints:", urls)
 
-			var batcherShutdownError error
+			var batcherShutdownError atomic.Pointer[error]
 
-			// Create test BatchSubmitter using the setup function
-			bs, _ := setup(t, func(cause error) {
-				batcherShutdownError = cause
+			// Create real metrics instead of NoopMetrics so we can verify metric recording
+			metr := metrics.NewMetrics("test")
+
+			ep := newEndpointProvider()
+			cfg := defaultTestRollupConfig
+			cfg.Genesis.L1.Number = genesisL1Origin
+
+			// Set threshold values based on whether throttling is enabled
+			lowerThreshold := uint64(0)
+			upperThreshold := uint64(0)
+			if throttlingEnabled {
+				lowerThreshold = 10000
+				upperThreshold = 20000
+			}
+
+			// Create test BatchSubmitter
+			bs := NewBatchSubmitter(DriverSetup{
+				closeApp:     func(cause error) { batcherShutdownError.Store(&cause) },
+				Log:          testlog.Logger(t, log.LevelDebug),
+				Metr:         metr, // Use real metrics
+				RollupConfig: cfg,
+				Config: BatcherConfig{
+					ThrottleParams: config.ThrottleParams{
+						ControllerType:      config.StepControllerType,
+						LowerThreshold:      lowerThreshold,
+						UpperThreshold:      upperThreshold,
+						TxSizeLowerLimit:    5000,
+						TxSizeUpperLimit:    10000,
+						BlockSizeLowerLimit: 20000,
+						BlockSizeUpperLimit: 30000,
+						Endpoints:           urls,
+					},
+					NetworkTimeout: time.Second,
+				},
+				ChannelConfig:    defaultTestChannelConfig(),
+				EndpointProvider: ep,
 			})
 			bs.shutdownCtx = ctx
 			bs.Config.NetworkTimeout = time.Second
@@ -333,11 +378,33 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 				cancel()
 			})
 
-			require.Eventually(t,
-				func() bool {
-					// Check that all endpoints were called
-					if slices.Contains(healthyCalls, 0) || slices.Contains(unHealthyCalls, 0) {
-						return false
+			// Verify metrics: unsafe_da_bytes metric should be recorded in all cases
+			time.Sleep(200 * time.Millisecond) // Wait for metric updates
+			c := opmetrics.NewMetricChecker(t, metr.Registry())
+			prefix := "op_batcher_test_"
+			unsafeDABytesFamily := c.FindByName(prefix + "unsafe_da_bytes")
+			require.NotNil(t, unsafeDABytesFamily, "unsafe_da_bytes metric should exist")
+			unsafeDABytesMetric := unsafeDABytesFamily.FindByLabels(map[string]string{})
+			require.NotNil(t, unsafeDABytesMetric, "unsafe_da_bytes metric should be queryable")
+			metricValue := unsafeDABytesMetric.Gauge.GetValue()
+			require.Greater(t, metricValue, 0.0, "unsafe_da_bytes should be > 0 after adding blocks")
+			t.Logf("unsafe_da_bytes metric value: %.0f", metricValue)
+
+			if throttlingEnabled {
+				// Only check endpoint calls when throttling is enabled
+				require.Eventually(t,
+					func() bool {
+						// Check that all endpoints were called
+						return !anyUncalled(healthyCalls) && !anyUncalled(unHealthyCalls)
+					}, time.Second*10, time.Millisecond*10, "All endpoints should have been called within 10s")
+
+				startTestServerAtAddr := func(addr string, handler http.HandlerFunc) *httptest.Server {
+					ln, err := net.Listen("tcp", addr)
+					require.NoError(t, err, "Failed to create new listener for test server")
+
+					s := &httptest.Server{
+						Listener: ln,
+						Config:   &http.Server{Handler: handler},
 					}
 					return true
 				}, time.Second*10, time.Millisecond*10, "All endpoints should have been called within 10s")
@@ -354,42 +421,53 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 				return s
 			}
 
-			// Take one of the healthy servers down, wait 2s and restart. Check it is called again.
-			if len(healthyServers) > 0 {
-				restartedServerCalled := false
+				// Take one of the healthy servers down, wait 2s and restart. Check it is called again.
+				if len(healthyServers) > 0 {
+					var restartedServerCalled atomic.Bool
 
-				addr := healthyServers[0].Listener.Addr().String()
-				healthyServers[0].Close()
-				time.Sleep(time.Second * 2)
-				startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled = true }, noFailure))
-				defer healthyServers[0].Close()
-				t.Log("restarted server at", addr)
+					addr := healthyServers[0].Listener.Addr().String()
+					healthyServers[0].Close()
+					time.Sleep(time.Second * 2)
+					startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled.Store(true) }, noFailure))
+					defer healthyServers[0].Close()
+					t.Log("restarted server at", addr)
 
-				require.Eventually(t, func() bool {
-					return restartedServerCalled
-				}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
-			}
+					require.Eventually(t, func() bool {
+						return restartedServerCalled.Load()
+					}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
+				}
 
-			// Take an unhealthy server down, wait 2s and bring it back up with misconfiguration. Check the batcher exits.
-			if len(unhealthyServers) > 0 {
-				restartedServerCalled := false
+				// Take an unhealthy server down, wait 2s and bring it back up with misconfiguration. Check the batcher exits.
+				if len(unhealthyServers) > 0 {
+					var restartedServerCalled atomic.Bool
 
-				addr := unhealthyServers[0].Listener.Addr().String()
-				unhealthyServers[0].Close()
-				time.Sleep(time.Second * 2)
-				startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled = true }, methodNotFound))
-				defer unhealthyServers[0].Close()
-				t.Log("restarted server at", addr)
+					addr := unhealthyServers[0].Listener.Addr().String()
+					unhealthyServers[0].Close()
+					time.Sleep(time.Second * 2)
+					startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled.Store(true) }, methodNotFound))
+					defer unhealthyServers[0].Close()
+					t.Log("restarted server at", addr)
 
-				require.Eventually(t, func() bool {
-					return restartedServerCalled
-				}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
+					require.Eventually(t, func() bool {
+						return restartedServerCalled.Load()
+					}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
 
-				require.Eventually(t, func() bool {
-					return batcherShutdownError != nil
-				}, timeout, time.Millisecond*10, "Batcher should have triggered self shutdown within 2s")
+					require.Eventually(t, func() bool {
+						return batcherShutdownError.Load() != nil
+					}, timeout, time.Millisecond*10, "Batcher should have triggered self shutdown within 2s")
 
-				require.Equal(t, batcherShutdownError.Error(), ErrSetMaxDASizeRPCMethodUnavailable("http://"+addr, errors.New("method not found")).Error(), "Batcher shutdown error should be the same as the expected error")
+					require.Equal(t, (*batcherShutdownError.Load()).Error(), ErrSetMaxDASizeRPCMethodUnavailable("http://"+addr, errors.New("method not found")).Error(), "Batcher shutdown error should be the same as the expected error")
+				}
+			} else {
+				// When throttling is disabled, verify endpoints were NOT called
+				time.Sleep(time.Second * 2) // Wait to ensure no calls are made
+				for i := range healthyCalls {
+					require.Zero(t, healthyCalls[i].Load(), "No endpoint calls should be made when throttling is disabled")
+				}
+				for i := range unHealthyCalls {
+					require.Zero(t, unHealthyCalls[i].Load(), "No endpoint calls should be made when throttling is disabled")
+				}
+				t.Log("Verified: no endpoint calls when throttling disabled")
 			}
 		}
 	}
