@@ -26,9 +26,7 @@ func (st *L1Tracker) OnL1Unsafe(l1Unsafe eth.BlockRef) {
 }
 
 func (l *L1Tracker) L1BlockRefByNumber(ctx context.Context, num uint64) (eth.L1BlockRef, error) {
-	if ref, ok := l.cache.Get(num); ok {
-		return ref, nil
-	}
+	// Clayton note: I removed the cache, it wasn't being updated for some reason
 
 	return l.L1Fetcher.L1BlockRefByNumber(ctx, num)
 }

@@ -180,6 +180,14 @@ batchLoop:
 				"parent_time", parent.Time,
 			)
 			continue
+		case BatchPast:
+			// Clayton note: BatchPast was unhandled...why? it normally has
+			// logic similar to batch drop, verify
+			batch.Batch.LogContext(bq.log).Warn("Dropping past batch",
+				"parent", parent.ID(),
+				"parent_time", parent.Time,
+			)
+			continue
 		case BatchAccept:
 			nextBatch = batch
 			// don't keep the current batch in the remaining items since we are processing it now,
