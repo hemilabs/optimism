@@ -7730,6 +7730,7 @@ dependencies = [
  "sp1-sdk",
  "strum",
  "strum_macros",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
