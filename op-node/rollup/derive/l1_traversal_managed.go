@@ -108,7 +108,7 @@ func (l1t *L1TraversalManaged) ProvideNextL1(ctx context.Context, nextL1 eth.L1B
 	// If this fails, the caller will just have to ProvideNextL1 again (triggered by revisiting the exhausted-L1 signal).
 	_, receipts, err := l1t.l1Blocks.FetchReceipts(ctx, nextL1.Hash)
 	if err != nil {
-		return NewTemporaryError(fmt.Errorf("failed to fetch receipts of L1 block %s (parent: %s) for L1 sysCfg update: %w",
+		return NewTemporaryError(fmt.Errorf("l1 traversal managed: failed to fetch receipts of L1 block %s (parent: %s) for L1 sysCfg update: %w",
 			nextL1, nextL1.ParentID(), err))
 	}
 	if err := UpdateSystemConfigWithL1Receipts(&l1t.sysCfg, receipts, l1t.cfg, nextL1.Time); err != nil {
