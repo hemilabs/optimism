@@ -278,7 +278,7 @@ func (fst *ForkableState) GetCode(address common.Address) []byte {
 	return fst.stateFor(address).GetCode(address)
 }
 
-func (fst *ForkableState) SetCode(address common.Address, bytes []byte) []byte {
+func (fst *ForkableState) SetCode(address common.Address, bytes []byte, reason tracing.NonceChangeReason) []byte {
 	return fst.stateFor(address).SetCode(address, bytes)
 }
 
