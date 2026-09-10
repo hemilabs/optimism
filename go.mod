@@ -289,7 +289,7 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20260909153413-baadc73d112b
+replace github.com/ethereum/go-ethereum => github.com/hemilabs/op-geth v1.101308.0-synctest.0.0.20260910133623-ee5fac69c45a
 
 // replace github.com/ethereum/go-ethereum => ../op-geth
 
