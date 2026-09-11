@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 
@@ -391,6 +392,12 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 	}
 
 	m.l.Debug("will set gas", "gasLimit", gasLimit)
+
+	// ensure we're at floor at least
+	floorCost := len(candidate.TxData) * int(params.TxTokenPerNonZeroByte) * int(params.TxCostFloorPerToken)
+	if gasLimit < uint64(floorCost) {
+		gasLimit = uint64(floorCost)
+	}
 
 	// If the gas limit is set, we can use that as the gas
 	if gasLimit == 0 {
