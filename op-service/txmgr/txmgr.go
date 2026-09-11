@@ -392,7 +392,7 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 	}
 
 	// ensure we're at floor at least
-	floorCost := 21000 + len(candidate.TxData)*int(params.TxCostFloorPerToken)
+	floorCost := 21000 + len(candidate.TxData)*int(params.TxCostFloorPerToken)*int(params.TxTokenPerNonZeroByte)
 	m.l.Debug("will set gas", "gasLimit", gasLimit, "floor cost", floorCost)
 	if gasLimit < uint64(floorCost) {
 		gasLimit = uint64(floorCost)
