@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 
@@ -389,20 +390,20 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		callMsg.BlobGasFeeCap = blobBaseFee
 		callMsg.BlobHashes = blobHashes
 	}
-	// If the gas limit is set, we can use that as the gas
-	if gasLimit == 0 {
-		gas, err := m.backend.EstimateGas(ctx, callMsg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err))
-		}
-		gasLimit = gas
-	} else {
-		callMsg.Gas = gasLimit
-		_, err := m.backend.CallContract(ctx, callMsg, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to call: %w", errutil.TryAddRevertReason(err))
-		}
+
+	// ensure we're at floor at least
+	floorCost := len(candidate.TxData) * int(params.TxTokenPerNonZeroByte) * int(params.TxCostFloorPerToken)
+	if gasLimit < uint64(floorCost) {
+		gasLimit = uint64(floorCost)
 	}
+
+	gas, err := m.backend.EstimateGas(ctx, callMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err))
+	}
+	gasLimit = gas
+
+	m.l.Debug("will use gas", "gas", gasLimit)
 
 	var txMessage types.TxData
 	if sidecar != nil {

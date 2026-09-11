@@ -59,6 +59,8 @@ func (l1t *L1Traversal) NextL1Block(_ context.Context) (eth.L1BlockRef, error) {
 // AdvanceL1Block advances the internal state of L1 Traversal
 func (l1t *L1Traversal) AdvanceL1Block(ctx context.Context) error {
 	origin := l1t.block
+	l1t.log.Debug("going to fetch L1 block ref by number", "number", origin.Number+1)
+
 	nextL1Origin, err := l1t.l1Blocks.L1BlockRefByNumber(ctx, origin.Number+1)
 	if errors.Is(err, ethereum.NotFound) {
 		l1t.log.Debug("can't find next L1 block info (yet)", "number", origin.Number+1, "origin", origin)
@@ -70,10 +72,12 @@ func (l1t *L1Traversal) AdvanceL1Block(ctx context.Context) error {
 		return NewResetError(fmt.Errorf("detected L1 reorg from %s to %s with conflicting parent %s", l1t.block, nextL1Origin, nextL1Origin.ParentID()))
 	}
 
+	l1t.log.Debug("received l1 block hash for number", "number", origin.Number+1, "hash", nextL1Origin.Hash)
+
 	// Parse L1 receipts of the given block and update the L1 system configuration
 	_, receipts, err := l1t.l1Blocks.FetchReceipts(ctx, nextL1Origin.Hash)
 	if err != nil {
-		return NewTemporaryError(fmt.Errorf("failed to fetch receipts of L1 block %s (parent: %s) for L1 sysCfg update: %w", nextL1Origin, origin, err))
+		return NewTemporaryError(fmt.Errorf("l1 traversal: failed to fetch receipts of L1 block %s (parent: %s) for L1 sysCfg update: %w", nextL1Origin, origin, err))
 	}
 	if err := UpdateSystemConfigWithL1Receipts(&l1t.sysCfg, receipts, l1t.cfg, nextL1Origin.Time); err != nil {
 		// if UpdateSystemConfigWithL1Receipts returns an error, it is because one or more of the receipts are malformed or invalid
