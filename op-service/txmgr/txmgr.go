@@ -398,20 +398,13 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		gasLimit = uint64(floorCost)
 	}
 
-	// If the gas limit is set, we can use that as the gas
-	if gasLimit == 0 {
-		gas, err := m.backend.EstimateGas(ctx, callMsg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err))
-		}
-		gasLimit = gas
-	} else {
-		callMsg.Gas = gasLimit
-		_, err := m.backend.CallContract(ctx, callMsg, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to call: %w", errutil.TryAddRevertReason(err))
-		}
+	gas, err := m.backend.EstimateGas(ctx, callMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err))
 	}
+	gasLimit = gas
+
+	m.l.Debug("will use gas", "gas", gasLimit)
 
 	var txMessage types.TxData
 	if sidecar != nil {
