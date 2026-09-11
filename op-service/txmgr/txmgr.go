@@ -389,6 +389,9 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		callMsg.BlobGasFeeCap = blobBaseFee
 		callMsg.BlobHashes = blobHashes
 	}
+
+	m.l.Debug("will set gas", "gasLimit", gasLimit)
+
 	// If the gas limit is set, we can use that as the gas
 	if gasLimit == 0 {
 		gas, err := m.backend.EstimateGas(ctx, callMsg)
