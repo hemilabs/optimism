@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-batcher/batcher/throttler"
 	"github.com/ethereum-optimism/optimism/op-batcher/config"
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
@@ -246,7 +245,7 @@ func createHTTPHandler(t *testing.T, cb func(), failureMode handlerFailureMode) 
 func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 	// Set a very long timeout to avoid flakiness
 	timeout := time.Second * 120
-	testThrottlingEndpoints := func(numHealthyServers, numUnhealthyServers int) func(t *testing.T) {
+	testThrottlingEndpoints := func(numHealthyServers, numUnhealthyServers int, throttlingEnabled bool) func(t *testing.T) {
 
 		return func(t *testing.T) {
 			// The call counters and the shutdown error are written by the test
@@ -283,10 +282,13 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 			// Setup test context
 			ctx, cancel := context.WithCancel(context.Background())
 
-			// Add in an endpoint with no server at all, representing an "always down" endpoint
-			urls = append(urls, "http://invalid/")
+			// Add in an endpoint with no server at all, representing an "always down" endpoint (only when throttling enabled)
+			if throttlingEnabled {
+				urls = append(urls, "http://invalid/")
+			}
 
 			t.Log("Throttling endpoints:", urls)
+			t.Logf("Throttling enabled: %v", throttlingEnabled)
 
 			var batcherShutdownError atomic.Pointer[error]
 
@@ -327,25 +329,18 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 				ChannelConfig:    defaultTestChannelConfig(),
 				EndpointProvider: ep,
 			})
+
 			bs.shutdownCtx = ctx
-			bs.Config.NetworkTimeout = time.Second
-			bs.Config.ThrottleParams.Endpoints = urls
-			bs.throttleController = throttler.NewThrottleController(
-				throttler.NewStepStrategy(10000),
-				throttler.ThrottleConfig{
-					TxSizeLowerLimit:    5000,
-					TxSizeUpperLimit:    10000,
-					BlockSizeLowerLimit: 20000,
-					BlockSizeUpperLimit: 30000,
-				})
 
 			// Test the throttling loop
 			pendingBytesUpdated := make(chan int64, 1)
 			wg1 := sync.WaitGroup{}
-			wg1.Add(1)
 
-			// Start throttling loop in a goroutine
-			go bs.throttlingLoop(&wg1, pendingBytesUpdated)
+			// Start throttling loop in a goroutine only if throttling is enabled
+			if throttlingEnabled {
+				wg1.Add(1)
+				go bs.throttlingLoop(&wg1, pendingBytesUpdated)
+			}
 
 			// Add a block to the channel manager so unsafeDABytes() returns > 0
 			testBlock := newMiniL2Block(5) // Create a block with 5 transactions
@@ -363,8 +358,9 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 					case <-blockLoadingCtx.Done():
 						return
 					default:
-						// Simulate block loading
-						pendingBytesUpdated <- 20000 // the value doesn't actually matter for this test
+						// Simulate block loading - use sendToThrottlingLoop which records metrics
+						// and sends to the channel (this is what the real block loading loop does)
+						bs.sendToThrottlingLoop(pendingBytesUpdated)
 					}
 				}
 
@@ -407,20 +403,9 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 						Listener: ln,
 						Config:   &http.Server{Handler: handler},
 					}
-					return true
-				}, time.Second*10, time.Millisecond*10, "All endpoints should have been called within 10s")
-
-			startTestServerAtAddr := func(addr string, handler http.HandlerFunc) *httptest.Server {
-				ln, err := net.Listen("tcp", addr)
-				require.NoError(t, err, "Failed to create new listener for test server")
-
-				s := &httptest.Server{
-					Listener: ln,
-					Config:   &http.Server{Handler: handler},
+					s.Start()
+					return s
 				}
-				s.Start()
-				return s
-			}
 
 				// Take one of the healthy servers down, wait 2s and restart. Check it is called again.
 				if len(healthyServers) > 0 {
@@ -472,9 +457,10 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 			}
 		}
 	}
-	t.Run("two normal endpoints", testThrottlingEndpoints(2, 0))
-	t.Run("two failing endpoints", testThrottlingEndpoints(0, 2))
-	t.Run("one normal endpoint, one failing endpoint", testThrottlingEndpoints(1, 1))
+	t.Run("two normal endpoints", testThrottlingEndpoints(2, 0, true))
+	t.Run("two failing endpoints", testThrottlingEndpoints(0, 2, true))
+	t.Run("one normal endpoint, one failing endpoint", testThrottlingEndpoints(1, 1, true))
+	t.Run("throttling disabled", testThrottlingEndpoints(1, 0, false))
 }
 
 func TestBatchSubmitter_CriticalError(t *testing.T) {

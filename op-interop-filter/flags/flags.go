@@ -7,11 +7,11 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
-	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 )
 
 const (
@@ -27,12 +27,22 @@ func prefixEnvVars(name string) []string {
 var (
 	L2RPCsFlag = &cli.StringSliceFlag{
 		Name:    "l2-rpcs",
-		Usage:   "L2 RPC endpoints to connect to (chain ID is queried from each endpoint)",
+		Usage:   "L2 RPC endpoints to connect to (chain ID is queried from each endpoint and matched to rollup configs)",
 		EnvVars: prefixEnvVars("L2_RPCS"),
+	}
+	NetworksFlag = &cli.StringSliceFlag{
+		Name:    "networks",
+		Usage:   fmt.Sprintf("Predefined networks to load rollup configs from. Available: %s", strings.Join(chaincfg.AvailableNetworks(), ", ")),
+		EnvVars: prefixEnvVars("NETWORKS"),
+	}
+	RollupConfigsFlag = &cli.StringSliceFlag{
+		Name:    "rollup-configs",
+		Usage:   "Paths to custom rollup config JSON files (for dev/test chains not in superchain registry)",
+		EnvVars: prefixEnvVars("ROLLUP_CONFIGS"),
 	}
 	DataDirFlag = &cli.StringFlag{
 		Name:    "data-dir",
-		Usage:   "Directory for LogsDB storage. If empty, uses in-memory storage",
+		Usage:   "Directory for LogsDB storage. If empty, uses a temporary directory",
 		EnvVars: prefixEnvVars("DATA_DIR"),
 		Value:   "",
 	}
@@ -49,11 +59,12 @@ var (
 		Value:   168 * time.Hour, // 7 days default for interop message expiry
 	}
 	JWTSecretFlag = &cli.StringFlag{
-		Name: "rpc.jwt-secret",
-		Usage: "Path to JWT secret key for RPC authentication. " +
+		Name: "admin.jwt-secret",
+		Usage: "Path to JWT secret key for admin RPC authentication. " +
 			"Keys are 32 bytes, hex encoded in a file. " +
-			"A new key will be generated if the file is empty.",
-		EnvVars:   prefixEnvVars("RPC_JWT_SECRET"),
+			"A new key will be generated if the file is missing. " +
+			"Required when admin.rpc.addr is set.",
+		EnvVars:   prefixEnvVars("ADMIN_JWT_SECRET"),
 		Value:     "",
 		TakesFile: true,
 	}
@@ -133,8 +144,11 @@ var requiredFlags = []cli.Flag{
 }
 
 var optionalFlags = []cli.Flag{
+	NetworksFlag,
+	RollupConfigsFlag,
 	DataDirFlag,
 	BackfillDurationFlag,
+	MessageExpiryWindowFlag,
 	JWTSecretFlag,
 	AdminRPCAddrFlag,
 	AdminRPCPortFlag,
@@ -151,7 +165,6 @@ var optionalFlags = []cli.Flag{
 }
 
 func init() {
-	optionalFlags = append(optionalFlags, oprpc.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oplog.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, opmetrics.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oppprof.CLIFlags(EnvVarPrefix)...)
@@ -168,5 +181,11 @@ func CheckRequired(ctx *cli.Context) error {
 			return fmt.Errorf("flag %s is required", name)
 		}
 	}
+
+	// At least one of --networks or --rollup-configs must be provided
+	if !ctx.IsSet(NetworksFlag.Name) && !ctx.IsSet(RollupConfigsFlag.Name) {
+		return fmt.Errorf("at least one of --%s or --%s is required", NetworksFlag.Name, RollupConfigsFlag.Name)
+	}
+
 	return nil
 }

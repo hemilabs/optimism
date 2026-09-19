@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/urfave/cli/v2"
 
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
+	"github.com/ethereum-optimism/optimism/op-service/clock"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/httputil"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
@@ -105,6 +109,9 @@ func (s *Service) init(ctx context.Context, cfg *Config) error {
 	if err := s.initRPCServer(cfg); err != nil {
 		return fmt.Errorf("failed to init RPC server: %w", err)
 	}
+	if err := s.initAdminRPCServer(cfg); err != nil {
+		return fmt.Errorf("failed to init admin RPC server: %w", err)
+	}
 	return nil
 }
 
@@ -134,7 +141,7 @@ func (s *Service) initPProf(cfg *Config) error {
 
 func (s *Service) initMetricsServer(cfg *Config) error {
 	if !cfg.MetricsConfig.Enabled {
-		s.log.Info("Metrics disabled")
+		s.log.Debug("Metrics disabled")
 		return nil
 	}
 	m, ok := s.metrics.(opmetrics.RegistryMetricer)
@@ -145,7 +152,7 @@ func (s *Service) initMetricsServer(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to start metrics server: %w", err)
 	}
-	s.log.Info("Started metrics server", "addr", metricsSrv.Addr())
+	s.log.Debug("Started metrics server", "addr", metricsSrv.Addr())
 	s.metricsSrv = metricsSrv
 	return nil
 }
@@ -239,22 +246,6 @@ func (s *Service) initRPCServer(cfg *Config) error {
 		cfg.RPCPort,
 		s.version,
 		oprpc.WithLogger(s.log),
-	}
-
-	// Load JWT secret if path is provided (generates new secret if file is empty)
-	if cfg.JWTSecretPath != "" {
-		secret, err := oprpc.ObtainJWTSecret(s.log, cfg.JWTSecretPath, true)
-		if err != nil {
-			return fmt.Errorf("failed to obtain JWT secret: %w", err)
-		}
-		opts = append(opts, oprpc.WithJWTSecret(secret[:]))
-	}
-
-	server := oprpc.NewServer(
-		cfg.RPC.ListenAddr,
-		cfg.RPC.ListenPort,
-		s.version,
-		opts...,
 	)
 
 	server.AddAPI(rpc.API{
@@ -263,17 +254,47 @@ func (s *Service) initRPCServer(cfg *Config) error {
 		Authenticated: false,
 	})
 
-	// Register admin API (opt-in)
-	if cfg.RPC.EnableAdmin {
-		s.log.Info("Admin RPC enabled")
-		server.AddAPI(rpc.API{
-			Namespace:     "admin",
-			Service:       &AdminFrontend{backend: s.backend},
-			Authenticated: true,
-		})
-	}
+	server.AddAPI(rpc.API{
+		Namespace:     "admin",
+		Service:       &PublicAdminFrontend{backend: s.backend},
+		Authenticated: false,
+	})
 
 	s.rpcServer = server
+	return nil
+}
+
+func (s *Service) initAdminRPCServer(cfg *Config) error {
+	// Admin RPC is disabled if no address is configured
+	if cfg.AdminRPCAddr == "" {
+		s.log.Debug("Admin RPC disabled (no admin.rpc.addr configured)")
+		return nil
+	}
+
+	// Load JWT secret for authentication
+	secret, err := oprpc.ObtainJWTSecret(s.log, cfg.JWTSecretPath, true)
+	if err != nil {
+		return fmt.Errorf("failed to obtain JWT secret: %w", err)
+	}
+
+	// Create admin server with server-wide JWT authentication
+	server := oprpc.NewServer(
+		cfg.AdminRPCAddr,
+		cfg.AdminRPCPort,
+		s.version,
+		oprpc.WithLogger(s.log),
+		oprpc.WithJWTSecret(secret[:]),
+	)
+
+	// Register admin API (JWT-protected server-wide)
+	server.AddAPI(rpc.API{
+		Namespace:     "admin",
+		Service:       &AdminFrontend{backend: s.backend},
+		Authenticated: true,
+	})
+
+	s.adminRPCServer = server
+	s.log.Info("Admin RPC configured", "addr", cfg.AdminRPCAddr, "port", cfg.AdminRPCPort)
 	return nil
 }
 
@@ -288,9 +309,22 @@ func (s *Service) Start(ctx context.Context) error {
 
 	// Start main RPC server (interop API)
 	if err := s.rpcServer.Start(); err != nil {
-		return fmt.Errorf("failed to start RPC server: %w", err)
+		// Rollback: stop backend if RPC server fails to start
+		stopErr := s.backend.Stop(ctx)
+		return errors.Join(fmt.Errorf("failed to start RPC server: %w", err), stopErr)
 	}
 	s.log.Info("RPC server started", "endpoint", s.rpcServer.Endpoint())
+
+	// Start admin RPC server if configured
+	if s.adminRPCServer != nil {
+		if err := s.adminRPCServer.Start(); err != nil {
+			// Rollback: stop main RPC and backend if admin RPC server fails
+			rpcErr := s.rpcServer.Stop()
+			backendErr := s.backend.Stop(ctx)
+			return errors.Join(fmt.Errorf("failed to start admin RPC server: %w", err), rpcErr, backendErr)
+		}
+		s.log.Info("Admin RPC server started", "endpoint", s.adminRPCServer.Endpoint())
+	}
 
 	s.metrics.RecordUp()
 	return nil
@@ -304,6 +338,11 @@ func (s *Service) Stop(ctx context.Context) error {
 	s.log.Info("Stopping op-interop-filter")
 
 	var result error
+	if s.adminRPCServer != nil {
+		if err := s.adminRPCServer.Stop(); err != nil {
+			result = errors.Join(result, fmt.Errorf("failed to stop admin RPC: %w", err))
+		}
+	}
 	if s.rpcServer != nil {
 		if err := s.rpcServer.Stop(); err != nil {
 			result = errors.Join(result, fmt.Errorf("failed to stop RPC: %w", err))

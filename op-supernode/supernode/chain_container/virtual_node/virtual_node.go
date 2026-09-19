@@ -16,6 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// VIRTUAL_NODE_CHAIN_ID_LABEL is the name of the label used to differentiate
+// metrics registered by virtual nodes.
+const VIRTUAL_NODE_CHAIN_ID_LABEL = "virtual_node_chain_id"
+
 // defaultInnerNodeFactory is the default factory that creates a real op-node
 func defaultInnerNodeFactory(ctx context.Context, cfg *opnodecfg.Config, log gethlog.Logger, appVersion string, m *opmetrics.Metrics, initOverload *rollupNode.InitializationOverrides) (innerNode, error) {
 	var overrides rollupNode.InitializationOverrides
@@ -121,7 +125,8 @@ func (v *simpleVirtualNode) Start(ctx context.Context) error {
 	}
 
 	// Create and start the inner node
-	m := opmetrics.NewMetrics("supernode")
+	additionalLabels := map[string]string{VIRTUAL_NODE_CHAIN_ID_LABEL: v.cfg.Rollup.L2ChainID.String()}
+	m := opmetrics.NewMetrics("supernode", additionalLabels)
 	n, err := v.innerNodeFactory(runCtx, v.cfg, v.log, v.appVersion, m, v.initOverload)
 	if err != nil {
 		v.setState(VNStateStopped)
@@ -131,27 +136,30 @@ func (v *simpleVirtualNode) Start(ctx context.Context) error {
 	v.inner = n
 	v.setState(VNStateRunning)
 	v.mu.Unlock()
-	// Don't hold the lock while running or waiting for inner node to stop
 
 	// Run inner node in goroutine
 	// and await any signal to exit (Stop(), parent ctx, or inner error)
 	var innerErr error = nil
 	go func() {
-		innerErr = v.inner.Start(runCtx)
+		innerErr = n.Start(runCtx)
 	}()
 	<-runCtx.Done()
 
-	// Clean up with lock to end of function
+	// Update state under lock, but do NOT hold the lock during inner.Stop().
+	// inner.Stop() drains the op-node event system, which may call back into
+	// this VirtualNode (e.g. SyncStatus via EngineController.FinalizedHead).
+	// SyncStatus needs v.mu, so holding it here would deadlock.
 	v.mu.Lock()
 	v.setState(VNStateStopped)
 	v.cancel = nil
+	v.mu.Unlock()
 
-	// Stop the inner node if it's still running
-	if v.inner != nil {
-		stopCtx := context.Background()
-		if err := v.inner.Stop(stopCtx); err != nil {
-			v.log.Error("error stopping inner node", "err", err)
-		}
+	// Stop the inner node outside the lock. Use n which is the local reference
+	// to the inner node created at the top of this function.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stopCancel()
+	if err := n.Stop(stopCtx); err != nil {
+		v.log.Error("error stopping inner node", "err", err)
 	}
 
 	// Return inner error if that's what caused the cancellation, otherwise context error
@@ -270,20 +278,14 @@ func (v *simpleVirtualNode) L1AtSafeHead(ctx context.Context, target eth.BlockID
 	return l1, nil
 }
 
-// CurrentL1 returns the current processed L1 block based on derivation pipeline sync status.
-func (v *simpleVirtualNode) CurrentL1(ctx context.Context) (eth.BlockRef, error) {
+func (v *simpleVirtualNode) SyncStatus(ctx context.Context) (*eth.SyncStatus, error) {
 	v.mu.Lock()
 	inner := v.inner
 	v.mu.Unlock()
 	if inner == nil {
-		return eth.BlockRef{}, ErrVirtualNodeNotRunning
+		return nil, ErrVirtualNodeNotRunning
 	}
 	st := inner.SyncStatus()
-	// Map L1 block ref into generic block ref
-	return eth.BlockRef{
-		Hash:       st.CurrentL1.Hash,
-		Number:     st.CurrentL1.Number,
-		ParentHash: st.CurrentL1.ParentHash,
-		Time:       st.CurrentL1.Time,
-	}, nil
+	cpy := *st
+	return &cpy, nil
 }

@@ -68,6 +68,10 @@ func NewEngineControllerWithL2(l2 l2Provider) EngineController {
 	return &simpleEngineController{l2: l2, log: gethlog.New()}
 }
 
+func NewEngineControllerWithL2AndRollup(l2 l2Provider, rollup *rollup.Config) EngineController {
+	return &simpleEngineController{l2: l2, rollup: rollup, log: gethlog.New()}
+}
+
 // NewEngineControllerFromConfig builds an engine client from the op-node L2 endpoint config.
 // This creates a separate connection (not passed as an override to op-node).
 //
@@ -97,7 +101,6 @@ func NewEngineControllerFromConfig(ctx context.Context, log gethlog.Logger, vncf
 var (
 	ErrNoEngineClient = errors.New("engine client not initialized")
 	ErrNoRollupConfig = errors.New("rollup config not available")
-	ErrNotFound       = errors.New("not found")
 )
 
 // BlockAtTimestamp returns the L2 block ref for the block at or before the given timestamp,
@@ -111,19 +114,24 @@ func (e *simpleEngineController) BlockAtTimestamp(ctx context.Context, ts uint64
 	}
 	// Compute the target block directly from rollup config
 	num, err := e.rollup.TargetBlockNumber(ts)
+	e.log.Debug("engine_controller: computed target block number from timestamp", "timestamp", ts, "targetBlockNumber", num)
 	if err != nil {
 		return eth.L2BlockRef{}, err
 	}
-	safeHead, err := e.l2.L2BlockRefByLabel(ctx, eth.Safe)
+	head, err := e.l2.L2BlockRefByLabel(ctx, label)
 	if err != nil {
 		return eth.L2BlockRef{}, err
 	}
-	if num > safeHead.Number {
-		e.log.Warn("engine_controller: target block number exceeds safe head", "targetBlockNumber", num, "safeHead", safeHead.Number)
-		return eth.L2BlockRef{}, ErrNotFound
+	if num > head.Number {
+		e.log.Warn("engine_controller: target block number exceeds head", "label", label, "targetBlockNumber", num, "head", head.Number)
+		return eth.L2BlockRef{}, ethereum.NotFound
 	}
-	e.log.Debug("engine_controller: computed safe block number from timestamp",
-		"timestamp", ts, "targetBlockNumber", num, "safeHead", safeHead.Number, "safeHeadErr", err)
+	e.log.Debug("engine_controller: computed block number from timestamp",
+		"label", label, "timestamp", ts, "targetBlockNumber", num, "head", head.Number)
+	return e.l2.L2BlockRefByNumber(ctx, num)
+}
+
+func (e *simpleEngineController) L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error) {
 	return e.l2.L2BlockRefByNumber(ctx, num)
 }
 

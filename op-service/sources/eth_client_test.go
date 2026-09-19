@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
@@ -90,7 +91,7 @@ func randHeader() (*types.Header, *RPCHeader) {
 		ReceiptHash: hdr.ReceiptHash,
 		Bloom:       eth.Bytes256(hdr.Bloom),
 		Difficulty:  *(*hexutil.Big)(hdr.Difficulty),
-		Number:      hexutil.Uint64(hdr.Number.Uint64()),
+		Number:      hexutil.Uint64(bigs.Uint64Strict(hdr.Number)),
 		GasLimit:    hexutil.Uint64(hdr.GasLimit),
 		GasUsed:     hexutil.Uint64(hdr.GasUsed),
 		Time:        hexutil.Uint64(hdr.Time),
@@ -222,7 +223,7 @@ func newEthClientWithCaches(metrics caching.Metrics, cacheSize int) *EthClient {
 func TestReceiptValidation(t *testing.T) {
 	require := require.New(t)
 	mrpc := new(mockRPC)
-	rp := NewRPCReceiptsFetcher(mrpc, nil, RPCReceiptsConfig{})
+	rp := NewRPCReceiptsFetcher(mrpc, nil, RPCReceiptsConfig{}, false)
 	const numTxs = 1
 	block, _ := randomRpcBlockAndReceipts(rand.New(rand.NewSource(420)), numTxs)
 	//txHashes := receiptTxHashes(receipts)

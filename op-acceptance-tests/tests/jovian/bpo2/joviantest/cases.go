@@ -1,16 +1,14 @@
 package joviantest
 
 import (
-	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"math/big"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-acceptance-tests/tests/interop/loadtest"
+	"github.com/ethereum-optimism/optimism/op-acceptance-tests/tests/jovian"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
+	"github.com/ethereum-optimism/optimism/op-core/eip1559"
 	opforks "github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
@@ -18,34 +16,13 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/txinclude"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/bindings"
 	"github.com/ethereum-optimism/optimism/op-service/txintent/contractio"
-	"github.com/ethereum-optimism/optimism/op-service/txplan"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
 type SetupFn func(t devtest.T) *presets.Minimal
-
-type calldataSpammer struct {
-	eoa *loadtest.SyncEOA
-}
-
-func newCalldataSpammer(eoa *loadtest.SyncEOA) *calldataSpammer {
-	return &calldataSpammer{
-		eoa: eoa,
-	}
-}
-
-func (s *calldataSpammer) Spam(t devtest.T) error {
-	data := make([]byte, 50_000)
-	_, err := rand.Read(data)
-	t.Require().NoError(err)
-	_, err = s.eoa.Include(t, txplan.WithTo(&common.Address{}), txplan.WithData(data))
-	return err
-}
 
 type daFootprintSystemConfig struct {
 	SetDAFootprintGasScalar func(scalar uint16) bindings.TypedCall[any] `sol:"setDAFootprintGasScalar"`

@@ -63,7 +63,7 @@ func TestPrecompile(t *testing.T) {
 	input = append(input, b32(0x20)...)                 // offset
 	input = append(input, b32(uint64(len("alice")))...) // length
 	input = append(input, "alice"...)
-	out, err := p.Run(input)
+	out, err := p.Run(input, common.Hash{})
 	require.NoError(t, err)
 	require.Equal(t, e.helloFrom, "alice")
 	require.Equal(t, out[:32], b32(0x20))
@@ -75,7 +75,7 @@ func TestPrecompile(t *testing.T) {
 	input = append(input, b32(0x20)...)                   // offset
 	input = append(input, b32(uint64(len("mallory")))...) // length
 	input = append(input, "mallory"...)
-	out, err = p.Run(input)
+	out, err = p.Run(input, common.Hash{})
 	require.Equal(t, err, vm.ErrExecutionReverted)
 	msg, err := abi.UnpackRevert(out)
 	require.NoError(t, err, "must unpack revert data")
@@ -83,24 +83,24 @@ func TestPrecompile(t *testing.T) {
 
 	// field reads
 	input = crypto.Keccak256([]byte("foo()"))[:4]
-	out, err = p.Run(input)
+	out, err = p.Run(input, common.Hash{})
 	require.NoError(t, err)
 	require.Equal(t, out, b32(42))
 
 	input = crypto.Keccak256([]byte("twoFoo()"))[:4]
-	out, err = p.Run(input)
+	out, err = p.Run(input, common.Hash{})
 	require.NoError(t, err)
 	require.Equal(t, out, b32(42*2))
 
 	// persistent state changes
 	input = crypto.Keccak256([]byte("twoFoo()"))[:4]
-	out, err = p.Run(input)
+	out, err = p.Run(input, common.Hash{})
 	require.NoError(t, err)
 	require.Equal(t, out, b32(42*2*2))
 
 	// multi-output
 	input = crypto.Keccak256([]byte("things()"))[:4]
-	out, err = p.Run(input)
+	out, err = p.Run(input, common.Hash{})
 	require.NoError(t, err)
 	require.Equal(t, b32(123), out[:32])
 	require.Equal(t, b32(32*3), out[32*1:32*2])                   // offset of hello
@@ -116,7 +116,7 @@ func TestPrecompile(t *testing.T) {
 	input = append(input, b32(100)...)
 	input = append(input, b32(7)...)
 	input = append(input, b32(3)...)
-	out, err = p.Run(input)
+	out, err = p.Run(input, common.Hash{})
 	require.NoError(t, err)
 	require.Equal(t, b32((42+100+7)*3), out)
 }
@@ -139,7 +139,7 @@ func TestDeploymentOutputPrecompile(t *testing.T) {
 		input = append(input, setAddressFnBytes4[:]...)
 		input = append(input, rightPad32(fooBarSelector[:])...)
 		input = append(input, leftPad32(addr[:])...)
-		out, err := p.Run(input)
+		out, err := p.Run(input, common.Hash{})
 		require.NoError(t, err)
 		require.Empty(t, out)
 		require.Equal(t, addr, e.FooBar)
@@ -151,7 +151,7 @@ func TestDeploymentOutputPrecompile(t *testing.T) {
 		boolInput = append(boolInput, setBoolFnBytes4[:]...)
 		boolInput = append(boolInput, rightPad32(boolSelector[:])...)
 		boolInput = append(boolInput, b32(1)...) // true value
-		out, err := p.Run(boolInput)
+		out, err := p.Run(boolInput, common.Hash{})
 		require.NoError(t, err)
 		require.Empty(t, out)
 		require.True(t, e.IsEnabled)
@@ -163,7 +163,7 @@ func TestDeploymentOutputPrecompile(t *testing.T) {
 		uint32Input = append(uint32Input, setUint32FnBytes4[:]...)
 		uint32Input = append(uint32Input, rightPad32(uint32Selector[:])...)
 		uint32Input = append(uint32Input, b32(42)...) // uint32 value
-		out, err := p.Run(uint32Input)
+		out, err := p.Run(uint32Input, common.Hash{})
 		require.NoError(t, err)
 		require.Empty(t, out)
 		require.Equal(t, uint32(42), e.GameType)

@@ -42,7 +42,7 @@ func TestConsole(t *testing.T) {
 	input = append(input, leftPad32(bob[:])...)
 	t.Logf("input: %x", input)
 
-	_, err = p.Run(input)
+	_, err = p.Run(input, common.Hash{})
 	require.NoError(t, err)
 
 	for i, l := range *captLog.Logs {

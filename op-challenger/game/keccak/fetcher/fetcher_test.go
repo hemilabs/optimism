@@ -461,12 +461,6 @@ func (s *stubL1Source) FetchReceipts(_ context.Context, blockHash common.Hash) (
 	return &types.Receipt{Status: rcptStatus, Logs: logs}, nil
 }
 
-func uint64ToHash(num uint64) common.Hash {
-	data := make([]byte, 8)
-	binary.BigEndian.PutUint64(data, num)
-	return crypto.Keccak256Hash(data)
-}
-
 func (s *stubL1Source) createReceipt(blockNum uint64, status uint64, proposals ...*proposalConfig) *optypes.Receipt {
 	// Make the block exist
 	s.blocks[blockNum] = uint64ToHash(blockNum)

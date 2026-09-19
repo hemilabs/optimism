@@ -138,23 +138,6 @@ contract InteropMigration is Script {
             "InteropMigration: OPCM must be v7.0.0 or later (OPCMv2). OPCMv1 is no longer supported."
         );
 
-        IOPContractsManagerInteropMigrator.MigrateInput memory inputs = IOPContractsManagerInteropMigrator.MigrateInput({
-            usePermissionlessGame: _imi.usePermissionlessGame(),
-            startingAnchorRoot: Proposal({
-                root: Hash.wrap(_imi.startingAnchorRoot()),
-                l2SequenceNumber: _imi.startingAnchorL2SequenceNumber()
-            }),
-            gameParameters: IOPContractsManagerInteropMigrator.GameParameters({
-                proposer: _imi.proposer(),
-                challenger: _imi.challenger(),
-                maxGameDepth: _imi.maxGameDepth(),
-                splitDepth: _imi.splitDepth(),
-                initBond: _imi.initBond(),
-                clockExtension: Duration.wrap(uint64(_imi.clockExtension())),
-                maxClockDuration: Duration.wrap(uint64(_imi.maxClockDuration()))
-            }),
-            opChainConfigs: opChainConfigs
-        });
         // Etch DummyCaller contract. This contract is used to mimic the contract that is used
         // as the source of the delegatecall to the OPCM. In practice this will be the governance
         // 2/2 or similar.
@@ -188,6 +171,7 @@ contract InteropMigration is Script {
         IOptimismPortal portal = IOptimismPortal(payable(migrateInput.chainSystemConfigs[0].optimismPortal()));
         _imo.set(_imo.disputeGameFactory.selector, portal.disputeGameFactory());
     }
+}
 
     function checkOutput(InteropMigrationInput _imi, InteropMigrationOutput _imo) public view {
         IOPContractsManagerMigrator.MigrateInput memory migrateInput =
@@ -200,18 +184,5 @@ contract InteropMigration is Script {
                 "InteropMigration: disputeGameFactory mismatch"
             );
         }
-    }
-}
-
-contract DummyCaller {
-    address internal _opcmAddr;
-
-    function migrate(IOPContractsManagerInteropMigrator.MigrateInput memory _migrateInput)
-        external
-        returns (bool, bytes memory)
-    {
-        bytes memory data = abi.encodeCall(DummyCaller.migrate, _migrateInput);
-        (bool success, bytes memory result) = _opcmAddr.delegatecall(data);
-        return (success, result);
     }
 }

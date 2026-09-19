@@ -21,7 +21,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/interopsmoke"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
-	"github.com/ethereum-optimism/optimism/op-devstack/dsl"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
@@ -66,11 +65,6 @@ var (
 			return filepath.Join(parentDir, ".op-up")
 		}(),
 	}
-	interopFlag = &cli.BoolFlag{
-		Name:    "interop",
-		Usage:   "start a 2-chain interop devnet backed by op-supernode.",
-		EnvVars: opservice.PrefixEnvVar(envPrefix, "INTEROP"),
-	}
 )
 
 func main() {
@@ -89,7 +83,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	app.Version = opservice.FormatVersion(Version, GitCommit, GitDate, VersionMeta)
 	app.Name = "op-up"
 	app.Usage = "deploys an in-memory OP Stack devnet."
-	app.Flags = cliapp.ProtectFlags([]cli.Flag{dirFlag, interopFlag})
+	app.Flags = cliapp.ProtectFlags([]cli.Flag{dirFlag})
 	// The default OnUsageError behavior will print the error twice: once in the cli package and
 	// once in our main function.
 	// The function below prints help and returns the error for further handling/error messages.
@@ -108,7 +102,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return app.RunContext(ctx, args)
 }
 
-func runOpUp(ctx context.Context, stderr io.Writer, opUpDir string, interop bool) error {
+func runOpUp(ctx context.Context, stderr io.Writer, opUpDir string) error {
 	fmt.Fprintf(stderr, "%s\n", asciiArt)
 
 	if err := os.MkdirAll(opUpDir, 0o755); err != nil {
@@ -123,22 +117,12 @@ func runOpUp(ctx context.Context, stderr io.Writer, opUpDir string, interop bool
 	t := newTestingT(ctx, stderr, tempRoot)
 	defer t.doCleanup()
 
-	if interop {
-		sys, err := newSupernodeInteropSystem(t)
-		if err != nil {
-			return err
-		}
-		if err := runSupernodeSystem(ctx, stderr, sys); err != nil {
-			return err
-		}
-	} else {
-		sys, err := newMinimalSystem(t)
-		if err != nil {
-			return err
-		}
-		if err := runSystem(ctx, stderr, sys); err != nil {
-			return err
-		}
+	sys, err := newMinimalSystem(t)
+	if err != nil {
+		return err
+	}
+	if err := runSystem(ctx, stderr, sys); err != nil {
+		return err
 	}
 	fmt.Fprintf(stderr, "\nPlease consider filling out this survey to influence future development: https://www.surveymonkey.com/r/JTGHFK3\n")
 	return nil
@@ -191,56 +175,7 @@ func newSupernodeInteropSystem(t *testingT) (sys *presets.TwoL2SupernodeInterop,
 }
 
 func runSystem(ctx context.Context, stderr io.Writer, sys *presets.Minimal) error {
-	if err := printAccountInfo(stderr); err != nil {
-		return err
-	}
-	fmt.Fprintf(stderr, "EL Node URL: %s\n", "http://localhost:8545")
-
-	elNode := sys.L2EL
-	go logBlocks(ctx, stderr, "L2", elNode)
-
-	// Proxy L2 EL requests.
-	go func() {
-		if err := proxyEL(ctx, stderr, "localhost:8545", elNode.Escape().L2EthClient().RPC()); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintf(stderr, "error: %v", err)
-		}
-	}()
-
-	<-ctx.Done()
-
-	return nil
-}
-
-func runSupernodeSystem(ctx context.Context, stderr io.Writer, sys *presets.TwoL2SupernodeInterop) error {
-	if err := printAccountInfo(stderr); err != nil {
-		return err
-	}
-	fmt.Fprintf(stderr, "L2A Chain ID: %s\n", sys.L2A.ChainID())
-	fmt.Fprintf(stderr, "L2A EL Node URL: %s\n", "http://localhost:8545")
-	fmt.Fprintf(stderr, "L2B Chain ID: %s\n", sys.L2B.ChainID())
-	fmt.Fprintf(stderr, "L2B EL Node URL: %s\n", "http://localhost:8546")
-
-	go logBlocks(ctx, stderr, "L2A", sys.L2ELA)
-	go logBlocks(ctx, stderr, "L2B", sys.L2ELB)
-	go logInterop(ctx, stderr, sys)
-
-	go func() {
-		if err := proxyEL(ctx, stderr, "localhost:8545", sys.L2ELA.Escape().L2EthClient().RPC()); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintf(stderr, "error: %v", err)
-		}
-	}()
-	go func() {
-		if err := proxyEL(ctx, stderr, "localhost:8546", sys.L2ELB.Escape().L2EthClient().RPC()); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintf(stderr, "error: %v", err)
-		}
-	}()
-
-	<-ctx.Done()
-
-	return nil
-}
-
-func printAccountInfo(stderr io.Writer) error {
+	// Print available account.
 	hd, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	if err != nil {
 		return fmt.Errorf("new mnemonic dev keys: %w", err)
@@ -301,50 +236,42 @@ func logInterop(ctx context.Context, stderr io.Writer, sys *presets.TwoL2Superno
 					lastUnsafe[id] = cs.UnsafeL2.Number
 				}
 
-				// Local-safe progression
-				if cs.LocalSafeL2.Number != lastLocalSafe[id] {
-					fmt.Fprintf(stderr, "[interop] Chain %s local-safe: #%d\n", id, cs.LocalSafeL2.Number)
-					lastLocalSafe[id] = cs.LocalSafeL2.Number
+	// Log on new blocks.
+	go func() {
+		const blockPollInterval = 500 * time.Millisecond
+		var lastBlock uint64
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(blockPollInterval):
+				unsafe, err := elNode.EthClient().BlockRefByLabel(ctx, eth.Unsafe)
+				if err != nil {
+					continue
 				}
-
-				// Cross-safe (safe head) — reorg shows as decrease
-				if cs.SafeL2.Number != lastSafe[id] {
-					if cs.SafeL2.Number < lastSafe[id] {
-						fmt.Fprintf(stderr, "[interop] Chain %s REORG: safe #%d -> #%d\n",
-							id, lastSafe[id], cs.SafeL2.Number)
-					} else {
-						fmt.Fprintf(stderr, "[interop] Chain %s cross-safe: #%d\n", id, cs.SafeL2.Number)
-					}
-					lastSafe[id] = cs.SafeL2.Number
+				if unsafe.Number != lastBlock {
+					fmt.Fprintf(stderr, "New L2 block: number %d, hash %s\n", unsafe.Number, unsafe.Hash)
+					lastBlock = unsafe.Number
 				}
 			}
 		}
-	}
-}
+	}()
 
-func logBlocks(ctx context.Context, stderr io.Writer, name string, elNode *dsl.L2ELNode) {
-	const blockPollInterval = 500 * time.Millisecond
-	var lastBlock uint64
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(blockPollInterval):
-			unsafe, err := elNode.EthClient().BlockRefByLabel(ctx, eth.Unsafe)
-			if err != nil {
-				continue
-			}
-			if unsafe.Number != lastBlock {
-				fmt.Fprintf(stderr, "New %s block: number %d, hash %s\n", name, unsafe.Number, unsafe.Hash)
-				lastBlock = unsafe.Number
-			}
+	// Proxy L2 EL requests.
+	go func() {
+		if err := proxyEL(ctx, stderr, elNode.Escape().L2EthClient().RPC()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintf(stderr, "error: %v", err)
 		}
-	}
+	}()
+
+	<-ctx.Done()
+
+	return nil
 }
 
 // proxyEL is a hacky way to intercept EL json rpc requests for logging to get around log filtering
 // bugs.
-func proxyEL(ctx context.Context, stderr io.Writer, addr string, client client.RPC) error {
+func proxyEL(ctx context.Context, stderr io.Writer, client client.RPC) error {
 	mux := http.NewServeMux()
 	// Set up the HTTP handler for all incoming requests.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +381,7 @@ func proxyEL(ctx context.Context, stderr io.Writer, addr string, client client.R
 		}
 	})
 
-	server := &http.Server{Addr: addr, Handler: mux}
+	server := &http.Server{Addr: "localhost:8545", Handler: mux}
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.ListenAndServe()

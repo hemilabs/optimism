@@ -90,6 +90,10 @@ func Migrate(host *script.Host, input InteropMigrationInput) (InteropMigrationOu
 		return InteropMigrationOutput{}, err
 	}
 
-func Migrate(host *script.Host, input InteropMigrationInput) (InteropMigrationOutput, error) {
-	return opcm.RunScriptSingle[InteropMigrationInput, InteropMigrationOutput](host, input, "InteropMigration.s.sol", "InteropMigration")
+	scriptInput := ScriptInput{
+		Prank:        input.Prank,
+		Opcm:         input.Opcm,
+		MigrateInput: encodedMigrateInput,
+	}
+	return opcm.RunScriptSingle[ScriptInput, InteropMigrationOutput](host, scriptInput, "InteropMigration.s.sol", "InteropMigration")
 }

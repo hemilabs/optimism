@@ -274,34 +274,6 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
         return _apply(cfg, cts, false);
     }
 
-    /// @notice Migrates one or more OP Stack chains to use the Super Root dispute games and shared
-    ///         dispute game contracts.
-    /// @dev WARNING: This is a one-way operation. You cannot easily undo this operation without a
-    ///      smart contract upgrade. Do not call this function unless you are 100% confident that
-    ///      you know what you're doing and that you are prepared to fully execute this migration.
-    ///      You SHOULD NOT CALL THIS FUNCTION IN PRODUCTION unless you are absolutely sure that
-    ///      you know what you are doing.
-    /// @dev WARNING: Executing this function WILL result in all prior withdrawal proofs being
-    ///      invalidated. Users will have to submit new proofs for their withdrawals in the
-    ///      OptimismPortal contract. THIS IS EXPECTED BEHAVIOR.
-    /// @dev NOTE: Unlike other functions in OPCM, this is a one-off function used to serve the
-    ///      temporary need to support the interop migration action. It will likely be removed in
-    ///      the near future once interop support is baked more directly into OPCM. It does NOT
-    ///      look or function like all of the other functions in OPCMv2.
-    /// @param _input The input parameters for the migration.
-    function migrate(IOPContractsManagerMigrator.MigrateInput calldata _input) public {
-        _onlyDelegateCall();
-
-        // Delegatecall to the migrator contract.
-        (bool success, bytes memory result) =
-            address(opcmMigrator).delegatecall(abi.encodeCall(IOPContractsManagerMigrator.migrate, (_input)));
-        if (!success) {
-            assembly {
-                revert(add(result, 0x20), mload(result))
-            }
-        }
-    }
-
     ///////////////////////////////////////////////////////////////////////////
     //                  INTERNAL CHAIN MANAGEMENT FUNCTIONS                  //
     ///////////////////////////////////////////////////////////////////////////
@@ -785,21 +757,6 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
                     revert OPContractsManagerV2_InvalidGameConfigs();
                 }
             }
-        }
-
-        // Validate that the starting respected game type corresponds to an enabled game config.
-        bool startingGameTypeFound = false;
-        for (uint256 i = 0; i < _cfg.disputeGameConfigs.length; i++) {
-            if (
-                _cfg.disputeGameConfigs[i].gameType.raw() == _cfg.startingRespectedGameType.raw()
-                    && _cfg.disputeGameConfigs[i].enabled
-            ) {
-                startingGameTypeFound = true;
-                break;
-            }
-        }
-        if (!startingGameTypeFound) {
-            revert OPContractsManagerV2_InvalidGameConfigs();
         }
     }
 

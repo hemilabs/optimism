@@ -88,7 +88,7 @@ func TestOutputAtBlock(t *testing.T) {
 	l2Client := &testutils.MockL2Client{}
 	ref := eth.L2BlockRef{
 		Hash:           header.Hash(),
-		Number:         header.Number.Uint64(),
+		Number:         bigs.Uint64Strict(header.Number),
 		ParentHash:     header.ParentHash,
 		Time:           header.Time,
 		L1Origin:       eth.BlockID{},

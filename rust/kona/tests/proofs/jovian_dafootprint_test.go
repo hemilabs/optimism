@@ -108,7 +108,7 @@ func TestJovianDAFootprint(gt *testing.T) {
 			tx := types.MustSignNewTx(env.Dp.Secrets.Alice, signer, txData)
 
 			// Estimate incremental DA footprint if we include this tx.
-			est := tx.RollupCostData().EstimatedDASize().Uint64() * uint64(effectiveScalar)
+			est := bigs.Uint64Strict(tx.RollupCostData().EstimatedDASize()) * uint64(effectiveScalar)
 			if runningDAFootprint+est > gasLimit {
 				break
 			} else if isLowScalar && runningGas+tx.Gas() > gasLimit {
@@ -152,7 +152,7 @@ func TestJovianDAFootprint(gt *testing.T) {
 			require.NotNil(t, recScalar, "nil receipt DA footprint gas scalar")
 			require.EqualValues(t, effectiveScalar, *recScalar, "DA footprint gas scalar mismatch in receipt")
 
-			txDAFootprint := tx.RollupCostData().EstimatedDASize().Uint64() * uint64(effectiveScalar)
+			txDAFootprint := bigs.Uint64Strict(tx.RollupCostData().EstimatedDASize()) * uint64(effectiveScalar)
 			require.Equal(t, txDAFootprint, receipts[i].BlobGasUsed, "tx DA footprint mismatch with receipt")
 			expectedDAFootprint += txDAFootprint
 		}

@@ -33,8 +33,9 @@ var (
 )
 
 var (
-	ErrUnknownEventVersion = errors.New("unknown SystemConfig event version")
-	ErrUnknownEventType    = errors.New("unknown SystemConfig event type")
+	ErrUnknownEventVersion  = errors.New("unknown SystemConfig event version")
+	ErrUnknownEventType     = errors.New("unknown SystemConfig event type")
+	ErrInvalidEIP1559Params = errors.New("invalid EIP-1559 parameters")
 )
 
 // UpdateSystemConfigWithL1Receipts filters all L1 receipts to find config updates and applies the config updates to the given sysCfg
@@ -233,6 +234,10 @@ func parseSystemConfigUpdateEIP1559Params(data []byte) (eth.Bytes32, error) {
 	}
 	if !solabi.EmptyReader(reader) {
 		return eth.Bytes32{}, fmt.Errorf("%w: too many bytes", ErrParsingSystemConfig)
+	}
+	// Validate the EIP-1559 params (last 8 bytes of the 32-byte value)
+	if err := eip1559.ValidateHolocene1559Params(params[24:32]); err != nil {
+		return eth.Bytes32{}, fmt.Errorf("%w: %w", ErrInvalidEIP1559Params, err)
 	}
 	return params, nil
 }

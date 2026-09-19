@@ -3,14 +3,12 @@ title: "P2P Networking"
 diataxis: explanation
 ---
 
-# P2P Networking
-
-<Callout type="info">
+<Info>
 
 Partly adapted from the [OP Stack P2P Specs][p2p-specs].
 Please reference the specs for up-to-date OP Stack requirements.
 
-</Callout>
+</Info>
 
 The OP Stack uses P2P networking on the consensus layer to share
 the sequencer's view of the L2 chain with other nodes on the
@@ -86,14 +84,14 @@ in the `kona-node` that manages the libp2p swarm, including
 any interfacing with the swarm like dialing peers, publishing
 payloads (L2 blocks), handling events from the swarm, and more.
 
-<Callout type="info">
+<Info>
 
 The libp2p swarm must be polled via Swarm as Stream
 in order to make progress.
 Through kona's `GossipDriver`, this can be done by looping
 over and consuming events from `GossipDriver::next`.
 
-</Callout>
+</Info>
 
 The `GossipDriver` provides the methods to handle events
 from the [libp2p Swarm][swarm]. Events should be consumed
@@ -130,11 +128,11 @@ After decompression, kona separates the signature from the exact encoded
 envelope bytes. It authenticates those bytes before decoding the envelope
 according to the corresponding block topic and validating the block contents.
 
-<Callout type="info">
+<Info>
 
 Block validity in kona follows the [OP Stack block validation specs][validation].
 
-</Callout>
+</Info>
 
 As of writing these docs, block validation follows a few rules.
 
@@ -157,9 +155,6 @@ TODO
 ### P2P Actor
 
 TODO
-
-
-
 
 
 [validation]: https://specs.optimism.io/protocol/rollup-node-p2p.html#block-validation

@@ -260,17 +260,8 @@ func startSequencerCL(
 	l2EL L2ELNode,
 	jwtSecret [32]byte,
 	l2CLOpts []L2CLOption,
-) *OpNode {
-	return startL2CLNode(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, jwtSecret, l2CLNodeStartConfig{
-		Key:            "sequencer",
-		IsSequencer:    true,
-		NoDiscovery:    true,
-		EnableReqResp:  true,
-		UseReqResp:     true,
-		IndexingMode:   false,
-		L2FollowSource: "",
-		L2CLOptions:    l2CLOpts,
-	})
+) L2CLNode {
+	return startL2CLForKey(t, keys, l1Net, l2Net, l1EL, l1CL, l2EL, jwtSecret, "sequencer", "sequencer", true, "", l2CLOpts)
 }
 
 type l2CLNodeStartConfig struct {

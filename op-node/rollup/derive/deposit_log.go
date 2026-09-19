@@ -121,7 +121,7 @@ func unmarshalDepositVersion0(dep *optypes.DepositTx, to common.Address, opaqueD
 	if !gas.IsUint64() {
 		return fmt.Errorf("bad gas value: %x", opaqueData[offset:offset+8])
 	}
-	dep.Gas = gas.Uint64()
+	dep.Gas = bigs.Uint64Strict(gas)
 	offset += 8
 
 	// uint8 isCreation

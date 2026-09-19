@@ -2,6 +2,7 @@ package superroot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -9,6 +10,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity/interop"
 	cc "github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container"
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	gethlog "github.com/ethereum/go-ethereum/log"
 )
 
@@ -29,17 +31,22 @@ func New(log gethlog.Logger, chains map[eth.ChainID]cc.ChainContainer, verified 
 	}
 }
 
-func (s *Superroot) ActivityName() string { return "superroot" }
+func (s *Superroot) Name() string { return "superroot" }
+
+// Reset is a no-op for superroot - it always queries chain containers directly
+// and doesn't maintain any chain-specific cached state.
+func (s *Superroot) Reset(chainID eth.ChainID, timestamp uint64, invalidatedBlock eth.BlockRef) {
+	// No-op: superroot queries chain containers directly
+}
 
 func (s *Superroot) RPCNamespace() string    { return "superroot" }
 func (s *Superroot) RPCService() interface{} { return &superrootAPI{s: s} }
 
 type superrootAPI struct{ s *Superroot }
 
-// OutputWithSource is the full Output and its source L1 block
-type OutputWithSource struct {
-	Output   *eth.OutputResponse
-	SourceL1 eth.BlockID
+// AtTimestamp computes the super-root at the given timestamp, plus additional information about the current L1s, verified L2s, and optimistic L2s
+func (api *superrootAPI) AtTimestamp(ctx context.Context, timestamp hexutil.Uint64) (eth.SuperRootAtTimestampResponse, error) {
+	return api.s.atTimestamp(ctx, uint64(timestamp))
 }
 
 func (s *Superroot) atTimestamp(ctx context.Context, timestamp uint64) (eth.SuperRootAtTimestampResponse, error) {

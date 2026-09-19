@@ -1,8 +1,4 @@
----
-title: Install op-deployer
-description: Learn how to install op-deployer from pre-built binaries or from source.
-diataxis: how-to
----
+# Installation
 
 OP Deployer can be installed both from pre-built binaries and from source. This guide will walk you through both
 methods.

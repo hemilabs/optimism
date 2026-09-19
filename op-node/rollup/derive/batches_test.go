@@ -615,8 +615,7 @@ func TestValidBatch(t *testing.T) {
 					},
 				},
 			},
-			Expected:    BatchDrop,
-			ExpectedLog: "sequencers may not embed any PostExec transactions before SDM",
+			Expected: BatchAccept, // hemi: 0x7D is the PoP payout tx type and is always valid
 		},
 		{
 			Name:       "postExec tx included at SDM",
@@ -1269,9 +1268,8 @@ func TestValidBatch(t *testing.T) {
 					},
 				}, uint64(0), big.NewInt(0)),
 			},
-			Expected:    BatchDrop,
-			ExpectedLog: "sequencers may not embed any PostExec transactions before SDM",
-			ConfigMod:   deltaAtGenesis,
+			Expected:  BatchAccept, // hemi: 0x7D is the PoP payout tx type and is always valid
+			ConfigMod: deltaAtGenesis,
 		},
 		{
 			Name:       "valid batch same epoch",

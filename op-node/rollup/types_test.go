@@ -727,7 +727,8 @@ func TestConfig_Check(t *testing.T) {
 				holoceneTime := uint64(7)
 				isthmusTime := uint64(8)
 				jovianTime := uint64(9)
-				interopTime := uint64(10)
+				karstTime := uint64(10)
+				interopTime := uint64(11)
 				cfg.RegolithTime = &regolithTime
 				cfg.CanyonTime = &canyonTime
 				cfg.DeltaTime = &deltaTime

@@ -1,8 +1,4 @@
----
-title: Bootstrap Commands
-description: Learn how to deploy global singletons and implementation contracts for new OP Stack deployments.
-diataxis: reference
----
+# The Bootstrap Commands
 
 > Note: if you are joining an existing superchain, you can skip to the `init` and `apply` commands to create your L2 chain(s)
 
@@ -24,14 +20,15 @@ op-deployer bootstrap superchain \
   --private-key="<contract deployer private key>" \
   --outfile="./.deployer/bootstrap_superchain.json" \
   --superchain-proxy-admin-owner="<role address>" \
+  --protocol-versions-owner="<role address>" \
   --guardian="<role address>"
 ```
 
-### CLI Arguments
+### --required-protocol-version, --recommended-protocol-version (optional)
+Defaults to `OPStackSupport` value read from `op-geth`, but can be overridden by these flags.
 
-#### `--superchain-proxy-admin-owner`, `--guardian`
-
-In a dev environment, these can all be hot wallet EOAs. In a production environment, `--guardian` should be an HSM (hardware security module) protected hot wallet and `--superchain-proxy-admin-owner` should be a multisig cold-wallet (e.g. Gnosis Safe).
+### --superchain-proxy-admin-owner, --protocol-versions-owner, --guardian
+In a dev environment, these can all be hot wallet EOAs. In a production environment, `--guardian` should be an HSM (hardware security module) protected hot wallet and the other two should be multisig cold-wallets (e.g. Gnosis Safes).
 
 ### Output
 
@@ -41,7 +38,9 @@ This command will deploy several contracts, and output a JSON like the one below
 {
   "proxyAdminAddress": "0x269b95a33f48a9055b82ce739b0c105a83edd64a",
   "superchainConfigImplAddress": "0x2f4c87818d67fc3c365ea10051b94f98893f3c64",
-  "superchainConfigProxyAddress": "0xd0c74806fa114c0ec176c0bf2e1e84ff0a8f91a1"
+  "superchainConfigProxyAddress": "0xd0c74806fa114c0ec176c0bf2e1e84ff0a8f91a1",
+  "protocolVersionsImplAddress": "0xbded9e39e497a34a522af74cf018ca9717c5897e",
+  "protocolVersionsProxyAddress": "0x2e8e4b790044c1e7519caac687caffd4cafca2d4"
 }
 ```
 
@@ -52,6 +51,7 @@ op-deployer bootstrap implementations \
   --l1-rpc-url="<rpc url>" \
   --outfile="./.deployer/bootstrap_implementations.json" \
   --private-key="<contract deployer private key>" \
+  --protocol-versions-proxy="<contract address output from bootstrap superchain>" \
   --superchain-config-proxy="<contract address output from bootstrap superchain>" \
   --superchain-proxy-admin="<contract address from bootstrap superchain>" \
   --challenger="<role address for the superchain's challenger>" \
@@ -88,6 +88,7 @@ The command will output a JSON like the one below:
   "optimismMintableERC20FactoryImplAddress": "0xdd0b293b8789e9208481cee5a0c7e78f451d32bf",
   "disputeGameFactoryImplAddress": "0xe7ab0c07ee92aae31f213b23a132a155f5c2c7cc",
   "anchorStateRegistryImplAddress": "0xda4f46fad0e38d763c56da62c4bc1e9428624893",
-  "superchainConfigImplAddress": "0xdaf60e3c5ef116810779719da88410cce847c2a4"
+  "superchainConfigImplAddress": "0xdaf60e3c5ef116810779719da88410cce847c2a4",
+  "protocolVersionsImplAddress": "0xa95ac4790fedd68d9c3b30ed730afaec6029eb31"
 }
 ```

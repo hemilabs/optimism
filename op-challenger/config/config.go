@@ -12,6 +12,7 @@ import (
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
+	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -23,6 +24,7 @@ var (
 	ErrMissingL2Rpc                      = errors.New("missing L2 rpc url")
 	ErrMissingCannonAbsolutePreState     = errors.New("missing cannon absolute pre-state")
 	ErrMissingL1EthRPC                   = errors.New("missing l1 eth rpc url")
+	ErrMissingL1RPCKind                  = errors.New("missing l1 eth rpc kind")
 	ErrMissingL1Beacon                   = errors.New("missing l1 beacon url")
 	ErrMissingGameFactoryAddress         = errors.New("missing game factory address")
 	ErrMissingCannonSnapshotFreq         = errors.New("missing cannon snapshot freq")
@@ -37,11 +39,9 @@ var (
 )
 
 const (
-	DefaultPollInterval         = time.Second * 12
-	DefaultCannonSnapshotFreq   = uint(1_000_000_000)
-	DefaultCannonInfoFreq       = uint(10_000_000)
-	DefaultAsteriscSnapshotFreq = uint(1_000_000_000)
-	DefaultAsteriscInfoFreq     = uint(10_000_000)
+	DefaultPollInterval       = time.Second * 12
+	DefaultCannonSnapshotFreq = uint(1_000_000_000)
+	DefaultCannonInfoFreq     = uint(10_000_000)
 	// DefaultGameWindow is the default maximum time duration in the past
 	// that the challenger will look for games to progress.
 	// The default value is 28 days. The worst case duration for a game is 16 days
@@ -57,16 +57,17 @@ const (
 // This also contains config options for auxiliary services.
 // It is used to initialize the challenger.
 type Config struct {
-	L1EthRpc             string           // L1 RPC Url
-	L1Beacon             string           // L1 Beacon API Url
-	GameFactoryAddress   common.Address   // Address of the dispute game factory
-	GameAllowlist        []common.Address // Allowlist of fault game addresses
-	GameWindow           time.Duration    // Maximum time duration to look for games to progress
-	Datadir              string           // Data Directory
-	MaxConcurrency       uint             // Maximum number of threads to use when progressing games
-	PollInterval         time.Duration    // Polling interval for latest-block subscription when using an HTTP RPC provider
-	AllowInvalidPrestate bool             // Whether to allow responding to games where the prestate does not match
-	MinUpdateInterval    time.Duration    // Minimum duration the L1 head block time must advance before scheduling a new update cycle
+	L1EthRpc             string                  // L1 RPC Url
+	L1RPCKind            sources.RPCProviderKind // L1 RPC kind
+	L1Beacon             string                  // L1 Beacon API Url
+	GameFactoryAddress   common.Address          // Address of the dispute game factory
+	GameAllowlist        []common.Address        // Allowlist of fault game addresses
+	GameWindow           time.Duration           // Maximum time duration to look for games to progress
+	Datadir              string                  // Data Directory
+	MaxConcurrency       uint                    // Maximum number of threads to use when progressing games
+	PollInterval         time.Duration           // Polling interval for latest-block subscription when using an HTTP RPC provider
+	AllowInvalidPrestate bool                    // Whether to allow responding to games where the prestate does not match
+	MinUpdateInterval    time.Duration           // Minimum duration the L1 head block time must advance before scheduling a new update cycle
 
 	AdditionalBondClaimants []common.Address // List of addresses to claim bonds for in addition to the tx manager sender
 
@@ -85,14 +86,6 @@ type Config struct {
 	CannonKona                        vm.Config
 	CannonKonaAbsolutePreState        string   // File to load the absolute pre-state for CannonKona traces from
 	CannonKonaAbsolutePreStateBaseURL *url.URL // Base URL to retrieve absolute pre-states for CannonKona traces from
-
-	// Specific to the asterisc trace provider
-	Asterisc                            vm.Config
-	AsteriscAbsolutePreState            string   // File to load the absolute pre-state for Asterisc traces from
-	AsteriscAbsolutePreStateBaseURL     *url.URL // Base URL to retrieve absolute pre-states for Asterisc traces from
-	AsteriscKona                        vm.Config
-	AsteriscKonaAbsolutePreState        string   // File to load the absolute pre-state for AsteriscKona traces from
-	AsteriscKonaAbsolutePreStateBaseURL *url.URL // Base URL to retrieve absolute pre-states for AsteriscKona traces from
 
 	MaxPendingTx uint64 // Maximum number of pending transactions (0 == no limit)
 
@@ -125,6 +118,7 @@ func NewInteropConfig(
 ) Config {
 	return Config{
 		L1EthRpc:           l1EthRpc,
+		L1RPCKind:          sources.RPCKindStandard,
 		L1Beacon:           l1BeaconApi,
 		SuperRootRPC:       superRootRpc,
 		L2Rpcs:             l2Rpcs,
@@ -162,24 +156,6 @@ func NewInteropConfig(
 			DebugInfo:       true,
 			BinarySnapshots: true,
 		},
-		Asterisc: vm.Config{
-			VmType:          gameTypes.AsteriscGameType,
-			L1:              l1EthRpc,
-			L1Beacon:        l1BeaconApi,
-			L2s:             l2Rpcs,
-			SnapshotFreq:    DefaultAsteriscSnapshotFreq,
-			InfoFreq:        DefaultAsteriscInfoFreq,
-			BinarySnapshots: true,
-		},
-		AsteriscKona: vm.Config{
-			VmType:          gameTypes.AsteriscKonaGameType,
-			L1:              l1EthRpc,
-			L1Beacon:        l1BeaconApi,
-			L2s:             l2Rpcs,
-			SnapshotFreq:    DefaultAsteriscSnapshotFreq,
-			InfoFreq:        DefaultAsteriscInfoFreq,
-			BinarySnapshots: true,
-		},
 		GameWindow: DefaultGameWindow,
 	}
 }
@@ -195,6 +171,7 @@ func NewConfig(
 ) Config {
 	return Config{
 		L1EthRpc:           l1EthRpc,
+		L1RPCKind:          sources.RPCKindStandard,
 		L1Beacon:           l1BeaconApi,
 		RollupRpc:          l2RollupRpc,
 		L2Rpcs:             []string{l2EthRpc},
@@ -232,24 +209,6 @@ func NewConfig(
 			DebugInfo:       true,
 			BinarySnapshots: true,
 		},
-		Asterisc: vm.Config{
-			VmType:          gameTypes.AsteriscGameType,
-			L1:              l1EthRpc,
-			L1Beacon:        l1BeaconApi,
-			L2s:             []string{l2EthRpc},
-			SnapshotFreq:    DefaultAsteriscSnapshotFreq,
-			InfoFreq:        DefaultAsteriscInfoFreq,
-			BinarySnapshots: true,
-		},
-		AsteriscKona: vm.Config{
-			VmType:          gameTypes.AsteriscKonaGameType,
-			L1:              l1EthRpc,
-			L1Beacon:        l1BeaconApi,
-			L2s:             []string{l2EthRpc},
-			SnapshotFreq:    DefaultAsteriscSnapshotFreq,
-			InfoFreq:        DefaultAsteriscInfoFreq,
-			BinarySnapshots: true,
-		},
 		GameWindow: DefaultGameWindow,
 	}
 }
@@ -261,6 +220,9 @@ func (c Config) GameTypeEnabled(t gameTypes.GameType) bool {
 func (c Config) Check() error {
 	if c.L1EthRpc == "" {
 		return ErrMissingL1EthRPC
+	}
+	if c.L1RPCKind == "" {
+		return ErrMissingL1RPCKind
 	}
 	if c.L1Beacon == "" {
 		return ErrMissingL1Beacon
@@ -368,22 +330,6 @@ func (c Config) validateBaseCannonKonaOptions() error {
 	}
 	if c.CannonKona.InfoFreq == 0 {
 		return ErrMissingCannonKonaInfoFreq
-	}
-	return nil
-}
-
-func (c Config) validateBaseAsteriscKonaOptions() error {
-	if err := c.AsteriscKona.Check(); err != nil {
-		return fmt.Errorf("asterisc kona: %w", err)
-	}
-	if c.AsteriscKonaAbsolutePreState == "" && c.AsteriscKonaAbsolutePreStateBaseURL == nil {
-		return ErrMissingAsteriscKonaAbsolutePreState
-	}
-	if c.AsteriscKona.SnapshotFreq == 0 {
-		return ErrMissingAsteriscKonaSnapshotFreq
-	}
-	if c.AsteriscKona.InfoFreq == 0 {
-		return ErrMissingAsteriscKonaInfoFreq
 	}
 	return nil
 }

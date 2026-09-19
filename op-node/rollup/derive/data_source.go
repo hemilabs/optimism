@@ -23,8 +23,8 @@ type L1TransactionFetcher interface {
 }
 
 type L1BlobsFetcher interface {
-	// GetBlobs fetches blobs that were confirmed in the given L1 block with the given indexed hashes.
-	GetBlobs(ctx context.Context, ref eth.L1BlockRef, hashes []eth.IndexedBlobHash) ([]*eth.Blob, error)
+	// GetBlobsByHash fetches blobs that were confirmed at the given timestamp with the given versioned hashes.
+	GetBlobsByHash(ctx context.Context, time uint64, hashes []common.Hash) ([]*eth.Blob, error)
 }
 
 type AltDAInputFetcher interface {
@@ -73,7 +73,7 @@ func (ds *DataSourceFactory) OpenData(ctx context.Context, ref eth.L1BlockRef, b
 	var src DataIter
 	if ds.ecotoneTime != nil && ref.Time >= *ds.ecotoneTime {
 		if ds.blobsFetcher == nil {
-			return nil, fmt.Errorf("ecotone upgrade active but beacon endpoint not configured")
+			return nil, NewCriticalError(fmt.Errorf("ecotone upgrade active but beacon endpoint not configured"))
 		}
 		src = NewBlobDataSource(ctx, ds.log, ds.dsCfg, ds.fetcher, ds.blobsFetcher, ref, batcherAddr, hemitrapEnabled)
 	} else {

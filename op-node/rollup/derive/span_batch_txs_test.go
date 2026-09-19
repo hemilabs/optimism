@@ -351,7 +351,7 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 			var spanBatchTxs spanBatchTxs
 			var txTypes []int
 			var txSigs []spanBatchSignature
-			var originalVs []uint64
+			var originalVs []*big.Int
 			yParityBits := new(big.Int)
 			protectedBits := new(big.Int)
 			totalLegacyTxCount := 0
@@ -373,8 +373,8 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 				txSig.r, _ = uint256.FromBig(r)
 				txSig.s, _ = uint256.FromBig(s)
 				txSigs = append(txSigs, txSig)
-				originalVs = append(originalVs, v.Uint64())
-				yParityBit, err := convertVToYParity(v.Uint64(), int(tx.Type()))
+				originalVs = append(originalVs, v)
+				yParityBit, err := convertVToYParity(v, int(tx.Type()))
 				require.NoError(t, err)
 				yParityBits.SetBit(yParityBits, idx, yParityBit)
 			}
@@ -387,11 +387,11 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 			err := spanBatchTxs.recoverV(chainID)
 			require.NoError(t, err)
 
-			var recoveredVs []uint64
+			var recoveredVs []*big.Int
 			for _, txSig := range spanBatchTxs.txSigs {
 				recoveredVs = append(recoveredVs, txSig.v)
 			}
-			require.Equal(t, originalVs, recoveredVs, "recovered v mismatch")
+			requireEqual(t, originalVs, recoveredVs, "recovered v mismatch")
 		})
 	}
 }
@@ -420,7 +420,7 @@ func TestSpanBatchTxsRoundTrip(t *testing.T) {
 		err = sbt2.recoverV(chainID)
 		require.NoError(t, err)
 
-		require.Equal(t, sbt, &sbt2)
+		requireEqual(t, sbt, &sbt2)
 	}
 }
 
@@ -485,6 +485,9 @@ func TestSpanBatchTxsPostExecRoundTripFullTxs(t *testing.T) {
 // does not decode the 0x7D class at all, which is why the fields are derived from
 // the encoding instead of from a go-ethereum transaction.
 func TestSpanBatchTxsPostExecFieldsMatchGeth(t *testing.T) {
+	// hemi: 0x7D is types.PopPayoutTxType in the pinned hemilabs/op-geth, so geth cannot
+	// decode post-exec (0x7D) payloads for this differential check.
+	t.Skip("hemi: 0x7D is the PoP payout tx type in hemilabs/op-geth")
 	raw, err := testPostExecTx().MarshalBinary()
 	require.NoError(t, err)
 	sbt, err := newSpanBatchTxs([][]byte{raw}, big.NewInt(901))

@@ -29,18 +29,23 @@ func SpamCalldata(t devtest.T, l2BlockTime time.Duration, el *dsl.L2ELNode, wall
 	eoas := loadtest.FundEOAs(t, eth.HundredEther, 25, l2BlockTime, el, wallet, funder)
 	rr := loadtest.NewRoundRobin(eoas)
 
-func NewCalldataSpammer(eoa *loadtest.SyncEOA) *CalldataSpammer {
-	return &CalldataSpammer{
-		eoa: eoa,
-	}
-}
-
-func (s *CalldataSpammer) Spam(t devtest.T) error {
-	data := make([]byte, 50_000)
-	_, err := rand.Read(data)
-	t.Require().NoError(err)
-	_, err = s.eoa.Include(t, txplan.WithTo(&common.Address{}), txplan.WithData(data))
-	return err
+	ctx, cancel := context.WithCancel(t.Ctx())
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		wg.Wait()
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		loadtest.NewBurst(l2BlockTime).Run(t.WithCtx(ctx), loadtest.SpammerFunc(func(t devtest.T) error {
+			data := make([]byte, 50_000)
+			_, err := rand.Read(data)
+			t.Require().NoError(err)
+			_, err = rr.Get().Include(t, txplan.WithTo(&common.Address{}), txplan.WithData(data))
+			return err
+		}))
+	}()
 }
 
 type daFootprintSystemConfig struct {

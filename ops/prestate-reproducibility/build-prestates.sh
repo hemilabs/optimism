@@ -5,17 +5,17 @@ SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPTS_DIR}/../.." && pwd)
 
 TMP_DIR=$(mktemp -d)
+WORKTREE_DIR="${TMP_DIR}/optimism"
+
 function cleanup() {
   git -C "${REPO_ROOT}" worktree remove "${WORKTREE_DIR}" --force 2> /dev/null || true
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
-echo "Using temp dir: ${TMP_DIR}"
-cd "${TMP_DIR}"
 
-# Need to check out a fresh copy of the monorepo so we can switch to specific tags without it also affecting the
-# contents of this script (which is checked into the repo).
-git clone https://github.com/ethereum-optimism/optimism --recurse-submodules
+echo "Creating worktree in: ${WORKTREE_DIR}"
+# Create a detached worktree - we'll checkout specific tags in the build functions
+git -C "${REPO_ROOT}" worktree add "${WORKTREE_DIR}" HEAD --detach
 
 STATES_DIR="${SCRIPTS_DIR}/temp/states"
 LOGS_DIR="${SCRIPTS_DIR}/temp/logs"
@@ -24,7 +24,7 @@ VERSIONS_FILE="${STATES_DIR}/versions.json"
 
 mkdir -p "${STATES_DIR}" "${LOGS_DIR}"
 
-cd "${REPO_DIR}"
+cd "${WORKTREE_DIR}"
 
 function build_prestates() {
   local version=$1
@@ -40,6 +40,7 @@ function build_prestates() {
     mise trust
     mise install -v -y go just jq >> "${log_file}" 2>&1
   fi
+
   rm -rf "${BIN_DIR}"
   rm -rf rust/kona/prestate-artifacts-*
   if [ -f justfile ] && just --show reproducible-prestate &> /dev/null; then
@@ -67,13 +68,15 @@ function build_prestates() {
   fi
 }
 
-# this global is written to by build_op_program_prestate and build_kona_prestate
 VERSIONS_JSON="[]"
 readarray -t VERSIONS < <(git tag --list 'kona-client/v*' --sort=taggerdate)
 
 for i in "${!VERSIONS[@]}"; do
+  tag="${VERSIONS[i]}"
+  log_file="${LOGS_DIR}/build-${tag//\//-}.txt"
+
   pushd .
-  build_op_program_prestate "${VERSIONS[i]}"
+  build_prestates "${tag}" "${log_file}"
   popd
   if [ "${CIRCLECI:-}" = "true" ]; then
     if (((i + 1) % 10 == 0)); then
@@ -84,34 +87,4 @@ for i in "${!VERSIONS[@]}"; do
 done
 
 echo "${VERSIONS_JSON}" > "${VERSIONS_FILE}"
-
-# ignore alpha, beta, and older kona-client releases. The cannon prestate builds are not well supported on these versions
-EXCLUDED=(
-  "kona-client/v1.0.0"
-  "kona-client/v1.0.1"
-  "kona-client/v1.0.2"
-  "kona-client/v1.1.0-rc.1"
-  "kona-client/v1.1.0-rc.3"
-  "kona-client/v1.1.3"
-)
-printf "%s\n" "${EXCLUDED[@]}" > excluded.txt
-
-readarray -t KONA_VERSIONS < <(git ls-remote --tags "$KONA_REPO_URL" | grep kona-client/ \
-  | sed 's|.*refs/tags/||' | sed 's/\^{}//' | sort -u \
-  | grep -v beta | grep -v alpha | grep -v -F -f excluded.txt)
-
-for i in "${!KONA_VERSIONS[@]}"; do
-  pushd .
-  build_kona_prestate "${KONA_VERSIONS[i]}"
-  popd
-  # after every 10 builds, cleanup docker artifacts to reclaim disk space
-  if [ "$CIRCLECI" = "true" ]; then
-    if (( (i + 1) % 10 == 0 )); then
-      echo "Pruning docker build artifacts after ${i} builds"
-      docker system prune -f
-    fi
-  fi
-done
-echo "${VERSIONS_JSON}" > "${VERSIONS_FILE}"
-
 echo "All prestates successfully built and available in ${STATES_DIR}"

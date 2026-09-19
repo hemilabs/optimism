@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/forge"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 
@@ -143,7 +144,7 @@ func RenderGenesisAndRollup(globalState *state.State, chainID common.Hash, useGl
 	rollupConfig, err := config.RollupConfig(
 		chainState.StartBlock.ToBlockRef(),
 		l2GenesisBlock.Hash(),
-		l2GenesisBlock.Number().Uint64(),
+		bigs.Uint64Strict(l2GenesisBlock.Number()),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build rollup config: %w", err)

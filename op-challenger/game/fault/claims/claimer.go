@@ -96,9 +96,9 @@ func (c *Claimer) claimBond(ctx context.Context, game types.GameMetadata, addr c
 	candidate, err := contract.ClaimCreditTx(ctx, addr)
 	if errors.Is(err, contracts.ErrSimulationFailed) {
 		c.logger.Debug("Credit still locked", "game", game.Proxy, "addr", addr)
-		return nil
+		return true, nil // Credit exists but is locked
 	} else if err != nil {
-		return fmt.Errorf("failed to create credit claim tx: %w", err)
+		return true, fmt.Errorf("failed to create credit claim tx: %w", err)
 	}
 
 	if err = c.txSender.SendAndWaitSimple("claim credit", candidate); err != nil {
@@ -127,7 +127,7 @@ func (c *Claimer) closeGame(ctx context.Context, contract BondContract, game typ
 		c.logger.Debug("Contract version does not support closeGame", "game", game.Proxy)
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("failed to create close game tx: %w", err)
+		return fmt.Errorf("failed to create credit claim tx: %w", err)
 	}
 
 	c.logger.Info("Closing game to update anchor state", "game", game.Proxy)

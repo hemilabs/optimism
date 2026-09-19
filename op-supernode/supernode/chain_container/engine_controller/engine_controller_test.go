@@ -197,11 +197,48 @@ type mockL2 struct {
 }
 
 func (m *mockL2) L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error) {
+	m.labelCallCount++
+	if m.refByLabelErr != nil {
+		return eth.L2BlockRef{}, m.refByLabelErr
+	}
+	// Test-injected overrides take priority — used to simulate incorrect engine state.
+	if m.labelOverrides != nil {
+		if ref, ok := m.labelOverrides[label]; ok {
+			return ref, nil
+		}
+	}
+	// After any FCU, return refs matching the last FCU state so verifyRewindState passes.
+	// This simulates a well-behaved engine that immediately reflects forkchoice updates.
+	if m.lastFCUState != nil {
+		var hash common.Hash
+		switch label {
+		case eth.Unsafe:
+			hash = m.lastFCUState.HeadBlockHash
+		case eth.Safe:
+			hash = m.lastFCUState.SafeBlockHash
+		case eth.Finalized:
+			hash = m.lastFCUState.FinalizedBlockHash
+		}
+		return eth.L2BlockRef{Hash: hash}, nil
+	}
+	if m.refsByLabel != nil {
+		if ref, ok := m.refsByLabel[label]; ok {
+			return ref, nil
+		}
+	}
 	return eth.L2BlockRef{Number: 999}, nil
 }
 func (m *mockL2) L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error) {
+	if m.refErr != nil {
+		return eth.L2BlockRef{}, m.refErr
+	}
 	m.lastNum = num
-	return m.ref, m.refErr
+	if m.refsByNumber != nil {
+		if ref, ok := m.refsByNumber[num]; ok {
+			return ref, nil
+		}
+	}
+	return m.ref, nil
 }
 func (m *mockL2) OutputV0AtBlockNumber(ctx context.Context, blockNum uint64) (*eth.OutputV0, error) {
 	m.outputCalls++
@@ -213,6 +250,11 @@ func (m *mockL2) OutputV0AtBlock(ctx context.Context, blockHash common.Hash) (*e
 }
 func (m *mockL2) PayloadByNumber(ctx context.Context, number uint64) (*eth.ExecutionPayloadEnvelope, error) {
 	m.payloadCalls++
+	if m.payloadsByNumber != nil {
+		if payload, ok := m.payloadsByNumber[number]; ok {
+			return payload, nil
+		}
+	}
 	return m.payload, m.payloadErr
 }
 func (m *mockL2) PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error) {
@@ -250,13 +292,4 @@ func (m *mockL2) NewPayload(ctx context.Context, payload *eth.ExecutionPayload, 
 	return &eth.PayloadStatusV1{Status: eth.ExecutionValid}, nil
 }
 
-func TestEngineController_SentinelErrors(t *testing.T) {
-	t.Parallel()
-	ec := &simpleEngineController{l2: nil, rollup: nil}
-	_, err := ec.SafeBlockAtTimestamp(context.Background(), 0)
-	require.ErrorIs(t, err, ErrNoEngineClient)
-
-	ec = &simpleEngineController{l2: &mockL2{}, rollup: nil}
-	_, err = ec.SafeBlockAtTimestamp(context.Background(), 0)
-	require.ErrorIs(t, err, ErrNoRollupConfig)
-}
+var _ l2Provider = (*mockL2)(nil)

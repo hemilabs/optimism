@@ -184,7 +184,8 @@ contract DeployImplementations is Script {
         deployOPCMContainer(_input, _output, _blueprints, implementations);
         deployOPCMStandardValidatorV2(_input, _output, implementations);
         deployOPCMUtils(_output);
-        deployOPCMV2(_output);
+        deployOPCMMigrator(_output);
+        opcmV2_ = deployOPCMV2(_output);
 
         return opcmV2_;
     }
@@ -559,8 +560,8 @@ contract DeployImplementations is Script {
         _output.opcmUtils = impl;
     }
 
-    function deployOPCMV2(Output memory _output) private {
-        IOPContractsManagerV2 impl = IOPContractsManagerV2(
+    function deployOPCMMigrator(Output memory _output) private {
+        IOPContractsManagerMigrator impl = IOPContractsManagerMigrator(
             DeployUtils.createDeterministic({
                 _name: "OPContractsManagerMigrator.sol:OPContractsManagerMigrator",
                 _args: DeployUtils.encodeConstructor(
@@ -644,7 +645,7 @@ contract DeployImplementations is Script {
     function deployOPCMV2(Output memory _output) private returns (IOPContractsManagerV2 opcmV2_) {
         opcmV2_ = IOPContractsManagerV2(
             DeployUtils.createDeterministic({
-                _name: "OPContractsManagerV2",
+                _name: "OPContractsManagerV2.sol:OPContractsManagerV2",
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(
                         IOPContractsManagerV2.__constructor__,

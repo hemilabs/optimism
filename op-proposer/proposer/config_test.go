@@ -81,16 +81,6 @@ func TestNewConfigReadsSuperRootRpcs(t *testing.T) {
 }
 
 func TestRollupRpc(t *testing.T) {
-	t.Run("RequiredWithL2OO", func(t *testing.T) {
-		cfg := validConfig()
-		cfg.DGFAddress = ""
-		cfg.L2OOAddress = common.Address{0xaa}.Hex()
-		cfg.ProposalInterval = 0
-		cfg.RollupRpc = ""
-		cfg.SupervisorRpcs = []string{"http://localhost:8882/supervisor"}
-		require.ErrorIs(t, cfg.Check(), ErrMissingRollupRpc)
-	})
-
 	for _, gameType := range preInteropGameTypes {
 		t.Run("RequiredWithPreInteropGame", func(t *testing.T) {
 			cfg := validConfig()

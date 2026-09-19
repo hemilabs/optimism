@@ -47,8 +47,8 @@ func (c *ChainConfig) GethChainConfig() *gethparams.ChainConfig {
 		HoloceneTime:            c.HoloceneTime,
 		IsthmusTime:             c.IsthmusTime,
 		JovianTime:              c.JovianTime,
-		KarstTime:               c.KarstTime,
-		LagoonTime:              c.LagoonTime,
+		// hemi: the pinned hemilabs/op-geth has no Karst/Lagoon fields; Lagoon is the interop fork.
+		InteropTime: c.LagoonTime,
 	}
 
 	if c.Optimism != nil {

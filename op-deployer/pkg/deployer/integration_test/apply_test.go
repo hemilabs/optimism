@@ -1078,33 +1078,20 @@ func runEndToEndBootstrapAndApplyUpgradeTest(t *testing.T, afactsFS foundry.Stat
 			require.NotEmpty(t, opcmCode, "OPCM V2 should have code deployed")
 			t.Logf("OPCM V2 code size: %d bytes", len(opcmCode))
 
-			// Verify OpcmUtils has code deployed
-			utilsCode, err := versionClient.CodeAt(ctx, impls.OpcmUtils, nil)
-			require.NoError(t, err)
-			require.NotEmpty(t, utilsCode, "OpcmUtils should have code deployed")
-			t.Logf("OpcmUtils code size: %d bytes", len(utilsCode))
+func needsSuperchainConfigUpgrade(
+	ctx context.Context,
+	client *ethclient.Client,
+	currentProxy, targetImpl common.Address,
+) (bool, error) {
+	currentVersion, err := superchainConfigVersion(ctx, client, currentProxy)
+	if err != nil {
+		return false, fmt.Errorf("failed to fetch proxy superchain config version: %w", err)
+	}
 
-			// Verify OpcmContainer has code deployed
-			containerCode, err := versionClient.CodeAt(ctx, impls.OpcmContainer, nil)
-			require.NoError(t, err)
-			require.NotEmpty(t, containerCode, "OpcmContainer should have code deployed")
-			t.Logf("OpcmContainer code size: %d bytes", len(containerCode))
-
-			// First, upgrade the superchain with V2
-			t.Run("upgrade superchain v2", func(t *testing.T) {
-				superchainUpgradeConfig := embedded.UpgradeSuperchainConfigInput{
-					Prank:             superchainProxyAdminOwner,
-					Opcm:              impls.OpcmV2,
-					SuperchainConfig:  implementationsConfig.SuperchainConfigProxy,
-					ExtraInstructions: []embedded.ExtraInstruction{},
-				}
-				err := embedded.UpgradeSuperchainConfig(host, superchainUpgradeConfig)
-				if err != nil {
-					t.Logf("Superchain upgrade may have failed (could already be upgraded): %v", err)
-				} else {
-					t.Log("Superchain V2 upgrade succeeded")
-				}
-			})
+	targetVersion, err := superchainConfigVersion(ctx, client, targetImpl)
+	if err != nil {
+		return false, fmt.Errorf("failed to fetch implementation superchain config version: %w", err)
+	}
 
 			// Then test upgrade on the V2-deployed chain
 			t.Run("upgrade chain v2", func(t *testing.T) {
@@ -1180,44 +1167,6 @@ func runEndToEndBootstrapAndApplyUpgradeTest(t *testing.T, afactsFS foundry.Stat
 			})
 		})
 	})
-}
-
-func needsSuperchainConfigUpgrade(
-	ctx context.Context,
-	client *ethclient.Client,
-	currentProxy, targetImpl common.Address,
-) (bool, error) {
-	currentVersion, err := superchainConfigVersion(ctx, client, currentProxy)
-	if err != nil {
-		return false, fmt.Errorf("failed to fetch proxy superchain config version: %w", err)
-	}
-
-	targetVersion, err := superchainConfigVersion(ctx, client, targetImpl)
-	if err != nil {
-		return false, fmt.Errorf("failed to fetch implementation superchain config version: %w", err)
-	}
-
-	return currentVersion.LessThan(targetVersion), nil
-}
-
-func superchainConfigVersion(
-	ctx context.Context,
-	client *ethclient.Client,
-	addr common.Address,
-) (*semver.Version, error) {
-	contract, err := opbindings.NewSuperchainConfig(addr, client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to bind superchain config at %s: %w", addr.Hex(), err)
-	}
-	versionStr, err := contract.Version(&bind.CallOpts{Context: ctx})
-	if err != nil {
-		return nil, fmt.Errorf("failed to read version from %s: %w", addr.Hex(), err)
-	}
-	version, err := semver.NewVersion(versionStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse version %q from %s: %w", versionStr, addr.Hex(), err)
-	}
-	return version, nil
 }
 
 func setupGenesisChain(t *testing.T, l1ChainID uint64) (deployer.ApplyPipelineOpts, *state.Intent, *state.State) {

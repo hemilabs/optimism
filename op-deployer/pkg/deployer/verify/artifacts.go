@@ -38,6 +38,7 @@ var contractNameExceptions = map[string]string{
 	"L1CrossDomainMessengerProxy": "ResolvedDelegateProxy.sol/ResolvedDelegateProxy.json",
 	"Opcm":                        "OPContractsManagerV2.sol/OPContractsManagerV2.json",
 	"OpcmStandardValidator":       "OPContractsManagerStandardValidator.sol/OPContractsManagerStandardValidator.json",
+	"OpcmMigrator":                "OPContractsManagerMigrator.sol/OPContractsManagerMigrator.json",
 	"OpcmV2":                      "OPContractsManagerV2.sol/OPContractsManagerV2.json",
 	"OpcmContainer":               "OPContractsManagerContainer.sol/OPContractsManagerContainer.json",
 	"OpcmUtils":                   "OPContractsManagerUtils.sol/OPContractsManagerUtils.json",

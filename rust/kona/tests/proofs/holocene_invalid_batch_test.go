@@ -178,8 +178,8 @@ func TestHoloceneInvalidBatch(gt *testing.T) {
 		}
 
 		targetHeadNumber := max(testCfg.Custom.blocks)
-		for env.Engine.L2Chain().CurrentBlock().Number.Uint64() < uint64(targetHeadNumber) {
-			parentNum := env.Engine.L2Chain().CurrentBlock().Number.Uint64()
+		for bigs.Uint64Strict(env.Engine.L2Chain().CurrentBlock().Number) < uint64(targetHeadNumber) {
+			parentNum := bigs.Uint64Strict(env.Engine.L2Chain().CurrentBlock().Number)
 
 			if testCfg.Custom.breachMaxSequencerDrift {
 				// prevent L1 origin from progressing

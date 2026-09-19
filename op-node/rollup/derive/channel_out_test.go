@@ -542,7 +542,7 @@ func TestPayloadToSingularBatchParity(t *testing.T) {
 		txs = append(txs, tx)
 	}
 	// Append a post-exec tx as the trailing block tx (SDM block shape).
-	txs = append(txs, types.NewTx(&types.PostExecTx{Data: []byte{0xc2, 0x80, 0x80}}))
+	txs = append(txs, hemiPostExecTxUnsupported(t))
 	block := types.NewBlockWithHeader(&types.Header{
 		Number: big.NewInt(101), Time: batch.Timestamp, ParentHash: batch.ParentHash,
 		BaseFee: big.NewInt(7),
@@ -628,7 +628,7 @@ func postExecTestPayload(t *testing.T) *eth.ExecutionPayload {
 	txs := []*types.Transaction{
 		testutils.TxFromDeposit(l1InfoTx),
 		userTx,
-		types.NewTx(&types.PostExecTx{Data: []byte{0xc2, 0x80, 0x80}}),
+		hemiPostExecTxUnsupported(t),
 	}
 	block := types.NewBlockWithHeader(&types.Header{
 		Number: big.NewInt(101), Time: batch.Timestamp, ParentHash: batch.ParentHash,
@@ -638,4 +638,12 @@ func postExecTestPayload(t *testing.T) *eth.ExecutionPayload {
 	payload, err := eth.BlockAsPayload(block, &rollupCfg)
 	require.NoError(t, err)
 	return payload
+}
+
+// hemiPostExecTxUnsupported skips the calling test: the pinned hemilabs/op-geth has no
+// PostExecTx (SDM / Lagoon), so post-exec transactions cannot be built with geth types.
+func hemiPostExecTxUnsupported(t testing.TB) *types.Transaction {
+	t.Helper()
+	t.Skip("hemi: pinned hemilabs/op-geth has no PostExecTx type")
+	return nil
 }

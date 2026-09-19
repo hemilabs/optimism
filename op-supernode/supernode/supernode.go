@@ -11,6 +11,7 @@ import (
 
 	opnodecfg "github.com/ethereum-optimism/optimism/op-node/config"
 	rollupNode "github.com/ethereum-optimism/optimism/op-node/node"
+	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/httputil"
@@ -18,6 +19,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity/heartbeat"
+	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity/interop"
+	supernodeactivity "github.com/ethereum-optimism/optimism/op-supernode/supernode/activity/supernode"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity/superroot"
 	cc "github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/resources"
@@ -153,7 +156,7 @@ func New(ctx context.Context, log gethlog.Logger, version string, commit string,
 
 	// Optionally build metrics service
 	if cfg.MetricsConfig.Enabled {
-		s.metrics = resources.NewMetricsService(log, cfg.MetricsConfig.ListenAddr, cfg.MetricsConfig.ListenPort, s.metricsRouter)
+		s.metrics = resources.NewMetricsService(log, cfg.MetricsConfig.ListenAddr, cfg.MetricsConfig.ListenPort, s.metricsFanIn)
 	}
 	return s, nil
 }
@@ -234,8 +237,7 @@ func (s *Supernode) Start(ctx context.Context) error {
 	// Start metrics service
 	if s.metrics != nil {
 		s.wg.Add(1)
-		s.metrics.Start(func(err error) {
-			defer s.wg.Done()
+		s.metrics.Start(s.wg.Done, func(err error) {
 			if s.requestStop != nil {
 				s.requestStop(err)
 			}
@@ -252,8 +254,18 @@ func (s *Supernode) Start(ctx context.Context) error {
 			s.wg.Add(1)
 			go func(run activity.RunnableActivity) {
 				defer s.wg.Done()
-				if err := run.Start(ctx); err != nil {
-					s.log.Error("error starting runnable activity", "error", err)
+				err := run.Start(lifecycleCtx)
+				activityName := a.Name()
+				switch err {
+				case nil:
+					s.log.Error("activity quit unexpectedly", "name", activityName)
+				case context.Canceled:
+					// This is the happy path, normal / clean shutdown
+					s.log.Info("activity closing due to cancelled context", "name", activityName)
+				case context.DeadlineExceeded:
+					s.log.Warn("activity quit due to deadline exceeded", "name", activityName)
+				default:
+					s.log.Error("error starting runnable activity", "name", activityName, "error", err)
 				}
 			}(run)
 		}
@@ -262,19 +274,26 @@ func (s *Supernode) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go func(chainID eth.ChainID, chain cc.InteropChain) {
 			defer s.wg.Done()
-			if err := chain.Start(ctx); err != nil {
+			if err := chain.Start(lifecycleCtx); err != nil {
 				s.log.Error("error starting chain", "chain_id", chainID.String(), "error", err)
 			}
 		}(chainID, chain)
 	}
-	<-ctx.Done()
-	s.log.Info("supernode received stop signal")
-	return ctx.Err()
+	return nil
 }
 
 func (s *Supernode) Stop(ctx context.Context) error {
 	s.log.Info("supernode stopping")
 	s.stopped.Store(false)
+
+	// Cancel the lifecycle context before anything else. This guarantees that
+	// activity and chain goroutines will observe a canceled context even if
+	// they haven't been scheduled yet when the individual Stop() calls below
+	// execute. The individual Stop() calls are still made for orderly cleanup,
+	// but the lifecycle cancellation is the backstop that prevents hangs.
+	if s.lifecycleCancel != nil {
+		s.lifecycleCancel()
+	}
 
 	// Stop RPC server first, then close router resources
 	if s.httpServer != nil {
@@ -282,6 +301,8 @@ func (s *Supernode) Stop(ctx context.Context) error {
 		defer cancel()
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 			s.log.Error("error shutting down rpc server", "error", err)
+		} else {
+			s.log.Info("rpc server stopped")
 		}
 	}
 	if s.metrics != nil {
@@ -289,16 +310,15 @@ func (s *Supernode) Stop(ctx context.Context) error {
 		defer cancel()
 		if err := s.metrics.Stop(shutdownCtx); err != nil {
 			s.log.Error("error shutting down metrics server", "error", err)
+		} else {
+			s.log.Info("metrics server stopped")
 		}
 	}
 	if s.rpcRouter != nil {
 		if err := s.rpcRouter.Close(); err != nil {
 			s.log.Error("error closing rpc router", "error", err)
-		}
-	}
-	if s.metricsRouter != nil {
-		if err := s.metricsRouter.Close(); err != nil {
-			s.log.Error("error closing metrics router", "error", err)
+		} else {
+			s.log.Info("rpc router closed")
 		}
 	}
 
@@ -309,7 +329,9 @@ func (s *Supernode) Stop(ctx context.Context) error {
 		activityName := a.Name()
 		if run, ok := a.(activity.RunnableActivity); ok {
 			if err := run.Stop(ctx); err != nil {
-				s.log.Error("error stopping runnable activity", "error", err)
+				s.log.Error("error stopping runnable activity", "name", activityName, "error", err)
+			} else {
+				s.log.Info("runnable activity stopped", "name", activityName)
 			}
 		}
 	}
@@ -317,6 +339,8 @@ func (s *Supernode) Stop(ctx context.Context) error {
 	for chainID, chain := range s.chains {
 		if err := chain.Stop(ctx); err != nil {
 			s.log.Error("error stopping chain container", "chain_id", chainID.String(), "error", err)
+		} else {
+			s.log.Info("chain container stopped", "chain_id", chainID.String())
 		}
 	}
 
@@ -339,6 +363,7 @@ func (s *Supernode) Stop(ctx context.Context) error {
 	if s.l1Client != nil {
 		s.l1Client.Close()
 	}
+	s.log.Info("l1 client closed, supernode stopped")
 
 	return nil
 }
@@ -439,11 +464,18 @@ func (s *Supernode) initBeaconClient(ctx context.Context, cfg *config.CLIConfig)
 	basicClient := client.NewBasicHTTPClient(cfg.L1BeaconAddr, s.log)
 	beaconHTTPClient := sources.NewBeaconHTTPClient(basicClient)
 
+	// Create fallback beacon clients (e.g. blob archiver)
+	var fallbacks []apis.BeaconClient
+	for _, addr := range cfg.L1BeaconFallbackAddrs {
+		fb := client.NewBasicHTTPClient(addr, s.log)
+		fallbacks = append(fallbacks, sources.NewBeaconHTTPClient(fb))
+	}
+
 	// Create L1 Beacon client with default config
 	beaconCfg := sources.L1BeaconClientConfig{
 		FetchAllSidecars: false,
 	}
-	s.beaconClient = sources.NewL1BeaconClient(beaconHTTPClient, beaconCfg)
+	s.beaconClient = sources.NewL1BeaconClient(beaconHTTPClient, beaconCfg, fallbacks...)
 
 	s.log.Info("L1 Beacon client initialized successfully")
 	return nil

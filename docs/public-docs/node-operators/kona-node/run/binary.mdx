@@ -28,7 +28,7 @@ to specify the rollup config using the custom `--l2-config-file`
 cli flag. See [rollup configuration loading](/node-operators/kona-node/configuration#rollup-configuration-loading)
 for details.
 
-<Callout type="info">
+<Info>
 This tutorial walks through running the `kona-node` as
 a binary. To use docker, head over to the
 [Docker Guide](/node-operators/kona-node/run/docker) which uses a `docker-compose`
@@ -73,7 +73,7 @@ Kona has a `generate-jwt` justfile target that can be used to
 create the `jwt.hex` file. Run `just generate-jwt`.
 
 
-<Callout type="info">
+<Info>
 The JWT token file path passed into `--authrpc.jwtsecret`
 **MUST** be the same as the one passed into the `kona-node`.
 
@@ -87,7 +87,7 @@ find one, it will create a JWT token in a new `jwt.hex` file.
 To specify the path to the file that contains the JWT token,
 pass the file path into the `--l2.jwt-secret` CLI flag or
 use the `KONA_NODE_L2_ENGINE_AUTH` environment variable.
-</Callout>
+</Info>
 
 Then, run the `kona-node` using Base's chain id - `8453`.
 

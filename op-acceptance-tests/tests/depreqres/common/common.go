@@ -56,8 +56,7 @@ func ReqRespSyncDisabledOpts(syncMode sync.Mode) []presets.Option {
 	}
 }
 
-func UnsafeChainNotStalling_Disconnect(gt *testing.T, syncMode sync.Mode, advanceBlocks uint64, opts ...presets.Option) {
-	t := devtest.SerialT(gt)
+func UnsafeChainNotStalling_DisconnectT(t devtest.T, syncMode sync.Mode, sleep time.Duration, opts ...presets.Option) {
 	sys := presets.NewSingleChainMultiNodeWithoutCheck(t, opts...)
 	require := t.Require()
 	l := t.Logger().With("syncmode", syncMode)

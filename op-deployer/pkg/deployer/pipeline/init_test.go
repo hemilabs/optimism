@@ -258,6 +258,12 @@ func TestPopulateSuperchainState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	env := &Env{
+		L1ScriptHost: host,
+		UseForge:     false,
+		Context:      context.Background(),
+	}
+
 	l1Versions, err := standard.L1VersionsFor(11155111)
 	require.NoError(t, err)
 	superchain, err := standard.SuperchainFor(11155111)

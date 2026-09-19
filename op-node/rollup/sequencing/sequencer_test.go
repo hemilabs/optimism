@@ -599,7 +599,7 @@ func TestSequencerBuild(t *testing.T) {
 	sealTargetTime, ok := seq.NextAction()
 	require.True(t, ok)
 	buildDuration := sealTargetTime.Sub(time.Unix(int64(head.Time), 0))
-	require.Equal(t, (time.Duration(deps.cfg.BlockTime)*time.Second)-sealingDuration, buildDuration)
+	require.Equal(t, (time.Duration(deps.cfg.BlockTime)*time.Second)-defaultSealingDuration, buildDuration)
 
 	payloadEnvelope := &eth.ExecutionPayloadEnvelope{
 		ParentBeaconBlockRoot: sentAttributes.Attributes.ParentBeaconBlockRoot,
@@ -1276,9 +1276,9 @@ func createSequencer(log log.Logger) (*Sequencer, *sequencerTestDeps) {
 		asyncGossip: &FakeAsyncGossip{},
 		eng:         eng,
 	}
-	seq := NewSequencer(context.Background(), log, cfg, deps.attribBuilder,
+	seq := NewSequencer(context.Background(), log, cfg, defaultSealingDuration, deps.attribBuilder,
 		deps.l1OriginSelector, deps.seqState, deps.conductor,
-		deps.asyncGossip, metrics.NoopMetrics, eng)
+		deps.asyncGossip, metrics.NoopMetrics, eng, nil)
 	// We create mock payloads, with the epoch-id as tx[0], rather than proper L1Block-info deposit tx.
 	seq.toBlockRef = func(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.L2BlockRef, error) {
 		return eth.L2BlockRef{

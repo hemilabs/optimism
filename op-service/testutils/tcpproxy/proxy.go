@@ -66,6 +66,7 @@ func (p *Proxy) Start() error {
 	// treats a set listener as "started" and calls p.cancel unconditionally.
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.lis = lis
+	p.lgr.Info("proxy listening", "addr", lis.Addr().String())
 
 	p.wg.Add(1)
 	go func() {
@@ -81,7 +82,7 @@ func (p *Proxy) Start() error {
 				return
 			}
 			if err != nil {
-				p.lgr.Error("failed to accept downstream", "err", err)
+				p.lgr.Error("accept failed", "err", err, "addr", p.lis.Addr().String(), "stopped", p.stopped.Load())
 				continue
 			}
 
@@ -162,14 +163,20 @@ func (p *Proxy) handleConn(downConn net.Conn) {
 }
 
 func (p *Proxy) Close() error {
+	p.lgr.Info("closing proxy", "addr", p.lis.Addr().String())
 	p.stopped.Store(true)
 	p.cancel()
 	p.lis.Close()
+
+	// Close all tracked connections under the lock. handleConn checks
+	// p.stopped under p.mu before adding new connections, so after this
+	// iteration no new connections can appear in p.conns.
 	p.mu.Lock()
 	for conn := range p.conns {
 		conn.Close()
 	}
 	p.mu.Unlock()
+
 	p.wg.Wait()
 	return nil
 }

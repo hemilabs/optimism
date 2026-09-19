@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supernode/config"
 	"github.com/ethereum-optimism/optimism/op-supernode/flags"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode"
+	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity/interop"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -33,6 +34,8 @@ func main() {
 	oplog.SetupDefaults()
 
 	// First parse the chains only args
+	// NOTE there is not yet any support for specifying
+	// this as an env var.
 	chains, err := flags.ParseChains(os.Args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

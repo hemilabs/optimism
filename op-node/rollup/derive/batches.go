@@ -136,6 +136,7 @@ func checkSingularBatch(cfg *rollup.Config, log log.Logger, l1Blocks []eth.L1Blo
 
 	// Future forks that contain upgrade transactions must be added here.
 	if (cfg.IsJovianActivationBlock(batch.Timestamp) ||
+		cfg.IsKarstActivationBlock(batch.Timestamp) ||
 		cfg.IsInteropActivationBlock(batch.Timestamp)) &&
 		len(batch.Transactions) > 0 {
 		log.Warn("dropping batch with user transactions in fork activation block")
@@ -198,10 +199,9 @@ func checkSequencerTxData(log log.Logger, txIndex int, txBytes []byte, isIsthmus
 			return BatchDrop
 		}
 	case optypes.PostExecTxType:
-		if !isSDM {
-			log.Warn("sequencers may not embed any PostExec transactions before SDM", "tx_index", txIndex)
-			return BatchDrop
-		}
+		// hemi: 0x7D is hemi's PoP payout tx type (types.PopPayoutTxType in hemilabs/op-geth),
+		// which sequencers include in L2 blocks, so it must stay valid regardless of SDM.
+		// The pinned hemilabs/op-geth has no SDM post-exec tx type, so there is no ambiguity.
 	}
 	return BatchAccept
 }

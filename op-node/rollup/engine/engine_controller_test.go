@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	mrand "math/rand"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	optypes "github.com/ethereum-optimism/optimism/op-core/types"

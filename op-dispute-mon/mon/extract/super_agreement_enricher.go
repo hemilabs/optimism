@@ -87,10 +87,6 @@ func (e *SuperAgreementEnricher) enrich(ctx context.Context, game *monTypes.Comm
 				results[i] = superRootResult{notFound: true}
 				return
 			}
-			if err != nil {
-				results[i] = superRootResult{err: err}
-				return
-			}
 			// A ZK provider's answer is usable only after it has processed beyond the game L1 head.
 			if isZKGame && response.CurrentL1.Number <= game.L1HeadNum {
 				results[i] = superRootResult{outOfSync: true}

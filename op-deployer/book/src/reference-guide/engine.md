@@ -1,8 +1,4 @@
----
-title: Scripting Engine
-description: "Understand OP Deployer's in-memory EVM scripting engine: what it enables, why on-chain interactions run through Solidity scripts, and how Go code communicates with scripts inside the simulated EVM."
-diataxis: explanation
----
+# Scripting Engine
 
 One of OP Deployer's most powerful features is its in-memory EVM scripting engine. The scripting engine provides
 similar capabilities to Forge:

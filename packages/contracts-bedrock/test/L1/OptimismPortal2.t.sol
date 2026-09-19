@@ -1148,6 +1148,9 @@ contract OptimismPortal2_ProveWithdrawalTransaction_Test is OptimismPortal2_Test
             outputRoots: outputRootWithChainIdArr
         });
 
+        // Figure out what the right hash would be.
+        bytes32 expectedSuperRoot = Hashing.hashSuperRootProof(superRootProof);
+
         // Should revert because chainId not found in super root.
         vm.expectRevert(UnknownChainId.selector);
         optimismPortal2.proveWithdrawalTransaction({
@@ -1217,9 +1220,7 @@ contract OptimismPortal2_ProveWithdrawalTransaction_Test is OptimismPortal2_Test
         // Should succeed.
         optimismPortal2.proveWithdrawalTransaction({
             _tx: _defaultTx,
-            _disputeGameProxy: game,
-            _outputRootIndex: 0,
-            _superRootProof: superRootProof,
+            _disputeGameIndex: _proposedGameIndex,
             _outputRootProof: _outputRootProof,
             _withdrawalProof: _withdrawalProof
         });
@@ -1281,7 +1282,9 @@ contract OptimismPortal2_ProveWithdrawalTransaction_Test is OptimismPortal2_Test
         vm.expectRevert(UnknownChainId.selector);
         optimismPortal2.proveWithdrawalTransaction({
             _tx: _defaultTx,
-            _disputeGameIndex: _proposedGameIndex,
+            _disputeGameProxy: game,
+            _outputRootIndex: 0,
+            _superRootProof: superRootProof,
             _outputRootProof: _outputRootProof,
             _withdrawalProof: _withdrawalProof
         });

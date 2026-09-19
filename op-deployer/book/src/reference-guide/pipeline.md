@@ -1,10 +1,6 @@
----
-title: Deployment Pipeline
-description: "Understand how OP Deployer's pipeline is architected: the intent and state files it consumes and produces, and what each deployment stage is responsible for."
-diataxis: explanation
----
+# Deployment Pipeline
 
-This page explains how OP Deployer is architected: a pipeline in which each stage is responsible for a single piece of the deployment process.
+OP Deployer is architected as a pipeline where each stage is responsible for a single piece of the deployment process.
 The pipeline consumes a configuration called an *intent* which describes the desired state of the chain, and
 produces a file called the *state* which describes the current state of the chain during and after the deployment.
 The steps of the pipeline are:
@@ -31,8 +27,8 @@ those contracts will be inserted into the state during this step.
 
 ### Superchain/Implementations Deployment
 
-Next, the base contracts for the chain are deployed. This includes shared management contracts like
-`SuperchainConfig`, as well as implementation contracts that will be used for the OP Chain
+Next, the base contracts for the chain are deployed. This includes Superchain-wide contracts like the
+`SuperchainConfig` and `ProtocolVersions`, as well as implementation contracts that will be used for the OP Chain
 deployment in the future like the OP Contracts Manager (OPCM).
 
 Most chains will be configured to use existing implementations. In this case, these steps will be skipped.

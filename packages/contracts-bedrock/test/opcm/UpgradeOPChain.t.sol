@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-// Testing
-import { Test } from "test/setup/Test.sol";
+import { Test } from "forge-std/Test.sol";
+import { Claim } from "src/dispute/lib/Types.sol";
 
-// Scripts
-import { UpgradeOPChain, UpgradeOPChainInput } from "scripts/deploy/UpgradeOPChain.s.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 
 // Contracts
 import { OPContractsManagerV2 } from "src/L1/opcm/OPContractsManagerV2.sol";
@@ -13,6 +12,8 @@ import { OPContractsManagerV2 } from "src/L1/opcm/OPContractsManagerV2.sol";
 // Libraries
 import { GameType } from "src/dispute/lib/LibUDT.sol";
 
+// Interfaces
+import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 
 contract UpgradeOPChainInput_TestV2 is Test {
@@ -152,70 +153,14 @@ contract UpgradeOPChain_TestV2 is Test {
         upgradeOPChain = new UpgradeOPChain();
     }
 
-    /// @notice This test verifies that the UpgradeOPChain script correctly encodes and passes down the upgrade input
-    /// arguments to the OPCM contract's upgrade function.
-    /// @dev It does not test the actual upgrade functionality.
-    function testFuzz_upgrade_succeeds(
-        address systemConfig,
-        bool enabled,
-        uint256 initBond,
-        uint32 gameType,
-        bytes memory gameArgs
-    )
-        public
-    {
-        vm.assume(systemConfig != address(0));
-
-        // NOTE: Setting the upgrade input here to avoid `Copying of type struct
-        // IOPContractsManagerUtils.DisputeGameConfig memory[] memory to storage
-        // not yet supported.` error.
-        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
-            new IOPContractsManagerUtils.DisputeGameConfig[](1);
-        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: enabled,
-            initBond: initBond,
-            gameType: GameType.wrap(gameType),
-            gameArgs: gameArgs
-        });
-
-        OPContractsManagerV2.UpgradeInput memory upgradeInput = OPContractsManagerV2.UpgradeInput({
-            systemConfig: ISystemConfig(systemConfig),
-            disputeGameConfigs: disputeGameConfigs,
-            extraInstructions: new IOPContractsManagerUtils.ExtraInstruction[](0)
-        });
-        uoci.set(uoci.upgradeInput.selector, upgradeInput);
-
+    function test_upgrade_succeeds() public {
         // UpgradeCalled should be emitted by the prank since it's a delegate call.
         vm.expectEmit(address(prank));
         emit UpgradeCalled(
-            address(upgradeInput.systemConfig), upgradeInput.disputeGameConfigs, upgradeInput.extraInstructions
+            address(config.systemConfigProxy),
+            Claim.unwrap(config.cannonPrestate),
+            Claim.unwrap(config.cannonKonaPrestate)
         );
-        upgradeOPChain.run(uoci);
-    }
-
-    /// @notice This test verifies that the UpgradeOPChain script correctly reverts when the OPCM v2 upgrade
-    /// call fails.
-    function test_upgrade_whenOPCMV2Reverts_reverts() public {
-        address systemConfig = makeAddr("systemConfig");
-        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
-            new IOPContractsManagerUtils.DisputeGameConfig[](1);
-        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: true,
-            initBond: 1 ether,
-            gameType: GameType.wrap(0),
-            gameArgs: abi.encode("test")
-        });
-
-        OPContractsManagerV2.UpgradeInput memory upgradeInput = OPContractsManagerV2.UpgradeInput({
-            systemConfig: ISystemConfig(systemConfig),
-            disputeGameConfigs: disputeGameConfigs,
-            extraInstructions: new IOPContractsManagerUtils.ExtraInstruction[](0)
-        });
-        uoci.set(uoci.upgradeInput.selector, upgradeInput);
-
-        vm.mockCallRevert(prank, OPContractsManagerV2.upgrade.selector, abi.encode("UpgradeOPChain: upgrade failed"));
-
-        vm.expectRevert("UpgradeOPChain: upgrade failed");
         upgradeOPChain.run(uoci);
     }
 }

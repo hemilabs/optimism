@@ -42,14 +42,11 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 	}
 
 	hasPredeployedOPCM := intent.OPCMAddress != nil
+	hasSuperchainConfigProxy := intent.SuperchainConfigProxy != nil
 
-	if hasPredeployedOPCM {
-		if intent.SuperchainConfigProxy != nil {
-			return fmt.Errorf("cannot set superchain config proxy for predeployed OPCM")
-		}
-
+	if hasPredeployedOPCM || hasSuperchainConfigProxy {
 		if intent.SuperchainRoles != nil {
-			return fmt.Errorf("cannot set superchain roles for predeployed OPCM")
+			return fmt.Errorf("cannot set superchain roles when using predeployed OPCM or SuperchainConfig")
 		}
 
 		opcmAddr := common.Address{}
@@ -76,7 +73,8 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 		}
 		st.SuperchainDeployment = superDeployment
 		st.SuperchainRoles = superRoles
-		if st.ImplementationsDeployment == nil {
+
+		if hasPredeployedOPCM && st.ImplementationsDeployment == nil {
 			st.ImplementationsDeployment = &addresses.ImplementationsContracts{
 				OpcmV2Impl: opcmAddr,
 			}
@@ -169,11 +167,29 @@ func PopulateSuperchainState(env *Env, opcmAddr common.Address, superchainConfig
 		SuperchainConfigProxy: superchainConfigProxy,
 	}
 
-	out, err := readScript.Run(opcm.ReadSuperchainDeploymentInput{
-		OPCMAddress: opcmAddr,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("error reading superchain deployment: %w", err)
+	var out opcm.ReadSuperchainDeploymentOutput
+	var err error
+
+	if env.UseForge {
+		forgeEnv := &opcm.ForgeEnv{
+			Client:   env.ForgeClient,
+			Context:  env.Context,
+			L1RPCUrl: env.L1RPCUrl,
+		}
+		out, err = opcm.ReadSuperchainDeploymentViaForge(forgeEnv, input)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		readScript, err := opcm.NewReadSuperchainDeploymentScript(env.L1ScriptHost)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error generating read superchain deployment script: %w", err)
+		}
+
+		out, err = readScript.Run(input)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error reading superchain deployment: %w", err)
+		}
 	}
 
 	deployment := &addresses.SuperchainContracts{

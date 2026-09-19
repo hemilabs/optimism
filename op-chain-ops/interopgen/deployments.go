@@ -12,6 +12,7 @@ type L1Deployment struct {
 type Implementations struct {
 	OpcmStandardValidator            common.Address `json:"OPCMStandardValidator"`
 	OpcmUtils                        common.Address `json:"OPCMUtils"`
+	OpcmMigrator                     common.Address `json:"OPCMMigrator"`
 	OpcmV2                           common.Address `json:"OPCMV2"`
 	OpcmContainer                    common.Address `json:"OPCMContainer"`
 	DelayedWETHImpl                  common.Address `json:"DelayedWETHImpl"`

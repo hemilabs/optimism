@@ -1,17 +1,8 @@
 package rollup
 
-import (
-	"encoding/binary"
-	gomath "math"
-
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
-)
-
 // This file contains ephemeral feature toggles for the next
 // fork while it is in development. They should be removed
 // after the fork scope is locked.
-
-const JovianExtraDataVersionByte = uint8(0x01)
 
 // Example:
 // func (c *Config) IsMinBaseFee(time uint64) bool {
@@ -51,4 +42,10 @@ func (c *Config) IsInteropActivationBlock(l2BlockTime uint64) bool {
 		return false
 	}
 	return c.IsLagoonActivationBlock(l2BlockTime)
+}
+
+// IsMinBaseFee gates the Jovian minimum base fee.
+// hemi: the pinned hemilabs/op-geth's eip1559.ForkChecker still requires this method.
+func (c *Config) IsMinBaseFee(time uint64) bool {
+	return c.IsJovian(time)
 }

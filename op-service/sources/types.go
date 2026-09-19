@@ -129,9 +129,8 @@ func (hdr *RPCHeader) CreateGethHeader() *types.Header {
 		ParentBeaconRoot: hdr.ParentBeaconRoot,
 		// Prague
 		RequestsHash: hdr.RequestsHash,
-		// Amsterdam
-		BlockAccessListHash: hdr.BlockAccessListHash,
-		SlotNumber:          (*uint64)(hdr.SlotNumber),
+		// Amsterdam: BlockAccessListHash and SlotNumber are not supported by the pinned
+		// hemilabs/op-geth types.Header, so Amsterdam headers cannot be represented (hemi).
 	}
 }
 

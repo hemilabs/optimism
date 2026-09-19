@@ -13,12 +13,14 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/forge"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/pipeline"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
@@ -287,6 +289,7 @@ func ApplyPipeline(
 			opts.Logger,
 			deployer,
 			bundle.L1,
+			script.WithNoMaxCodeSize(), // Allow unoptimized contracts from the forge lite profile in genesis deployments
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create L1 script host: %w", err)
@@ -301,6 +304,18 @@ func ApplyPipeline(
 	opcmScripts, err := opcm.NewScripts(l1Host)
 	if err != nil {
 		return fmt.Errorf("failed to load OPCM script: %w", err)
+	}
+
+	// Initialize Forge client if UseForge flag is enabled
+	var forgeClient *forge.Client
+	if opts.UseForge {
+		// Forge needs to run from the artifacts directory where foundry.toml is located
+		// The workdir is for storing state, not for running forge commands
+		artifactsPath := fmt.Sprintf("%v", bundle.L1)
+		forgeClient, err = forge.NewStandardClient(artifactsPath)
+		if err != nil {
+			return fmt.Errorf("failed to create Forge client: %w", err)
+		}
 	}
 
 	pEnv := &pipeline.Env{

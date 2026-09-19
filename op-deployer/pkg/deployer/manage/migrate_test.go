@@ -16,15 +16,16 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum-optimism/optimism/op-service/testutils/devnet"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 )
 
 func TestInteropMigration(t *testing.T) {
-	t.Skip("Skipped until the sepolia opcm supports the interop migration")
-
 	lgr := testlog.Logger(t, slog.LevelDebug)
 
 	forkedL1, stopL1, err := devnet.NewForkedSepolia(lgr)
@@ -34,7 +35,8 @@ func TestInteropMigration(t *testing.T) {
 	})
 	l1RPC := forkedL1.RPCUrl()
 
-	_, afactsFS := testutil.LocalArtifacts(t)
+	loc, afactsFS := testutil.LocalArtifacts(t)
+	testCacheDir := testutils.IsolatedTestDirWithAutoCleanup(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -158,34 +160,12 @@ func TestEncodedMigrateInputV2(t *testing.T) {
 	gameArgs, err := abi.Arguments{{Type: bytes32Type}}.Pack(testPrestate)
 	require.NoError(t, err)
 
-	bcast := new(broadcaster.CalldataBroadcaster)
-	host, err := env.DefaultForkedScriptHost(
-		ctx,
-		bcast,
-		lgr,
-		common.Address{'D'},
-		afactsFS,
-		rpcClient,
-	)
-	require.NoError(t, err)
-
-	pao := common.HexToAddress("0x1Eb2fFc903729a0F03966B917003800b145F56E2")
-	input := InteropMigrationInput{
-		Prank:                          pao,
-		Opcm:                           common.HexToAddress("0xaf334f4537e87f5155d135392ff6d52f1866465e"),
-		UsePermissionlessGame:          true,
-		StartingAnchorL2SequenceNumber: big.NewInt(1),
-		Proposer:                       common.Address{'A'},
-		Challenger:                     common.Address{'B'},
-		MaxGameDepth:                   10,
-		SplitDepth:                     10,
-		InitBond:                       big.NewInt(1000),
-		ClockExtension:                 10,
-		MaxClockDuration:               10,
-		EncodedChainConfigs: []OPChainConfig{
-			{
-				SystemConfigProxy: common.HexToAddress("0x034edD2A225f7f429A63E0f1D2084B9E0A93b538"),
-				CannonPrestate:    common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000abc"),
+	input := &InteropMigrationInput{
+		Prank: common.Address{0xaa},
+		Opcm:  common.Address{0xbb},
+		MigrateInputV2: &MigrateInputV2{
+			ChainSystemConfigs: []common.Address{
+				{0x01},
 			},
 			DisputeGameConfigs: []DisputeGameConfig{
 				{
@@ -202,9 +182,10 @@ func TestEncodedMigrateInputV2(t *testing.T) {
 			StartingRespectedGameType: 9,
 		},
 	}
-	output, err := Migrate(host, input)
+
+	data, err := input.EncodedMigrateInputV2()
 	require.NoError(t, err)
-	require.NotEqual(t, common.Address{}, output.DisputeGameFactory)
+	require.NotEmpty(t, data)
 
 	expected := "0000000000000000000000000000000000000000000000000000000000000020" + // offset to tuple
 		"00000000000000000000000000000000000000000000000000000000000000a0" + // offset to chainSystemConfigs (5 words * 32 = 160 = 0xa0)

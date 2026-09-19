@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
@@ -281,98 +280,6 @@ func superRootChainOutput(extraData []byte, l2ChainID *big.Int) (*big.Int, commo
 		}
 	}
 	return sequence, common.Hash{}, false, nil
-}
-
-func ProveWithdrawalParametersSuperRoots(
-	ctx context.Context,
-	rollupCfg *rollup.Config,
-	depSet depset.DependencySet,
-	proofCl ProofClient,
-	l2ReceiptCl ReceiptClient,
-	l2HeaderCl HeaderClient,
-	txHash common.Hash,
-	supervisorClient SupervisorClient,
-	disputeGameFactoryContract *bindings.DisputeGameFactoryCaller,
-	optimismPortal2Contract *bindingspreview.OptimismPortal2Caller,
-) (ProvenWithdrawalParametersSuperRoots, error) {
-	var outputRootIndex *big.Int
-	for i, chain := range depSet.Chains() {
-		if chain.Cmp(eth.ChainIDFromBig(rollupCfg.L2ChainID)) == 0 {
-			outputRootIndex = new(big.Int).SetUint64(uint64(i))
-			break
-		}
-	}
-	if outputRootIndex == nil {
-		return ProvenWithdrawalParametersSuperRoots{}, fmt.Errorf("could not find rollup chain ID in dependency set: %v", rollupCfg.L2ChainID)
-	}
-
-	latestGame, err := FindLatestGame(ctx, disputeGameFactoryContract, optimismPortal2Contract)
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, fmt.Errorf("failed to find latest game: %w", err)
-	}
-	disputeGame, err := disputeGameFactoryContract.GameAtIndex(&bind.CallOpts{}, latestGame.Index)
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, fmt.Errorf("failed to get dispute game: %w", err)
-	}
-	l2SequenceNumber := new(big.Int).SetBytes(latestGame.ExtraData[0:32])
-
-	superRoot, err := supervisorClient.SuperRootAtTimestamp(ctx, hexutil.Uint64(l2SequenceNumber.Uint64()))
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, fmt.Errorf("failed to get super root: %w", err)
-	}
-
-	l2BlockNumber, err := rollupCfg.TargetBlockNumber(l2SequenceNumber.Uint64())
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, fmt.Errorf("failed to get target block number: %w", err)
-	}
-	l2Header, err := l2HeaderCl.HeaderByNumber(ctx, new(big.Int).SetUint64(l2BlockNumber))
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, fmt.Errorf("failed to get l2Block: %w", err)
-	}
-
-	receipt, err := l2ReceiptCl.TransactionReceipt(ctx, txHash)
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, err
-	}
-	// Parse the receipt
-	ev, err := ParseMessagePassed(receipt)
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, err
-	}
-	withdrawalProof, storageRoot, err := GetWithdrawalProof(ctx, proofCl, ev, l2Header)
-	if err != nil {
-		return ProvenWithdrawalParametersSuperRoots{}, err
-	}
-
-	outputRoots := make([]SuperRootProofOutputRoot, len(superRoot.Chains))
-	for i, chain := range superRoot.Chains {
-		outputRoots[i] = SuperRootProofOutputRoot{
-			ChainID: chain.ChainID.ToBig(),
-			Root:    common.Hash(chain.Canonical),
-		}
-	}
-	return ProvenWithdrawalParametersSuperRoots{
-		Nonce:            ev.Nonce,
-		Sender:           ev.Sender,
-		Target:           ev.Target,
-		Value:            ev.Value,
-		GasLimit:         ev.GasLimit,
-		Data:             ev.Data,
-		DisputeGameProxy: disputeGame.Proxy,
-		OutputRootIndex:  outputRootIndex,
-		SuperRootProof: SuperRootProof{
-			Version:     [1]byte{superRoot.Version},
-			Timestamp:   superRoot.Timestamp,
-			OutputRoots: outputRoots,
-		},
-		OutputRootProof: bindings.TypesOutputRootProof{
-			Version:                  [32]byte{}, // Empty for version 1
-			StateRoot:                l2Header.Root,
-			MessagePasserStorageRoot: storageRoot,
-			LatestBlockhash:          l2Header.Hash(),
-		},
-		WithdrawalProof: withdrawalProof,
-	}, nil
 }
 
 // ProveWithdrawalParametersForBlock queries L1 & L2 to generate all withdrawal parameters and proof necessary to prove a withdrawal on L1.

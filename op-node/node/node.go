@@ -87,7 +87,7 @@ type L1Source interface {
 
 // L1Beacon provides access to L1 beacon chain data, specifically for blob data retrieval.
 type L1Beacon interface {
-	GetBlobs(ctx context.Context, ref eth.L1BlockRef, hashes []eth.IndexedBlobHash) ([]*eth.Blob, error)
+	GetBlobsByHash(ctx context.Context, time uint64, hashes []common.Hash) ([]*eth.Blob, error)
 }
 
 type OpNode struct {
@@ -97,6 +97,8 @@ type OpNode struct {
 	clock      clock.Clock
 	appVersion string
 	metrics    *metrics.Metrics
+
+	superAuthority rollup.SuperAuthority // Supernode authority for payload validation (may be nil)
 
 	l1HeadsSub     ethereum.Subscription // Subscription to get L1 heads (automatically re-subscribes on error)
 	l1SafeSub      ethereum.Subscription // Subscription to get L1 safe blocks, a.k.a. justified data (polling)
@@ -184,6 +186,7 @@ type InitializationOverrides struct {
 	Beacon          L1Beacon
 	RPCHandler      *oprpc.Handler
 	MetricsRegistry func(*prometheus.Registry)
+	SuperAuthority  rollup.SuperAuthority // Supernode authority for payload validation
 }
 
 // init progressively creates and sets up all the components of the OpNode
@@ -208,6 +211,9 @@ func (n *OpNode) init(ctx context.Context, cfg *config.Config, overrides Initial
 	if err != nil {
 		return fmt.Errorf("failed to init event system: %w", err)
 	}
+
+	// Store the supernode authority for payload validation
+	n.superAuthority = overrides.SuperAuthority
 
 	if overrides.Beacon == nil {
 		beacon, err := initL1BeaconAPI(ctx, cfg, n)
@@ -331,9 +337,6 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 	if node.l2Driver == nil {
 		return nil, nil, nil, errors.New("l2 driver must be initialized")
 	}
-
-	cfg.HemitrapEnabled = cfg.HemitrapEnabled
-
 	onL1Head := func(ctx context.Context, sig eth.L1BlockRef) {
 		if node.cfg.Tracer != nil {
 			node.cfg.Tracer.OnNewL1Head(ctx, sig)
@@ -380,7 +383,7 @@ func initL1Handlers(cfg *config.Config, node *OpNode) (ethereum.Subscription, et
 // note: this function relies on side effects to set node.runCfg
 func initRuntimeConfig(ctx context.Context, cfg *config.Config, node *OpNode) error {
 	// attempt to load runtime config, repeat N times
-	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup)
+	runCfg := runcfg.NewRuntimeConfig(node.log, node.l1Source, &cfg.Rollup, cfg.HemitrapEnabled)
 	node.runCfg = runCfg
 
 	confDepth := cfg.Driver.VerifierConfDepth
@@ -568,7 +571,7 @@ func initL2(ctx context.Context, cfg *config.Config, node *OpNode) (*sources.Eng
 	}
 
 	l2Driver := driver.NewDriver(node.eventSys, node.eventDrain, &cfg.Driver, &cfg.Rollup, cfg.L1ChainConfig, cfg.DependencySet, l2Source, node.l1Source, upstreamFollowSource,
-		node.beacon, node, node.log, node.metrics, cfg.ConfigPersistence, safeDB, &cfg.Sync, sequencerConductor, altDA, node.superAuthority)
+		node.beacon, node, node.log, node.metrics, cfg.ConfigPersistence, safeDB, &cfg.Sync, sequencerConductor, altDA, node.superAuthority, cfg.HemitrapEnabled)
 
 	return l2Source, l2Driver, safeDB, nil
 }

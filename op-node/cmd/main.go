@@ -56,7 +56,7 @@ func main() {
 		},
 		{
 			Name:        "doc",
-			Subcommands: doc.NewSubcommands(metrics.NewMetrics("default")),
+			Subcommands: doc.NewSubcommands(metrics.NewMetrics("default", nil)),
 		},
 		{
 			Name:        "networks",
@@ -77,7 +77,7 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 	oplog.SetGlobalLogHandler(log.Handler())
 	opservice.ValidateEnvVars(flags.EnvVarPrefix, flags.Flags, log)
 	opservice.WarnOnDeprecatedFlags(ctx, flags.DeprecatedFlags, log)
-	m := metrics.NewMetrics("default")
+	m := metrics.NewMetrics("default", nil)
 
 	cfg, err := opnode.NewConfig(ctx, log)
 	if err != nil {

@@ -41,7 +41,7 @@ func addrToHash(addr common.Address) common.Hash {
 }
 
 func newTestRuntimeConfig(t *testing.T, source *stubL1Source) *RuntimeConfig {
-	return NewRuntimeConfig(testlog.Logger(t, log.LevelDebug), source, &rollup.Config{})
+	return NewRuntimeConfig(testlog.Logger(t, log.LevelDebug), source, &rollup.Config{}, false)
 }
 
 func TestSignerGracePeriod_ChangeStartsGracePeriod(t *testing.T) {

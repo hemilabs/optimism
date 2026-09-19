@@ -128,8 +128,8 @@ type CommonGameData struct {
 	AgreeWithClaim    bool
 	ExpectedRootClaim common.Hash
 
-	// NodeEndpointErrors stores endpoint IDs that returned errors other than "not found" for this game.
-	NodeEndpointErrors map[string]bool
+	// RollupEndpointErrors stores endpoint IDs that returned errors other than "not found" for this game.
+	RollupEndpointErrors map[string]bool
 
 	// RollupEndpointErrorCount tracks the total number of errors for this game across all endpoints.
 	RollupEndpointErrorCount int

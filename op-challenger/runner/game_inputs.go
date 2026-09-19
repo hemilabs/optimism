@@ -209,9 +209,9 @@ func createGameInputsInterop(ctx context.Context, log log.Logger, client super.S
 	}
 	log.Info("Using L1 head", "head", l1Head, "currentL1", status.CurrentL1, "type", typeName)
 
-	prestateProvider := super.NewSuperRootPrestateProvider(client, agreedTimestamp)
+	prestateProvider := super.NewSuperNodePrestateProvider(client, agreedTimestamp)
 	gameDepth := types.Depth(30)
-	provider := super.NewSuperTraceProvider(log, nil, prestateProvider, client, l1Head.ID(), gameDepth, agreedTimestamp, claimTimestamp+10)
+	provider := super.NewSuperNodeTraceProvider(log, prestateProvider, client, l1Head, gameDepth, agreedTimestamp, claimTimestamp+10)
 	var agreedPrestate []byte
 	var claim common.Hash
 	switch rand.IntN(3) {

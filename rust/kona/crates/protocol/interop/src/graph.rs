@@ -255,7 +255,7 @@ where
 #[cfg(test)]
 #[allow(clippy::zero_sized_map_values)]
 mod test {
-    use super::MessageGraph;
+    use super::{MESSAGE_EXPIRY_WINDOW, MessageGraph};
     use crate::{
         MESSAGE_EXPIRY_WINDOW, MessageGraphError,
         message::EnrichedExecutingMessage,

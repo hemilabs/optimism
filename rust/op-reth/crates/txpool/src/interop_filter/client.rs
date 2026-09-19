@@ -206,7 +206,7 @@ impl InteropFilterClient {
         if let Err(err) = self
             .check_access_list(
                 inbox_entries.as_slice(),
-                ExecutingDescriptor::new(timestamp, timeout),
+                ExecutingDescriptor::new(self.inner.chain_id, timestamp, timeout),
             )
             .await
         {

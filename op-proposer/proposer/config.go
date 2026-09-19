@@ -95,11 +95,8 @@ func (c *CLIConfig) Check() error {
 		return err
 	}
 
-	if c.DGFAddress == "" && c.L2OOAddress == "" {
-		return errors.New("neither the `DisputeGameFactory` nor `L2OutputOracle` address was provided")
-	}
-	if c.DGFAddress != "" && c.L2OOAddress != "" {
-		return errors.New("both the `DisputeGameFactory` and `L2OutputOracle` addresses were provided")
+	if c.DGFAddress == "" {
+		return errors.New("`DisputeGameFactory` is required")
 	}
 	if c.DGFAddress != "" && c.ProposalInterval == 0 {
 		return errors.New("the `DisputeGameFactory` address was provided but the `ProposalInterval` was not set")
@@ -125,6 +122,10 @@ func (c *CLIConfig) Check() error {
 	// Require super root RPC for post interop game types.
 	if c.DGFAddress != "" && slices.Contains(postInteropGameTypes, c.DisputeGameType) && len(c.SuperRootRpcs) == 0 {
 		return ErrMissingSuperRootRpc
+	}
+	// For unknown game types, allow any source, but require at least one.
+	if sourceCount == 0 {
+		return ErrMissingSource
 	}
 
 	return nil

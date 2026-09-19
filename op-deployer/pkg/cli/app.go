@@ -84,6 +84,11 @@ func NewApp(versionWithMeta string) *cli.App {
 			Usage:       "manages the chain",
 			Subcommands: manage.Commands,
 		},
+		{
+			Name:        "validate",
+			Usage:       "validates chain configuration and deployment",
+			Subcommands: validate.Commands(),
+		},
 	}
 	return app
 }

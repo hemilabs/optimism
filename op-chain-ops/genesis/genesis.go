@@ -6,12 +6,11 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-core/eip1559"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
@@ -24,7 +23,7 @@ const defaultGasLimit = 30_000_000
 var HoloceneExtraData = eip1559.EncodeHoloceneExtraData(250, 6)
 
 // MinBaseFeeExtraData represents the default extra data for Jovian-genesis chains.
-var MinBaseFeeExtraData = rollup.EncodeJovianExtraData(250, 6, 0)
+var MinBaseFeeExtraData = eip1559.EncodeJovianExtraData(250, 6, 0)
 
 // NewL2Genesis will create a new L2 genesis
 func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Genesis, error) {
@@ -80,9 +79,9 @@ func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Gene
 		HoloceneTime:            config.HoloceneTime(l2GenesisTime),
 		IsthmusTime:             config.IsthmusTime(l2GenesisTime),
 		JovianTime:              config.JovianTime(l2GenesisTime),
-		KarstTime:               config.KarstTime(l2GenesisTime),
 		PragueTime:              config.IsthmusTime(l2GenesisTime),
-		LagoonTime:              config.LagoonTime(l2GenesisTime),
+		// hemi: the pinned hemilabs/op-geth has no Karst/Lagoon fields; Lagoon is the interop fork.
+		InteropTime: config.LagoonTime(l2GenesisTime),
 		Optimism: &params.OptimismConfig{
 			EIP1559Denominator:       eip1559Denom,
 			EIP1559Elasticity:        eip1559Elasticity,
@@ -255,8 +254,8 @@ func NewL1GenesisMinimal(config *DevL1DeployConfigMinimal) (*core.Genesis, error
 		chainConfig.BPO5Time = &bpo5Time
 	}
 	if config.L1AmsterdamTimeOffset != nil {
-		amsterdamTime := uint64(timestamp) + uint64(*config.L1AmsterdamTimeOffset)
-		chainConfig.AmsterdamTime = &amsterdamTime
+		// hemi: the pinned hemilabs/op-geth does not support the Amsterdam fork.
+		return nil, errors.New("L1 Amsterdam fork is not supported by the pinned hemilabs/op-geth")
 	}
 	if config.BlobScheduleConfig != nil {
 		chainConfig.BlobScheduleConfig = config.BlobScheduleConfig

@@ -45,10 +45,6 @@ type ForkableState struct {
 
 var _ VMStateDB = (*ForkableState)(nil)
 
-func (fst *ForkableState) EmitLogsForBurnAccounts() {
-	panic("unimplemented")
-}
-
 func NewForkableState(base VMStateDB) *ForkableState {
 	return &ForkableState{
 		selected:   base,

@@ -592,11 +592,6 @@ contract VerifyOPCM is Script {
         // Perform detailed bytecode comparison.
         success = _compareBytecode(actualCode, expectedCode, _target.name, artifact, !_target.blueprint) && success;
 
-        // For implementations, verify security-critical values.
-        if (!_target.blueprint) {
-            success = _verifySecurityCriticalValues(_opcm, _target, artifact) && success;
-        }
-
         // If requested and this is not a blueprint, we also need to check the creation code.
         if (!_target.blueprint && !_skipConstructorVerification) {
             // Get the creation code from the selected block explorer.

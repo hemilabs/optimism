@@ -25,6 +25,9 @@ var ErrPendingChallenge = errors.New("not found, pending challenge")
 // ErrExpiredChallenge is returned when a challenge was not resolved and derivation should skip this input.
 var ErrExpiredChallenge = errors.New("challenge expired")
 
+// ErrCommitmentTypeMismatch is returned when the commitment type of the input does not match the expected commitment type in the config.
+var ErrCommitmentTypeMismatch = errors.New("commitment type mismatch")
+
 // ErrMissingPastWindow is returned when the input data is MIA and cannot be challenged.
 // This is a protocol fatal error.
 var ErrMissingPastWindow = errors.New("data missing past window")
@@ -118,6 +121,14 @@ func (d *DA) OnFinalizedHeadSignal(f HeadSignalFn) {
 // It is called by the Finalize function, as it has an L1 finalized head to use.
 func (d *DA) updateFinalizedHead(l1Finalized eth.L1BlockRef) {
 	d.l1FinalizedHead = l1Finalized
+
+	// If there are no commitments or challenges being tracked, finalizedHead is managed
+	// by updateFinalizedFromL1 (called from AdvanceL1Origin) which calculates it based
+	// on l1FinalizedHead - challengeWindow. Preserve that value.
+	if d.state.NoCommitments() {
+		return
+	}
+
 	// Prune the state to the finalized head
 	d.state.Prune(l1Finalized.ID())
 	d.finalizedHead = d.state.lastPrunedCommitment
@@ -195,7 +206,7 @@ func (d *DA) Reset(ctx context.Context, base eth.L1BlockRef, baseCfg eth.SystemC
 func (d *DA) GetInput(ctx context.Context, l1 L1Fetcher, comm CommitmentData, blockId eth.L1BlockRef) (eth.Data, error) {
 	// If it's not the right commitment type, report it as an expired commitment in order to skip it
 	if d.cfg.CommitmentType != comm.CommitmentType() {
-		return nil, fmt.Errorf("invalid commitment type; expected: %v, got: %v: %w", d.cfg.CommitmentType, comm.CommitmentType(), ErrExpiredChallenge)
+		return nil, fmt.Errorf("invalid commitment type; expected: %v, got: %v: %w", d.cfg.CommitmentType, comm.CommitmentType(), ErrCommitmentTypeMismatch)
 	}
 	status := d.state.GetChallengeStatus(comm, blockId.Number)
 	// check if the challenge is expired
@@ -434,7 +445,10 @@ func (d *DA) decodeChallengeStatus(log *types.Log) (ChallengeStatus, CommitmentD
 		return 0, nil, 0, err
 	}
 	d.log.Debug("decoded challenge status event", "log", log, "event", event, "comm", fmt.Sprintf("%x", comm.Encode()))
-	return ChallengeStatus(event.Status), comm, event.ChallengedBlockNumber.Uint64(), nil
+	if !event.ChallengedBlockNumber.IsUint64() {
+		return 0, nil, 0, fmt.Errorf("challenged block number is not a uint64")
+	}
+	return ChallengeStatus(event.Status), comm, bigs.Uint64Strict(event.ChallengedBlockNumber), nil
 }
 
 var (

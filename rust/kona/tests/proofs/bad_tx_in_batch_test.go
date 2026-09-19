@@ -72,7 +72,7 @@ func runBadTxInBatchTest(gt *testing.T, testCfg *helpers.TestCfg[int64]) {
 	// If post-holocene, the block should be reduced to deposits only.
 	l2SafeHead := env.Engine.L2Chain().CurrentSafeBlock()
 	if !env.Sd.RollupCfg.IsHolocene(l2SafeHead.Time) {
-		require.Equal(t, uint64(0), l2SafeHead.Number.Uint64())
+		require.Equal(t, uint64(0), bigs.Uint64Strict(l2SafeHead.Number))
 
 		// Reset the batcher and submit a valid batch.
 		env.Batcher.Reset()
@@ -87,14 +87,14 @@ func runBadTxInBatchTest(gt *testing.T, testCfg *helpers.TestCfg[int64]) {
 		env.Sequencer.ActL2PipelineFull(t)
 
 		l1Head := env.Miner.L1Chain().CurrentBlock()
-		require.Equal(t, uint64(2), l1Head.Number.Uint64())
+		require.Equal(t, uint64(2), bigs.Uint64Strict(l1Head.Number))
 	}
 
 	// Ensure the safe head has advanced.
 	l2SafeHead = env.Engine.L2Chain().CurrentSafeBlock()
-	require.Equal(t, uint64(1), l2SafeHead.Number.Uint64())
+	require.Equal(t, uint64(1), bigs.Uint64Strict(l2SafeHead.Number))
 
-	env.RunFaultProofProgramFromGenesis(t, l2SafeHead.Number.Uint64(), testCfg.CheckResult, testCfg.InputParams...)
+	env.RunFaultProofProgramFromGenesis(t, bigs.Uint64Strict(l2SafeHead.Number), testCfg.CheckResult, testCfg.InputParams...)
 }
 
 func runBadTxInBatch_ResubmitBadFirstFrame_Test(gt *testing.T, testCfg *helpers.TestCfg[int64]) {
@@ -157,7 +157,7 @@ func runBadTxInBatch_ResubmitBadFirstFrame_Test(gt *testing.T, testCfg *helpers.
 	// If post-holocene, the block should be reduced to deposits only.
 	l2SafeHead := env.Engine.L2Chain().CurrentSafeBlock()
 	if !env.Sd.RollupCfg.IsHolocene(l2SafeHead.Time) {
-		require.Equal(t, uint64(0), l2SafeHead.Number.Uint64())
+		require.Equal(t, uint64(0), bigs.Uint64Strict(l2SafeHead.Number))
 
 		// Reset the batcher and submit a valid batch.
 		env.Batcher.Reset()
@@ -172,14 +172,14 @@ func runBadTxInBatch_ResubmitBadFirstFrame_Test(gt *testing.T, testCfg *helpers.
 		env.Sequencer.ActL2PipelineFull(t)
 
 		l1Head := env.Miner.L1Chain().CurrentBlock()
-		require.Equal(t, uint64(2), l1Head.Number.Uint64())
+		require.Equal(t, uint64(2), bigs.Uint64Strict(l1Head.Number))
 	}
 
 	// Ensure the safe head has advanced.
 	l2SafeHead = env.Engine.L2Chain().CurrentSafeBlock()
-	require.Equal(t, uint64(2), l2SafeHead.Number.Uint64())
+	require.Equal(t, uint64(2), bigs.Uint64Strict(l2SafeHead.Number))
 
-	env.RunFaultProofProgramFromGenesis(t, l2SafeHead.Number.Uint64(), testCfg.CheckResult, testCfg.InputParams...)
+	env.RunFaultProofProgramFromGenesis(t, bigs.Uint64Strict(l2SafeHead.Number), testCfg.CheckResult, testCfg.InputParams...)
 }
 
 func TestBadTxInBatch(gt *testing.T) {

@@ -592,8 +592,8 @@ func chainContractsForRecordedState(
 	if (impls.PermissionedDisputeGame != common.Address{}) {
 		opChainContracts.PermissionedDisputeGameImpl = impls.PermissionedDisputeGame
 	}
-	if (impls.FaultDisputeGameV2 != common.Address{}) {
-		opChainContracts.FaultDisputeGameImpl = impls.FaultDisputeGameV2
+	if (impls.FaultDisputeGame != common.Address{}) {
+		opChainContracts.FaultDisputeGameImpl = impls.FaultDisputeGame
 	}
 
 	return opChainContracts

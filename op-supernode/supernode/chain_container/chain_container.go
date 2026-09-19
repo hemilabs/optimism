@@ -2,6 +2,7 @@ package chain_container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-supernode/config"
+	"github.com/ethereum-optimism/optimism/op-supernode/supernode/activity"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container/engine_controller"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container/virtual_node"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/resources"
@@ -26,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	gethlog "github.com/ethereum/go-ethereum/log"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -298,7 +299,8 @@ func (c *simpleChainContainer) registeredVerifier() activity.VerificationActivit
 }
 
 // defaultVirtualNodeFactory is the default factory that creates a real VirtualNode
-func defaultVirtualNodeFactory(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+func defaultVirtualNodeFactory(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
+	initOverload.SuperAuthority = superAuthority
 	return virtual_node.NewVirtualNode(cfg, log, initOverload, appVersion)
 }
 
@@ -383,12 +385,9 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 		// Disable per-VN metrics server and provide metrics registry hook
 		c.vncfg.Metrics.Enabled = false
 		if c.initOverload != nil {
-			chainID := c.chainID.String()
 			c.initOverload.MetricsRegistry = func(reg *prometheus.Registry) {
-				if c.setMetricsHandler != nil {
-					// Mount per-chain metrics handler at /{chain}/metrics via router
-					handler := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
-					c.setMetricsHandler(chainID, handler)
+				if c.addMetricsRegistry != nil {
+					c.addMetricsRegistry(c.chainID.String(), reg)
 				}
 			}
 			// Pass the chain container as SuperAuthority for payload denylist checks
@@ -402,6 +401,13 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 		// Install before Start so the RPC gate can observe this VN entering running state.
 		c.setVN(vn)
 		if c.pause.Load() {
+			// Check for stop/cancellation even while paused, so teardown doesn't hang.
+			// Without this, a stuck pause (e.g. from RewindEngine exiting before Resume)
+			// causes this loop to spin forever, blocking wg.Wait() in Supernode.Stop().
+			if c.stop.Load() || ctx.Err() != nil {
+				c.log.Info("chain container stop requested while paused, stopping restart loop")
+				break
+			}
 			c.log.Info("chain container paused")
 			time.Sleep(1 * time.Second)
 			continue
@@ -425,6 +431,7 @@ func (c *simpleChainContainer) Start(ctx context.Context) error {
 		} else {
 			c.log.Info("virtual node stopped", "vn_id", vn)
 		}
+
 		cancel()
 		if ctx.Err() != nil {
 			c.log.Info("chain container context cancelled, stopping restart loop", "ctx_err", ctx.Err())
@@ -466,6 +473,13 @@ func (c *simpleChainContainer) Stop(ctx context.Context) error {
 	// Close engine controller RPC resources
 	if c.engine != nil {
 		_ = c.engine.Close()
+	}
+
+	// Close deny list database
+	if c.denyList != nil {
+		if err := c.denyList.Close(); err != nil {
+			c.log.Error("error closing deny list", "error", err)
+		}
 	}
 
 	select {
@@ -615,14 +629,14 @@ func (c *simpleChainContainer) safeDBAtL2(ctx context.Context, l2 eth.BlockID) (
 		if errors.Is(err, virtual_node.ErrL1AtSafeHeadNotFound) {
 			return eth.BlockID{}, fmt.Errorf("L1 at safe head not available for L2 %s: %w", l2, ethereum.NotFound)
 		}
-		return eth.BlockRef{}, nil
+		return eth.BlockID{}, err
 	}
-	return c.vn.CurrentL1(ctx)
+	return l1, nil
 }
 
 // OptimisticAt returns the optimistic (pre-verified) L2 and L1 blocks for the given L2 timestamp.
 func (c *simpleChainContainer) OptimisticAt(ctx context.Context, ts uint64) (l2, l1 eth.BlockID, err error) {
-	l2Block, err := c.SafeBlockAtTimestamp(ctx, ts)
+	l2Block, err := c.LocalSafeBlockAtTimestamp(ctx, ts)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
 			c.log.Debug("l2 block at timestamp is not local safe yet", "timestamp", ts, "err", err)
@@ -631,7 +645,7 @@ func (c *simpleChainContainer) OptimisticAt(ctx context.Context, ts uint64) (l2,
 		}
 		return eth.BlockID{}, eth.BlockID{}, err
 	}
-	l1Block, err := c.L1AtSafeHead(ctx, l2Block.ID())
+	l1Block, err := c.safeDBAtL2(ctx, l2Block.ID())
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
 			c.log.Debug("l1 block at which l2 block became safe is not available yet", "l2", l2Block.ID(), "err", err)
@@ -641,8 +655,9 @@ func (c *simpleChainContainer) OptimisticAt(ctx context.Context, ts uint64) (l2,
 		return eth.BlockID{}, eth.BlockID{}, err
 	}
 
-	// if there were Verification Activities, we could check if there was a pre-verified block which was added to the denylist
-	// but there are currently no verification activities, so we just return the l2 and l1 blocks
+	// VerifiedAt only constrains the result when registered verification
+	// activities report that the timestamp is not yet verified. Otherwise the
+	// current safe L2/L1 pair can be returned directly.
 	return l2Block.ID(), l1Block, nil
 }
 

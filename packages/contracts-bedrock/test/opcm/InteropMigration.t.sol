@@ -90,17 +90,16 @@ contract InteropMigrationInput_Test is Test {
             gameArgs: abi.encodePacked(bytes32(uint256(0xabc)))
         });
 
-        IOPContractsManagerMigrator.MigrateInput memory migrateInput = IOPContractsManagerMigrator.MigrateInput({
-            chainSystemConfigs: systemConfigs,
-            disputeGameConfigs: gameConfigs,
-            startingAnchorRoot: Proposal({ root: Hash.wrap(bytes32(uint256(1))), l2SequenceNumber: 100 }),
-            startingRespectedGameType: GameType.wrap(0)
-        });
+        input.set(input.opChainConfigs.selector, configs);
 
-        input.set(input.migrateInput.selector, migrateInput);
+        bytes memory storedConfigs = input.opChainConfigs();
+        assertEq(storedConfigs, abi.encode(configs));
 
-        bytes memory storedInput = input.migrateInput();
-        assertEq(storedInput, abi.encode(migrateInput));
+        // Additional verification of stored claims if needed
+        IOPContractsManager.OpChainConfig[] memory decodedConfigs =
+            abi.decode(storedConfigs, (IOPContractsManager.OpChainConfig[]));
+        assertEq(Claim.unwrap(decodedConfigs[0].cannonPrestate), bytes32(uint256(1)));
+        assertEq(Claim.unwrap(decodedConfigs[1].cannonPrestate), bytes32(uint256(2)));
     }
 
     function test_setAddress_withZeroAddress_reverts() public {
@@ -127,24 +126,6 @@ contract InteropMigrationInput_Test is Test {
     function test_set_withInvalidSelector_reverts() public {
         vm.expectRevert("InteropMigrationInput: unknown selector");
         input.set(bytes4(0xdeadbeef), makeAddr("test"));
-
-        // Create a single config for testing invalid selector
-        IOPContractsManager.OpChainConfig[] memory configs = new IOPContractsManager.OpChainConfig[](1);
-        address mockSystemConfig = makeAddr("systemConfig");
-        address mockProxyAdmin = makeAddr("proxyAdmin");
-        vm.etch(mockSystemConfig, hex"01");
-        vm.etch(mockProxyAdmin, hex"01");
-
-        configs[0] = IOPContractsManager.OpChainConfig({
-            systemConfigProxy: ISystemConfig(mockSystemConfig),
-            cannonPrestate: Claim.wrap(bytes32(uint256(1))),
-            cannonKonaPrestate: Claim.wrap(bytes32(uint256(11)))
-        });
-
-        vm.expectRevert("InteropMigrationInput: unknown selector");
-        input.set(bytes4(0xdeadbeef), configs);
-    }
-}
 
 contract MockOPCM {
     event MigrateV2Called(address indexed sysCfg, uint32 indexed gameType);

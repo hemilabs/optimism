@@ -225,8 +225,7 @@ func rollupFromGethConfig(cfg *params.ChainConfig) *rollup.Config {
 		HoloceneTime: cfg.HoloceneTime,
 		IsthmusTime:  cfg.IsthmusTime,
 		JovianTime:   cfg.JovianTime,
-		KarstTime:    cfg.KarstTime,
-		LagoonTime:   cfg.LagoonTime,
+		LagoonTime:   cfg.InteropTime, // hemi: pinned op-geth names the interop fork InteropTime and has no Karst
 	}
 }
 

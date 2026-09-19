@@ -40,10 +40,6 @@ func (f *ForkDB) Snapshot() *snapshot.Tree {
 	return nil
 }
 
-func (f *ForkDB) Commit(*state.StateUpdate) error {
-	panic("unimplemented")
-}
-
 var _ state.Database = (*ForkDB)(nil)
 
 func NewForkDB(source ForkSource) *ForkDB {

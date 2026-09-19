@@ -2,6 +2,7 @@ package opcm
 
 import (
 	_ "embed"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
@@ -66,6 +67,7 @@ type DeployOPChainInput struct {
 
 	OperatorFeeScalar   uint32
 	OperatorFeeConstant uint64
+	SuperchainConfig    common.Address
 
 	UseCustomGasToken bool
 }
@@ -114,7 +116,6 @@ type ReadImplementationAddressesInput struct {
 	L1StandardBridgeProxy             common.Address
 	OptimismPortalProxy               common.Address
 	DisputeGameFactoryProxy           common.Address
-	DelayedWETHPermissionedGameProxy  common.Address
 	Opcm                              common.Address
 }
 
@@ -131,8 +132,8 @@ type ReadImplementationAddressesOutput struct {
 	DisputeGameFactory           common.Address
 	MipsSingleton                common.Address
 	PreimageOracleSingleton      common.Address
-	FaultDisputeGameV2           common.Address
-	PermissionedDisputeGameV2    common.Address
+	FaultDisputeGame             common.Address
+	PermissionedDisputeGame      common.Address
 	SuperFaultDisputeGame        common.Address
 	SuperPermissionedDisputeGame common.Address
 	ZkDisputeGame                common.Address
@@ -156,4 +157,34 @@ func NewReadImplementationAddressesForgeCaller(client *forge.Client) forge.Scrip
 		&forge.BytesScriptEncoder[ReadImplementationAddressesInput]{TypeName: "ReadImplementationAddressesInput"},
 		&forge.BytesScriptDecoder[ReadImplementationAddressesOutput]{TypeName: "ReadImplementationAddressesOutput"},
 	)
+}
+
+// DeployOPChainViaForge deploys OP Chain contracts using Forge
+func DeployOPChainViaForge(env *ForgeEnv, input DeployOPChainInput) (DeployOPChainOutput, error) {
+	var output DeployOPChainOutput
+	if err := env.validate(true); err != nil {
+		return output, err
+	}
+	forgeCaller := NewDeployOPChainForgeCaller(env.Client)
+	var err error
+	output, _, err = forgeCaller(env.Context, input, env.buildForgeOpts()...)
+	if err != nil {
+		return output, fmt.Errorf("failed to deploy OP Chain with Forge: %w", err)
+	}
+	return output, nil
+}
+
+// ReadImplementationAddressesViaForge reads implementation addresses using Forge
+func ReadImplementationAddressesViaForge(env *ForgeEnv, input ReadImplementationAddressesInput) (ReadImplementationAddressesOutput, error) {
+	var output ReadImplementationAddressesOutput
+	if err := env.validate(false); err != nil {
+		return output, err
+	}
+	forgeCaller := NewReadImplementationAddressesForgeCaller(env.Client)
+	var err error
+	output, _, err = forgeCaller(env.Context, input, env.buildForgeOptsReadOnly()...)
+	if err != nil {
+		return output, fmt.Errorf("failed to run ReadImplementationAddresses with Forge: %w", err)
+	}
+	return output, nil
 }

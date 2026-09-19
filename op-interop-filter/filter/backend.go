@@ -22,8 +22,8 @@ import (
 	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
-// Backend coordinates chain ingesters and handles the failsafe state.
-// This is a stub implementation - the actual logic will be added in a follow-up PR.
+// Backend coordinates chain ingesters and handles CheckAccessList requests.
+// Failsafe is enabled if manually set OR if any chain ingester has an error.
 type Backend struct {
 	log     log.Logger
 	metrics metrics.Metricer
@@ -146,7 +146,7 @@ func NewBackend(parentCtx context.Context, params BackendParams) *Backend {
 	return b
 }
 
-// Start starts the backend
+// Start starts all chain ingesters and the cross-validator
 func (b *Backend) Start(ctx context.Context) error {
 	b.log.Info("Starting backend")
 
@@ -171,7 +171,7 @@ func (b *Backend) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the backend
+// Stop stops all chain ingesters and the cross-validator
 func (b *Backend) Stop(ctx context.Context) error {
 	b.log.Info("Stopping backend")
 	b.cancel()
@@ -194,7 +194,8 @@ func (b *Backend) Stop(ctx context.Context) error {
 	return result
 }
 
-// FailsafeEnabled returns whether failsafe is enabled
+// FailsafeEnabled returns true if failsafe is manually enabled OR any chain has an error
+// OR the cross-validator has an error.
 func (b *Backend) FailsafeEnabled() bool {
 	return b.manualFailsafe.Load() || len(b.GetChainErrors()) > 0 || b.crossValidator.Error() != nil
 }
@@ -388,7 +389,6 @@ func classifyRejectionReason(err error) string {
 }
 
 // CheckAccessList validates the given access list entries.
-// This is a stub implementation that always returns ErrUninitialized.
 func (b *Backend) CheckAccessList(ctx context.Context, inboxEntries []common.Hash,
 	minSafety safety.Level, execDescriptor messages.ExecutingDescriptor) error {
 

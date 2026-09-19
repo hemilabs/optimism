@@ -43,9 +43,25 @@ contract ReadSuperchainDeployment is Script {
         output_.superchainProxyAdminOwner = output_.superchainProxyAdmin.owner();
     }
 
-    function runWithBytes(bytes memory _input) public returns (bytes memory) {
-        Input memory input = abi.decode(_input, (Input));
-        Output memory output = run(input);
-        return abi.encode(output);
+        output_.protocolVersionsProxy = IProtocolVersions(opcm.protocolVersions());
+        output_.superchainConfigProxy = ISuperchainConfig(opcm.superchainConfig());
+        output_.superchainProxyAdmin = IProxyAdmin(EIP1967Helper.getAdmin(address(output_.superchainConfigProxy)));
+
+        IProxy protocolVersionsProxy = IProxy(payable(address(output_.protocolVersionsProxy)));
+        IProxy superchainConfigProxy = IProxy(payable(address(output_.superchainConfigProxy)));
+
+        vm.startPrank(address(0));
+        output_.protocolVersionsImpl = IProtocolVersions(address(protocolVersionsProxy.implementation()));
+        output_.superchainConfigImpl = ISuperchainConfig(address(superchainConfigProxy.implementation()));
+        output_.protocolVersionsImpl = IProtocolVersions(protocolVersionsProxy.implementation());
+        output_.superchainConfigImpl = ISuperchainConfig(superchainConfigProxy.implementation());
+        vm.stopPrank();
+
+        output_.guardian = output_.superchainConfigProxy.guardian();
+        output_.protocolVersionsOwner = output_.protocolVersionsProxy.owner();
+        output_.superchainProxyAdminOwner = output_.superchainProxyAdmin.owner();
+        output_.recommendedProtocolVersion =
+            bytes32(ProtocolVersion.unwrap(output_.protocolVersionsProxy.recommended()));
+        output_.requiredProtocolVersion = bytes32(ProtocolVersion.unwrap(output_.protocolVersionsProxy.required()));
     }
 }

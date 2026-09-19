@@ -19,7 +19,9 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
+	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-supernode/config"
+	"github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container/engine_controller"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/chain_container/virtual_node"
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/resources"
 	"github.com/ethereum/go-ethereum"
@@ -264,13 +266,14 @@ func createTestVNConfig() *opnodecfg.Config {
 	return &opnodecfg.Config{
 		Rollup: rollup.Config{
 			L2ChainID: big.NewInt(420),
+			BlockTime: 2, // Set a non-zero block time to avoid divide by zero
 		},
 	}
 }
 
-func createTestCLIConfig() config.CLIConfig {
+func createTestCLIConfig(dataDir string) config.CLIConfig {
 	return config.CLIConfig{
-		DataDir: "/tmp/test",
+		DataDir: dataDir,
 		RPCConfig: oprpc.CLIConfig{
 			ListenAddr: "0.0.0.0",
 			ListenPort: 8545,
@@ -333,8 +336,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 
 	chainID := eth.ChainIDFromUInt64(420)
 	vncfg := createTestVNConfig()
-	log := createTestLogger()
-	cfg := createTestCLIConfig()
+	log := createTestLogger(t)
 	initOverload := &rollupNode.InitializationOverrides{}
 
 	t.Run("creates container with correct config", func(t *testing.T) {
@@ -355,21 +357,22 @@ func TestChainContainer_Constructor(t *testing.T) {
 	})
 
 	t.Run("SafeDBPath uses subPath", func(t *testing.T) {
+		dataDir := t.TempDir()
 		cfg := config.CLIConfig{
-			DataDir: "/tmp/datadir",
+			DataDir: dataDir,
 		}
 		container := mustNewChainContainer(t, eth.ChainIDFromUInt64(420), vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
-		expectedPath := filepath.Join("/tmp/datadir", "420", "safe_db")
+		expectedPath := filepath.Join(dataDir, "420", "safe_db")
 		require.Equal(t, expectedPath, impl.vncfg.SafeDBPath)
 	})
 
 	t.Run("RPC config inherited from supernode config", func(t *testing.T) {
 		cfg := config.CLIConfig{
-			DataDir: "/tmp/test",
+			DataDir: t.TempDir(),
 			RPCConfig: oprpc.CLIConfig{
 				ListenAddr: "127.0.0.1",
 				ListenPort: 9545,
@@ -393,31 +396,32 @@ func TestChainContainer_Constructor(t *testing.T) {
 	})
 
 	t.Run("subPath combines DataDir, chainID, and path correctly", func(t *testing.T) {
+		dataDir := t.TempDir()
 		cfg := config.CLIConfig{
-			DataDir: "/data",
+			DataDir: dataDir,
 		}
 		container := mustNewChainContainer(t, eth.ChainIDFromUInt64(420), vncfg, log, cfg, initOverload, nil, nil, nil, nil)
 		impl, ok := container.(*simpleChainContainer)
 		require.True(t, ok)
 
 		result := impl.subPath("safe_db")
-		expected := filepath.Join("/data", "420", "safe_db")
+		expected := filepath.Join(dataDir, "420", "safe_db")
 		require.Equal(t, expected, result)
 	})
 
 	t.Run("subPath works with various chain IDs", func(t *testing.T) {
+		dataDir := t.TempDir()
 		cfg := config.CLIConfig{
-			DataDir: "/data",
+			DataDir: dataDir,
 		}
 
 		testCases := []struct {
-			chainID  eth.ChainID
-			path     string
-			expected string
+			chainID eth.ChainID
+			path    string
 		}{
-			{eth.ChainIDFromUInt64(10), "safe_db", "/data/10/safe_db"},
-			{eth.ChainIDFromUInt64(11155420), "safe_db", "/data/11155420/safe_db"},
-			{eth.ChainIDFromUInt64(8453), "peerstore", "/data/8453/peerstore"},
+			{eth.ChainIDFromUInt64(10), "safe_db"},
+			{eth.ChainIDFromUInt64(11155420), "safe_db"},
+			{eth.ChainIDFromUInt64(8453), "peerstore"},
 		}
 
 		for _, tc := range testCases {
@@ -426,7 +430,7 @@ func TestChainContainer_Constructor(t *testing.T) {
 			require.True(t, ok)
 
 			result := impl.subPath(tc.path)
-			expected := filepath.Join(cfg.DataDir, tc.chainID.String(), tc.path)
+			expected := filepath.Join(dataDir, tc.chainID.String(), tc.path)
 			require.Equal(t, expected, result, "subPath should work for chain %d", tc.chainID)
 		}
 	})
@@ -574,8 +578,6 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 
 	chainID := eth.ChainIDFromUInt64(420)
 	vncfg := createTestVNConfig()
-	log := createTestLogger()
-	cfg := createTestCLIConfig()
 	initOverload := &rollupNode.InitializationOverrides{}
 
 	t.Run("Start respects stop flag", func(t *testing.T) {
@@ -629,7 +631,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 
 		mockVN := newMockVirtualNode()
 		mockVN.blockOnStart = true
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 
@@ -662,7 +664,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 			return nil // Exit immediately to trigger restart
 		}
 
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 
@@ -703,7 +705,7 @@ func TestChainContainer_Lifecycle(t *testing.T) {
 			return nil // Exit immediately
 		}
 
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 
@@ -736,8 +738,6 @@ func TestChainContainer_PauseResume(t *testing.T) {
 
 	chainID := eth.ChainIDFromUInt64(420)
 	vncfg := createTestVNConfig()
-	log := createTestLogger()
-	cfg := createTestCLIConfig()
 	initOverload := &rollupNode.InitializationOverrides{}
 
 	t.Run("Pause sets pause flag", func(t *testing.T) {
@@ -781,7 +781,7 @@ func TestChainContainer_PauseResume(t *testing.T) {
 		var totalStartCalls int
 		var mu sync.Mutex
 
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			mockVN := newMockVirtualNode()
 			mockVN.blockOnStart = true
 			mockVN.startFunc = func(ctx context.Context) error {
@@ -1329,8 +1329,6 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 
 	chainID := eth.ChainIDFromUInt64(420)
 	vncfg := createTestVNConfig()
-	log := createTestLogger()
-	cfg := createTestCLIConfig()
 	initOverload := &rollupNode.InitializationOverrides{}
 
 	t.Run("Start creates and starts virtual node", func(t *testing.T) {
@@ -1343,7 +1341,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 		mockVN := newMockVirtualNode()
 		mockVN.blockOnStart = true
 
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 
@@ -1385,7 +1383,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 			return ctx.Err()
 		}
 
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 
@@ -1444,7 +1442,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 		mockVN := newMockVirtualNode()
 		mockVN.blockOnStart = true
 
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 
@@ -1482,7 +1480,7 @@ func TestChainContainer_VirtualNodeIntegration(t *testing.T) {
 
 		mockVN := newMockVirtualNode()
 		mockVN.blockOnStart = true
-		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string) virtual_node.VirtualNode {
+		impl.virtualNodeFactory = func(cfg *opnodecfg.Config, log gethlog.Logger, initOverload *rollupNode.InitializationOverrides, appVersion string, superAuthority rollup.SuperAuthority) virtual_node.VirtualNode {
 			return mockVN
 		}
 

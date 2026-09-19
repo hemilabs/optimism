@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -56,44 +57,9 @@ func TestBlockHeaderJSON(t *testing.T) {
 }
 
 func TestRPCHeaderAmsterdamFields(t *testing.T) {
-	zero := uint64(0)
-	slotNumber := uint64(123)
-	blockAccessListHash := randHash()
-	hdr := &types.Header{
-		ParentHash:          randHash(),
-		UncleHash:           types.EmptyUncleHash,
-		Coinbase:            common.Address{},
-		Root:                randHash(),
-		TxHash:              types.EmptyTxsHash,
-		ReceiptHash:         randHash(),
-		Bloom:               types.Bloom{},
-		Difficulty:          big.NewInt(0),
-		Number:              big.NewInt(1234),
-		GasLimit:            30_000_000,
-		GasUsed:             0,
-		Time:                123456,
-		Extra:               nil,
-		MixDigest:           randHash(),
-		Nonce:               types.BlockNonce{},
-		BaseFee:             big.NewInt(100),
-		WithdrawalsHash:     &types.EmptyWithdrawalsHash,
-		ExcessBlobGas:       &zero,
-		BlobGasUsed:         &zero,
-		ParentBeaconRoot:    &common.Hash{},
-		RequestsHash:        &types.EmptyRequestsHash,
-		BlockAccessListHash: &blockAccessListHash,
-		SlotNumber:          &slotNumber,
-	}
-
-	data, err := json.Marshal(hdr)
-	require.NoError(t, err)
-
-	var rpcHeader RPCHeader
-	require.NoError(t, json.Unmarshal(data, &rpcHeader))
-	require.Equal(t, hdr.BlockAccessListHash, rpcHeader.BlockAccessListHash)
-	require.Equal(t, hdr.SlotNumber, (*uint64)(rpcHeader.SlotNumber))
-	require.Equal(t, hdr.Hash(), rpcHeader.Hash)
-	require.Equal(t, hdr.Hash(), rpcHeader.computeBlockHash())
+	// hemi: the pinned hemilabs/op-geth types.Header has no Amsterdam fields
+	// (BlockAccessListHash, SlotNumber), so Amsterdam headers cannot be round-tripped.
+	t.Skip("hemi: pinned hemilabs/op-geth lacks Amsterdam header fields")
 }
 
 func TestBlockJSON(t *testing.T) {
@@ -158,7 +124,7 @@ func TestBlockToExecutionPayloadIncludesEcotoneProperties(t *testing.T) {
 		ReceiptHash:      hdr.ReceiptHash,
 		Bloom:            eth.Bytes256(hdr.Bloom),
 		Difficulty:       *(*hexutil.Big)(hdr.Difficulty),
-		Number:           hexutil.Uint64(hdr.Number.Uint64()),
+		Number:           hexutil.Uint64(bigs.Uint64Strict(hdr.Number)),
 		GasLimit:         hexutil.Uint64(hdr.GasLimit),
 		GasUsed:          hexutil.Uint64(hdr.GasUsed),
 		Time:             hexutil.Uint64(hdr.Time),

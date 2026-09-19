@@ -189,11 +189,6 @@ func getPrestate(t devtest.T, l1Caller *batching.MultiCaller, l2Chain *dsl.L2Net
 		dgfContract.Call("gameArgs", uint32(expectedPermissionlessGameType)),
 	)
 	t.Require().NoError(err)
-	gameImpl := results.GetAddress(0)
-
-	fdgContract := batching.NewBoundContract(faultDisputeGameABI, gameImpl)
-	prestateResults, err := l1Caller.SingleCall(context.Background(), rpcblock.Latest, fdgContract.Call("absolutePrestate"))
-	t.Require().NoError(err)
 	return prestateResults.GetHash(0)
 }
 

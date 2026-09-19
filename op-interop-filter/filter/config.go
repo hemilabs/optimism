@@ -3,15 +3,18 @@ package filter
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum-optimism/optimism/op-interop-filter/flags"
+	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
-	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
 )
 
 // DefaultMessageExpiryWindow is 7 days, matching the interop message expiry default.
@@ -42,7 +45,6 @@ type Config struct {
 	LogConfig     oplog.CLIConfig
 	MetricsConfig opmetrics.CLIConfig
 	PprofConfig   oppprof.CLIConfig
-	RPC           oprpc.CLIConfig
 }
 
 func (c *Config) Check() error {
@@ -50,9 +52,25 @@ func (c *Config) Check() error {
 	if len(c.L2RPCs) == 0 {
 		result = errors.Join(result, errors.New("at least one L2 RPC is required"))
 	}
-	// Admin API requires JWT authentication
-	if c.RPC.EnableAdmin && c.JWTSecretPath == "" {
-		result = errors.Join(result, errors.New("admin RPC requires JWT setup, but no JWT path was specified"))
+	if len(c.RollupConfigs) == 0 {
+		result = errors.Join(result, errors.New("at least one rollup config is required (use --networks or --rollup-configs)"))
+	}
+	// Admin RPC requires JWT secret for authentication.
+	if c.AdminRPCAddr != "" && c.JWTSecretPath == "" {
+		result = errors.Join(result, errors.New("admin.rpc.addr requires admin.jwt-secret for authentication"))
+	}
+	// Durations must be positive
+	if c.BackfillDuration <= 0 {
+		result = errors.Join(result, errors.New("backfill-duration must be positive"))
+	}
+	if c.MessageExpiryWindow == 0 {
+		result = errors.Join(result, errors.New("message-expiry-window must be positive"))
+	}
+	if c.PollInterval <= 0 {
+		result = errors.Join(result, errors.New("poll-interval must be positive"))
+	}
+	if c.ValidationInterval <= 0 {
+		result = errors.Join(result, errors.New("validation-interval must be positive"))
 	}
 	// FailsafeLogInterval is intentionally not required: a zero value means
 	// "use the default" and is defaulted to defaultFailsafeLogInterval by the
@@ -69,7 +87,6 @@ func (c *Config) Check() error {
 	}
 	result = errors.Join(result, c.MetricsConfig.Check())
 	result = errors.Join(result, c.PprofConfig.Check())
-	result = errors.Join(result, c.RPC.Check())
 	return result
 }
 

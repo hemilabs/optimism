@@ -247,7 +247,7 @@ func TestSpanBatchPayload(t *testing.T) {
 	err = sb.txs.recoverV(chainID)
 	require.NoError(t, err)
 
-	require.Equal(t, rawSpanBatch.spanBatchPayload, sb.spanBatchPayload)
+	requireEqual(t, rawSpanBatch.spanBatchPayload, sb.spanBatchPayload)
 }
 
 func TestSpanBatchBlockCount(t *testing.T) {
@@ -312,7 +312,7 @@ func TestSpanBatchTxs(t *testing.T) {
 	err = sb.txs.recoverV(chainID)
 	require.NoError(t, err)
 
-	require.Equal(t, rawSpanBatch.txs, sb.txs)
+	requireEqual(t, rawSpanBatch.txs, sb.txs)
 }
 
 func TestSpanBatchRoundTrip(t *testing.T) {
@@ -332,7 +332,7 @@ func TestSpanBatchRoundTrip(t *testing.T) {
 	err = sb.txs.recoverV(chainID)
 	require.NoError(t, err)
 
-	require.Equal(t, rawSpanBatch, &sb)
+	requireEqual(t, rawSpanBatch, &sb)
 }
 
 func TestSpanBatchDerive(t *testing.T) {

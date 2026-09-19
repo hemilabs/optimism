@@ -1,8 +1,4 @@
----
-title: Known Limitations
-description: Known limitations and workarounds for OP Deployer.
-diataxis: reference
----
+# Known Limitations
 
 OP Deployer is subject to some known limitations which we're working on addressing in future releases.
 

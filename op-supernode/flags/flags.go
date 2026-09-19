@@ -87,8 +87,19 @@ var optionalFlags = []cli.Flag{
 	DependencySet,
 }
 
+// activityFlags holds flags registered by activity packages via RegisterActivityFlags.
+// Activities call this during their init() to register their own CLI flags.
+var activityFlags []cli.Flag
+
+// RegisterActivityFlags allows activity packages to register their CLI flags.
+// This should be called from an activity's init() function.
+func RegisterActivityFlags(flags ...cli.Flag) {
+	activityFlags = append(activityFlags, flags...)
+}
+
 func init() {
 	optionalFlags = append(optionalFlags, L1BeaconAddr)
+	optionalFlags = append(optionalFlags, L1BeaconFallbackAddrs)
 	optionalFlags = append(optionalFlags, DataDirFlag)
 	optionalFlags = append(optionalFlags, oprpc.CLIFlags(EnvVarPrefix)...)
 	optionalFlags = append(optionalFlags, oplog.CLIFlags(EnvVarPrefix)...)
@@ -131,15 +142,18 @@ func FullDynamicFlags(chains []uint64) []cli.Flag {
 	for _, f := range opnodeflags.Flags {
 		baseName := f.Names()[0]
 		// vn.all.* env var/alias prefixing
-		allEnvs := prefixEnvVar(f, "VN_ALL_")
+		allEnvs := upgradeEnvVarPrefixes(f, opnodeflags.EnvVarPrefix, "VN_ALL")
 		allAliases := prefixAliases(f, VNFlagGlobalPrefix)
 		final = append(final, renameFlagWithEnv(f, VNFlagGlobalPrefix+baseName, allEnvs, allAliases))
 		// per-chain
 		for _, id := range chains {
-			perChainEnvs := prefixEnvVar(f, fmt.Sprintf("VN_%d_", id))
+			perChainEnvs := upgradeEnvVarPrefixes(f, opnodeflags.EnvVarPrefix, fmt.Sprintf("VN_%d", id))
 			perAliases := prefixAliases(f, fmt.Sprintf("%s%d.", VNFlagNamePrefix, id))
 			final = append(final, renameFlagWithEnv(f, fmt.Sprintf("%s%d.%s", VNFlagNamePrefix, id, baseName), perChainEnvs, perAliases))
 		}
 	}
+
+	// add the activity flags that were registered by activities during their init() functions
+	final = append(final, activityFlags...)
 	return final
 }

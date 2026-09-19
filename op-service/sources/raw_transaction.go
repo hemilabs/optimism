@@ -69,12 +69,9 @@ func (tx *RawTransaction) UnmarshalJSON(input []byte) error {
 			return fmt.Errorf("invalid deposit tx: %w", err)
 		}
 		raw, err = d.MarshalBinary()
-	case uint64(optypes.PostExecTxType):
-		var p optypes.PostExecTx
-		if err := json.Unmarshal(input, &p); err != nil {
-			return fmt.Errorf("invalid post-exec tx: %w", err)
-		}
-		raw, err = p.MarshalBinary()
+	// hemi: 0x7D is hemi's PoP payout tx type (types.PopPayoutTxType), which the pinned
+	// hemilabs/op-geth decodes natively, so it is routed to the go-ethereum codec below
+	// rather than to the op-core post-exec codec.
 	default:
 		var gtx types.Transaction
 		if err := gtx.UnmarshalJSON(input); err != nil {
@@ -102,12 +99,7 @@ func (tx RawTransaction) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		return json.Marshal(d)
-	case optypes.PostExecTxType:
-		p, err := optypes.UnmarshalPostExecTx(tx)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(p)
+	// hemi: 0x7D (PoP payout) is marshaled by the go-ethereum codec, see UnmarshalJSON.
 	default:
 		var gtx types.Transaction
 		if err := gtx.UnmarshalBinary(tx); err != nil {
@@ -168,7 +160,8 @@ func (txs RawTransactions) UserTxs() (types.Transactions, error) {
 			return nil, fmt.Errorf("tx %d is empty", i)
 		}
 		switch raw.Type() {
-		case optypes.DepositTxType, optypes.PostExecTxType:
+		// hemi: 0x7D is a PoP payout (decodable by the pinned hemilabs/op-geth), not a synthetic tx.
+		case optypes.DepositTxType:
 			continue
 		}
 		tx := new(types.Transaction)
