@@ -474,10 +474,6 @@ nut-prefork-state-for fork: build-contracts build-superchain-go
 todo-checker:
   ./ops/scripts/todo-checker.sh
 
-# Runs semgrep on the entire monorepo.
-semgrep:
-  semgrep scan --config .semgrep/rules/ --error .
-
 # Runs semgrep tests.
 semgrep-test:
   semgrep scan --test --config .semgrep/rules/ .semgrep/tests/

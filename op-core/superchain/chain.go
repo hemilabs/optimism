@@ -18,7 +18,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 )
 
-//go:embed superchain-configs.zip
+// Clayton note: removed.  we don't use anything superchain-related
+// //go:embed superchain-configs.zip
 var builtInConfigData []byte
 
 var BuiltInConfigs *ChainConfigLoader
@@ -201,13 +202,4 @@ func (c *Chain) populateGenesis() {
 		return
 	}
 	c.genesis = out
-}
-
-func init() {
-	var err error
-	BuiltInConfigs, err = NewChainConfigLoader(builtInConfigData)
-	if err != nil {
-		panic(err)
-	}
-	Chains = BuiltInConfigs.Chains
 }

@@ -45,9 +45,3 @@ func parseSHA256SumLine(s string) string {
 	}
 	return fields[0]
 }
-
-func init() {
-	if err := VerifyEmbeddedBundle(); err != nil {
-		panic("op-core/superchain: " + err.Error())
-	}
-}
