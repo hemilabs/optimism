@@ -20,7 +20,7 @@ use reth_trie_common::{
     BranchNodeCompact, Nibbles, PackedStorageTrieEntry, PackedStoredNibbles,
     PackedStoredNibblesSubKey, StorageTrieEntry, StoredNibbles, StoredNibblesSubKey,
 };
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 use tracing::{debug, info};
 
 /// Batch size threshold for storing entries during initialization

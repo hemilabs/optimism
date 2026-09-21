@@ -167,7 +167,7 @@ mod tests {
     #[tokio::test]
     async fn test_l1_retrieval_activation_signal() {
         let traversal = TraversalTestHelper::new_populated();
-        let dap = TestDAP { results: vec![] };
+        let dap = TestDAP { results: vec![Ok(Bytes::default())] };
         let mut retrieval = L1Retrieval::new(traversal, dap);
         retrieval.activate().await.unwrap();
         // Provider must be cleared on activation to flush stale data.
@@ -177,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn test_l1_retrieval_reset_signal() {
         let traversal = TraversalTestHelper::new_populated();
-        let dap = TestDAP { results: vec![] };
+        let dap = TestDAP { results: vec![Ok(Bytes::default())] };
         let mut retrieval = L1Retrieval::new(traversal, dap);
         retrieval.prev.block = None;
         assert!(retrieval.prev.block.is_none());
@@ -185,6 +185,8 @@ mod tests {
         retrieval.reset(BlockNumHash::default(), SystemConfig::default()).await.unwrap();
         assert!(retrieval.next.is_some());
         assert_eq!(retrieval.prev.block, Some(BlockInfo::default()));
+        // Provider must be cleared on reset to flush stale data.
+        assert!(retrieval.provider.results.is_empty());
     }
 
     #[tokio::test]

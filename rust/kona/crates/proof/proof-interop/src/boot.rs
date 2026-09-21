@@ -6,6 +6,7 @@ use alloc::{string::ToString, vec::Vec};
 use alloy_primitives::{B256, Bytes};
 use alloy_rlp::Decodable;
 use kona_genesis::{L1ChainConfig, RollupConfig};
+use kona_interop::DependencySet;
 use kona_preimage::{
     CommsClient, HintWriterClient, L2_CLAIM_BLOCK_NUMBER_KEY, L2_CLAIM_KEY, L2_OUTPUT_ROOT_KEY,
     PreimageKey, PreimageKeyType, PreimageOracleClient, errors::PreimageOracleError,
@@ -37,6 +38,8 @@ pub struct BootInfo {
     pub claimed_l2_timestamp: u64,
     /// The rollup config for the L2 chain.
     pub rollup_configs: HashMap<u64, RollupConfig>,
+    /// The dependency set configuration for the interop cluster.
+    pub dependency_set: DependencySet,
     /// The L1 config for the L2 chain.
     pub l1_config: L1ChainConfig,
 }
@@ -176,6 +179,7 @@ impl BootInfo {
             l1_head,
             l1_config,
             rollup_configs,
+            dependency_set,
             agreed_pre_state_commitment: l2_pre,
             agreed_pre_state,
             claimed_post_state: l2_post,

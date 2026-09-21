@@ -5,14 +5,12 @@ use alloc_no_stdlib::*;
 use brotli_decompressor::{BrotliResult, *};
 use core::ops;
 
-use crate::MAX_SPAN_BATCH_ELEMENTS;
-
-/// A frame decompression error.
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+/// A brotli decompression error.
+#[derive(thiserror::Error, Debug)]
 pub enum BrotliDecompressionError {
-    /// The buffer exceeds the [`MAX_SPAN_BATCH_ELEMENTS`] protocol parameter.
-    #[error("The batch exceeds the maximum number of elements: {max_size}", max_size = MAX_SPAN_BATCH_ELEMENTS)]
-    BatchTooLarge,
+    /// Brotli decompression failed due to corrupt or invalid data.
+    #[error("brotli decompression failed: {0:?}")]
+    DecompressionFailed(BrotliResult),
 }
 
 /// Decompresses the given bytes data using the Brotli decompressor implemented
@@ -32,8 +30,9 @@ pub fn decompress_brotli(
     let hc_allocator = MemPool::<HuffmanCode>::new_allocator(&mut hc_buffer, bzero);
     let mut brotli_state = BrotliState::new(u8_allocator, u32_allocator, hc_allocator);
 
-    // Setup the decompressor inputs and outputs
-    let mut output = vec![0; data.len()];
+    // Setup the decompressor inputs and outputs.
+    // Cap initial buffer at the limit to prevent over-allocation.
+    let mut output = vec![0; core::cmp::min(data.len(), max_rlp_bytes_per_channel)];
     let mut available_in = data.len();
     let mut input_offset = 0;
     let mut available_out = output.len();
@@ -54,13 +53,8 @@ pub fn decompress_brotli(
             &mut output,
             &mut written,
             &mut brotli_state,
-        ),
-        brotli::BrotliResult::NeedsMoreOutput
-    ) {
-        // Resize the output buffer to double the size, following standard
-        // practice for buffer resizing in streams.
+        );
         let old_len = output.len();
-        let new_len = old_len * 2;
 
         // `NeedsMoreOutput` means the buffer is full (`available_out == 0`).
         // `NeedsMoreInput` is normally raised when input is exhausted while
@@ -89,14 +83,9 @@ pub fn decompress_brotli(
             // ResultFailure with some bytes written: return what we have.
             _ => break,
         }
-
-        output.resize(new_len, 0);
-        available_out += old_len;
     }
 
-    // Truncate the output buffer to the written bytes
     output.truncate(written);
-
     Ok(output)
 }
 

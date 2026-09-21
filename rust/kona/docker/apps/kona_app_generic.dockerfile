@@ -28,7 +28,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Install cargo-binstall
 RUN curl -L --proto '=https' --tlsv1.2 -sSf --retry 5 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
-RUN cargo binstall cargo-chef -y
+RUN cargo binstall cargo-chef cargo-auditable -y
 
 ################################
 #    Local Repo Setup Stage    #

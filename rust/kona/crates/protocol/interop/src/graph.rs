@@ -1,7 +1,7 @@
 //! Interop [`MessageGraph`].
 
 use crate::{
-    MESSAGE_EXPIRY_WINDOW, RawMessagePayload,
+    RawMessagePayload,
     errors::{MessageGraphError, MessageGraphResult},
     message::{EnrichedExecutingMessage, parse_log_to_executing_message},
     rules::MessageRules,
@@ -255,7 +255,7 @@ where
 #[cfg(test)]
 #[allow(clippy::zero_sized_map_values)]
 mod test {
-    use super::{MESSAGE_EXPIRY_WINDOW, MessageGraph};
+    use super::MessageGraph;
     use crate::{
         MESSAGE_EXPIRY_WINDOW, MessageGraphError,
         message::EnrichedExecutingMessage,

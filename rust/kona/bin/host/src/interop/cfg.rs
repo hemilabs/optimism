@@ -13,6 +13,7 @@ use alloy_provider::{Provider, RootProvider};
 use clap::Parser;
 use kona_cli::cli_styles;
 use kona_genesis::{L1ChainConfig, RollupConfig};
+use kona_interop::DependencySet;
 use kona_preimage::{
     BidirectionalChannel, Channel, HintReader, HintWriter, OracleReader, OracleServer,
     VerifyingPreimageFetcher,
@@ -284,6 +285,17 @@ impl InteropHost {
         // Deserialize the config and return it.
         serde_json::from_str(&ser_config)
             .map_err(|_| InteropHostError::Other("failed to parse L1 config"))
+    }
+
+    /// Reads the [`DependencySet`] from the file system.
+    pub fn read_dependency_set(&self) -> Option<Result<DependencySet, InteropHostError>> {
+        let path = self.dependency_set_path.as_ref()?;
+
+        Some((|| {
+            let ser_config = std::fs::read_to_string(path)?;
+            let dep_set: DependencySet = serde_json::from_str(&ser_config)?;
+            Ok(dep_set)
+        })())
     }
 
     /// Creates the key-value store for the host backend.

@@ -23,7 +23,7 @@ build-kona PROFILE="release":
 
 acceptance-tests CL_TYPE="kona-node" EL_TYPE="op-reth":
   #!/bin/bash
-  if [ "{{CL_TYPE}}" = "kona" ] ; then
+  if [ "{{CL_TYPE}}" = "kona-node" ] ; then
     echo "Building kona-node..."
     just build-kona
   fi
@@ -38,7 +38,7 @@ acceptance-tests CL_TYPE="kona-node" EL_TYPE="op-reth":
 # Run acceptance tests for the rust stack. By default runs the acceptance tests for kona-node with op-reth.
 acceptance-tests-run CL_TYPE="kona-node" EL_TYPE="op-reth":
   #!/bin/bash
-  if [ "{{CL_TYPE}}" = "kona" ] ; then
+  if [ "{{CL_TYPE}}" = "kona-node" ] ; then
     echo "Running acceptance tests for kona-node"
     export KONA_NODE_EXEC_PATH="{{SOURCE}}/../target/debug/kona-node"
   fi
@@ -155,6 +155,7 @@ action-tests-build:
 # Run action tests for the single-chain client program on the native target
 action-tests-single-run test_name='.*' parallel="0" *args='':
   #!/bin/bash
+  set -euo pipefail
 
   if [ -z "${KONA_HOST_PATH:-}" ]; then
     export KONA_HOST_PATH="{{SOURCE}}/../../target/release/kona-host"
@@ -183,8 +184,8 @@ action-tests-single-run test_name='.*' parallel="0" *args='':
   echo "Running tests with $PARALLEL cores"
 
   # CircleCI parallelism
-  if [ -n "$CIRCLE_NODE_TOTAL" ] && [ "$CIRCLE_NODE_TOTAL" -gt 1 ]; then
-  	echo "Setting up test directories..."
+  if [ -n "${CIRCLE_NODE_TOTAL:-}" ] && [ "${CIRCLE_NODE_TOTAL:-0}" -gt 1 ]; then
+    echo "Setting up test directories..."
     mkdir -p ./tmp/test-results ./tmp/testlogs
 
     export NODE_INDEX=${CIRCLE_NODE_INDEX:-0}
@@ -216,7 +217,7 @@ action-tests-single-run test_name='.*' parallel="0" *args='':
       {{SOURCE}}/../../../ops/scripts/split-test-logs.sh "$JSON_LOG"
     done
 
-    exit 0
+    exit
   fi
 
   {{SOURCE}}/../../../ops/scripts/gotestsum-split.sh --format=testname \
@@ -232,6 +233,7 @@ action-tests-single-run test_name='.*' parallel="0" *args='':
 # executor path is unset.
 action-tests-sp1 test_name='TestSP1.*':
   #!/bin/bash
+  set -euo pipefail
 
   echo "Building SP1 guest ELFs (Dockerized SP1 toolchain)..."
   ( cd {{SOURCE}}/../sp1 && just build-elfs )

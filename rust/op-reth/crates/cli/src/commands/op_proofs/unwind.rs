@@ -104,7 +104,7 @@ impl<C: ChainSpecParser<ChainSpec: EthChainSpec>> UnwindCommand<C> {
         F: BlockReader,
     {
         // Validate that the target block is within a valid range for unwinding
-        if !self.validate_unwind_range(&storage)? {
+        if !self.validate_unwind_range(storage.clone())? {
             return Ok(());
         }
 
