@@ -48,6 +48,9 @@ type CLIConfig struct {
 	// Mutually exclusive with RollupRpc.
 	SuperRootRpcs []string
 
+	// L2OOAddress is the L2OutputOracle contract address.
+	L2OOAddress string
+
 	// PollInterval is the delay between periodic checks on whether it is time to load an output root and propose it.
 	PollInterval time.Duration
 
@@ -95,8 +98,11 @@ func (c *CLIConfig) Check() error {
 		return err
 	}
 
-	if c.DGFAddress == "" {
-		return errors.New("`DisputeGameFactory` is required")
+	if c.DGFAddress == "" && c.L2OOAddress == "" {
+		return errors.New("neither the `DisputeGameFactory` nor `L2OutputOracle` address was provided")
+	}
+	if c.DGFAddress != "" && c.L2OOAddress != "" {
+		return errors.New("both the `DisputeGameFactory` and `L2OutputOracle` addresses were provided")
 	}
 	if c.DGFAddress != "" && c.ProposalInterval == 0 {
 		return errors.New("the `DisputeGameFactory` address was provided but the `ProposalInterval` was not set")
@@ -114,6 +120,10 @@ func (c *CLIConfig) Check() error {
 	}
 	if sourceCount > 1 {
 		return ErrConflictingSource
+	}
+	// Require rollup RPC for L2OO
+	if c.L2OOAddress != "" && c.RollupRpc == "" {
+		return ErrMissingRollupRpc
 	}
 	// Require rollup RPC for pre interop game types.
 	if c.DGFAddress != "" && slices.Contains(preInteropGameTypes, c.DisputeGameType) && c.RollupRpc == "" {
@@ -137,6 +147,7 @@ func NewConfig(ctx *cli.Context) *CLIConfig {
 		L1EthRpc:                     ctx.String(flags.L1EthRpcFlag.Name),
 		RollupRpc:                    ctx.String(flags.RollupRpcFlag.Name),
 		SuperRootRpcs:                ctx.StringSlice(flags.SuperRootRpcsFlag.Name),
+		L2OOAddress:                  ctx.String(flags.L2OOAddressFlag.Name),
 		PollInterval:                 ctx.Duration(flags.PollIntervalFlag.Name),
 		TxMgrConfig:                  txmgr.ReadCLIConfig(ctx),
 		AllowNonFinalized:            ctx.Bool(flags.AllowNonFinalizedFlag.Name),

@@ -80,7 +80,53 @@ func TestNewConfigReadsSuperRootRpcs(t *testing.T) {
 	}
 }
 
+func TestL2OOAddress(t *testing.T) {
+	t.Run("Valid", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.DGFAddress = ""
+		cfg.L2OOAddress = common.Address{0xaa}.Hex()
+		cfg.ProposalInterval = 0
+		require.NoError(t, cfg.Check())
+	})
+
+	t.Run("NeitherL2OONorDGF", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.DGFAddress = ""
+		cfg.L2OOAddress = ""
+		require.ErrorContains(t, cfg.Check(), "neither")
+	})
+
+	t.Run("BothL2OOAndDGF", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.L2OOAddress = common.Address{0xaa}.Hex()
+		require.ErrorContains(t, cfg.Check(), "both")
+	})
+
+	t.Run("ReadFromFlag", func(t *testing.T) {
+		var cfg *CLIConfig
+		app := cli.NewApp()
+		app.Flags = proposerFlags.Flags
+		app.Action = func(ctx *cli.Context) error {
+			cfg = NewConfig(ctx)
+			return nil
+		}
+		addr := common.Address{0xaa}.Hex()
+		require.NoError(t, app.Run([]string{"op-proposer", "--l2oo-address", addr}))
+		require.Equal(t, addr, cfg.L2OOAddress)
+	})
+}
+
 func TestRollupRpc(t *testing.T) {
+	t.Run("RequiredWithL2OO", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.DGFAddress = ""
+		cfg.L2OOAddress = common.Address{0xaa}.Hex()
+		cfg.ProposalInterval = 0
+		cfg.RollupRpc = ""
+		cfg.SuperRootRpcs = []string{"http://localhost:8882/superroot"}
+		require.ErrorIs(t, cfg.Check(), ErrMissingRollupRpc)
+	})
+
 	for _, gameType := range preInteropGameTypes {
 		t.Run("RequiredWithPreInteropGame", func(t *testing.T) {
 			cfg := validConfig()
@@ -160,6 +206,7 @@ func validConfig() *CLIConfig {
 		L1EthRpc:                     "http://localhost:8888/l1",
 		RollupRpc:                    "http://localhost:8888/l2",
 		SuperRootRpcs:                nil,
+		L2OOAddress:                  "",
 		PollInterval:                 100,
 		AllowNonFinalized:            false,
 		TxMgrConfig:                  txmgr.NewCLIConfig("http://localhost:8888/l1", txmgr.DefaultBatcherFlagValues),

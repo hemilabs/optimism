@@ -43,6 +43,11 @@ var (
 	}
 
 	// Optional flags
+	L2OOAddressFlag = &cli.StringFlag{
+		Name:    "l2oo-address",
+		Usage:   "Address of the L2OutputOracle contract",
+		EnvVars: prefixEnvVars("L2OO_ADDRESS"),
+	}
 	PollIntervalFlag = &cli.DurationFlag{
 		Name:    "poll-interval",
 		Usage:   "Delay between periodic checks on whether it is time to load an output root and propose it.",
@@ -94,6 +99,7 @@ var requiredFlags = []cli.Flag{
 var optionalFlags = []cli.Flag{
 	RollupRpcFlag,
 	SuperRootRpcsFlag,
+	L2OOAddressFlag,
 	PollIntervalFlag,
 	AllowNonFinalizedFlag,
 	L2OutputHDPathFlag,
