@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -133,13 +134,13 @@ type EthClient struct {
 
 	log log.Logger
 
-	// cache transactions in bundles per block hash
-	// common.Hash -> types.Transactions
-	transactionsCache *caching.LRUCache[common.Hash, types.Transactions]
+	// cache transactions in bundles per block hash, in canonical binary encoding
+	// common.Hash -> RawTransactions
+	transactionsCache *caching.LRUCache[common.Hash, RawTransactions]
 
 	// cache block headers of blocks by hash
-	// common.Hash -> *HeaderInfo
-	headersCache *caching.LRUCache[common.Hash, eth.BlockInfo]
+	// common.Hash -> *types.Header
+	headersCache *caching.LRUCache[common.Hash, *types.Header]
 
 	// cache payloads by hash
 	// common.Hash -> *eth.ExecutionPayload
@@ -170,8 +171,8 @@ func NewEthClient(client client.RPC, log log.Logger, metrics caching.Metrics, co
 		trustRPC:          config.TrustRPC,
 		mustBePostMerge:   config.MustBePostMerge,
 		log:               log,
-		transactionsCache: caching.NewLRUCache[common.Hash, types.Transactions](metrics, "txs", config.TransactionsCacheSize),
-		headersCache:      caching.NewLRUCache[common.Hash, eth.BlockInfo](metrics, "headers", config.HeadersCacheSize),
+		transactionsCache: caching.NewLRUCache[common.Hash, RawTransactions](metrics, "txs", config.TransactionsCacheSize),
+		headersCache:      caching.NewLRUCache[common.Hash, *types.Header](metrics, "headers", config.HeadersCacheSize),
 		payloadsCache:     caching.NewLRUCache[common.Hash, *eth.ExecutionPayloadEnvelope](metrics, "payloads", config.PayloadsCacheSize),
 		blockRefsCache:    caching.NewLRUCache[common.Hash, eth.L1BlockRef](metrics, "blockrefs", config.BlockRefsCacheSize),
 	}, nil
@@ -214,27 +215,34 @@ func (n numberID) CheckID(id eth.BlockID) error {
 	return nil
 }
 
-func (s *EthClient) headerCall(ctx context.Context, method string, id rpcBlockID) (eth.BlockInfo, error) {
-	var header *RPCHeader
-	err := s.client.CallContext(ctx, &header, method, id.Arg(), false) // headers are just blocks without txs
+// headerCall fetches a header (eth_getBlockBy* with fullTx=false), verifies it,
+// caches it, and returns it. It is the single source of truth for both
+// HeaderBy* and InfoBy*.
+func (s *EthClient) headerCall(ctx context.Context, method string, id rpcBlockID) (*types.Header, error) {
+	var rpcHdr *RPCHeader
+	err := s.client.CallContext(ctx, &rpcHdr, method, id.Arg(), false) // headers are just blocks without txs
 	if err != nil {
 		return nil, eth.MaybeAsNotFoundErr(err)
 	}
-	if header == nil {
+	if rpcHdr == nil {
 		return nil, ethereum.NotFound
 	}
-	info, err := header.Info(s.trustRPC, s.mustBePostMerge)
+	header, err := rpcHdr.Header(s.trustRPC, s.mustBePostMerge)
 	if err != nil {
 		return nil, err
 	}
-	if err := id.CheckID(eth.ToBlockID(info)); err != nil {
+	if err := id.CheckID(rpcHdr.BlockID()); err != nil {
 		return nil, fmt.Errorf("fetched block header does not match requested ID: %w", err)
 	}
-	s.headersCache.Add(info.Hash(), info)
-	return info, nil
+	s.headersCache.Add(rpcHdr.Hash, header)
+	return header, nil
 }
 
-func (s *EthClient) blockCall(ctx context.Context, method string, id rpcBlockID) (eth.BlockInfo, types.Transactions, error) {
+// blockCall fetches a header + transactions (eth_getBlockBy* with fullTx=true),
+// verifies the header and block-level data (txs root, withdrawals), caches
+// both, and returns them. Transactions stay in their canonical binary
+// encoding. Source of truth for every block-body accessor.
+func (s *EthClient) blockCall(ctx context.Context, method string, id rpcBlockID) (*types.Header, RawTransactions, error) {
 	var block *RPCBlock
 	err := s.client.CallContext(ctx, &block, method, id.Arg(), true)
 	if err != nil {
@@ -243,16 +251,21 @@ func (s *EthClient) blockCall(ctx context.Context, method string, id rpcBlockID)
 	if block == nil {
 		return nil, nil, ethereum.NotFound
 	}
-	info, txs, err := block.Info(s.trustRPC, s.mustBePostMerge)
-	if err != nil {
-		return nil, nil, err
+	if !s.trustRPC {
+		if err := block.Verify(); err != nil {
+			return nil, nil, err
+		}
 	}
-	if err := id.CheckID(eth.ToBlockID(info)); err != nil {
+	header, err := block.RPCHeader.Header(s.trustRPC, s.mustBePostMerge)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to verify block from RPC: %w", err)
+	}
+	if err := id.CheckID(block.BlockID()); err != nil {
 		return nil, nil, fmt.Errorf("fetched block data does not match requested ID: %w", err)
 	}
-	s.headersCache.Add(info.Hash(), info)
-	s.transactionsCache.Add(info.Hash(), txs)
-	return info, txs, nil
+	s.headersCache.Add(block.Hash, header)
+	s.transactionsCache.Add(block.Hash, block.Transactions)
+	return header, block.Transactions, nil
 }
 
 func (s *EthClient) payloadCall(ctx context.Context, method string, id rpcBlockID) (*eth.ExecutionPayloadEnvelope, error) {
@@ -285,24 +298,31 @@ func (s *EthClient) ChainID(ctx context.Context) (*big.Int, error) {
 	return (*big.Int)(&id), nil
 }
 
-func (s *EthClient) InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error) {
+// HeaderByHash returns the *types.Header for the given block hash. It is the
+// source of truth for header fetching: HeaderBy* and InfoBy* both flow
+// through the same headersCache + headerCall path.
+func (s *EthClient) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
 	if header, ok := s.headersCache.Get(hash); ok {
 		return header, nil
 	}
 	return s.headerCall(ctx, "eth_getBlockByHash", hashID(hash))
 }
 
-func (s *EthClient) InfoByNumber(ctx context.Context, number uint64) (eth.BlockInfo, error) {
+// HeaderByNumber returns the *types.Header for the given block number.
+func (s *EthClient) HeaderByNumber(ctx context.Context, number uint64) (*types.Header, error) {
 	// can't hit the cache when querying by number due to reorgs.
 	return s.headerCall(ctx, "eth_getBlockByNumber", numberID(number))
 }
 
-func (s *EthClient) InfoByLabel(ctx context.Context, label eth.BlockLabel) (eth.BlockInfo, error) {
+// HeaderByLabel returns the *types.Header for the given block label.
+func (s *EthClient) HeaderByLabel(ctx context.Context, label eth.BlockLabel) (*types.Header, error) {
 	// can't hit the cache when querying the head due to reorgs / changes.
 	return s.headerCall(ctx, "eth_getBlockByNumber", label)
 }
 
-func (s *EthClient) InfoAndTxsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, types.Transactions, error) {
+// headerAndRawTxsByHash returns the header and canonical binary-encoded
+// transactions for the given block hash, from cache when possible.
+func (s *EthClient) headerAndRawTxsByHash(ctx context.Context, hash common.Hash) (*types.Header, RawTransactions, error) {
 	if header, ok := s.headersCache.Get(hash); ok {
 		if txs, ok := s.transactionsCache.Get(hash); ok {
 			return header, txs, nil
@@ -311,14 +331,173 @@ func (s *EthClient) InfoAndTxsByHash(ctx context.Context, hash common.Hash) (eth
 	return s.blockCall(ctx, "eth_getBlockByHash", hashID(hash))
 }
 
-func (s *EthClient) InfoAndTxsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, types.Transactions, error) {
-	// can't hit the cache when querying by number due to reorgs.
-	return s.blockCall(ctx, "eth_getBlockByNumber", numberID(number))
+// HeaderAndTxsByHash returns the *types.Header and transactions for the given
+// block hash.
+//
+// The transactions are decoded into go-ethereum types: for L2 blocks — which
+// contain OP Stack synthetic transactions — use the class-partitioned
+// accessors (InfoAndUserTxsBy*, InfoAndDepositsBy*, InfoAndFirstDepositBy*)
+// instead, as this decode only handles them while the build resolves
+// go-ethereum to op-geth.
+func (s *EthClient) HeaderAndTxsByHash(ctx context.Context, hash common.Hash) (*types.Header, types.Transactions, error) {
+	header, rawTxs, err := s.headerAndRawTxsByHash(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	txs, err := rawTxs.Geth()
+	if err != nil {
+		return nil, nil, err
+	}
+	return header, txs, nil
 }
 
+func (s *EthClient) InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error) {
+	header, err := s.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	return eth.HeaderBlockInfoTrusted(hash, header), nil
+}
+
+func (s *EthClient) InfoByNumber(ctx context.Context, number uint64) (eth.BlockInfo, error) {
+	header, err := s.HeaderByNumber(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	return eth.HeaderBlockInfo(header), nil
+}
+
+func (s *EthClient) InfoByLabel(ctx context.Context, label eth.BlockLabel) (eth.BlockInfo, error) {
+	header, err := s.HeaderByLabel(ctx, label)
+	if err != nil {
+		return nil, err
+	}
+	return eth.HeaderBlockInfo(header), nil
+}
+
+// InfoAndTxsByHash returns the block info and decoded go-ethereum
+// transactions. See HeaderAndTxsByHash for the L2 caveat — L2 block bodies
+// should be read via the class-partitioned accessors.
+func (s *EthClient) InfoAndTxsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, types.Transactions, error) {
+	header, txs, err := s.HeaderAndTxsByHash(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfoTrusted(hash, header), txs, nil
+}
+
+// InfoAndTxsByNumber is InfoAndTxsByHash by block number; same L2 caveat.
+func (s *EthClient) InfoAndTxsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, types.Transactions, error) {
+	// can't hit the cache when querying by number due to reorgs.
+	header, rawTxs, err := s.blockCall(ctx, "eth_getBlockByNumber", numberID(number))
+	if err != nil {
+		return nil, nil, err
+	}
+	txs, err := rawTxs.Geth()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfo(header), txs, nil
+}
+
+// InfoAndTxsByLabel is InfoAndTxsByHash by block label; same L2 caveat.
 func (s *EthClient) InfoAndTxsByLabel(ctx context.Context, label eth.BlockLabel) (eth.BlockInfo, types.Transactions, error) {
 	// can't hit the cache when querying the head due to reorgs / changes.
-	return s.blockCall(ctx, "eth_getBlockByNumber", label)
+	header, rawTxs, err := s.blockCall(ctx, "eth_getBlockByNumber", label)
+	if err != nil {
+		return nil, nil, err
+	}
+	txs, err := rawTxs.Geth()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfo(header), txs, nil
+}
+
+// InfoAndUserTxsByHash returns the block info and the block's standard
+// Ethereum transactions, excluding the OP Stack synthetic classes (0x7E
+// deposits and 0x7D post-exec). The returned list decodes with upstream
+// go-ethereum on any block, L2 included.
+func (s *EthClient) InfoAndUserTxsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, types.Transactions, error) {
+	header, rawTxs, err := s.headerAndRawTxsByHash(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	txs, err := rawTxs.UserTxs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfoTrusted(hash, header), txs, nil
+}
+
+// InfoAndUserTxsByNumber is InfoAndUserTxsByHash by block number.
+func (s *EthClient) InfoAndUserTxsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, types.Transactions, error) {
+	// can't hit the cache when querying by number due to reorgs.
+	header, rawTxs, err := s.blockCall(ctx, "eth_getBlockByNumber", numberID(number))
+	if err != nil {
+		return nil, nil, err
+	}
+	txs, err := rawTxs.UserTxs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfo(header), txs, nil
+}
+
+// InfoAndDepositsByHash returns the block info and the block's deposit (0x7E)
+// transactions as op-core structs.
+func (s *EthClient) InfoAndDepositsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, []*optypes.DepositTx, error) {
+	header, rawTxs, err := s.headerAndRawTxsByHash(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	deposits, err := rawTxs.Deposits()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfoTrusted(hash, header), deposits, nil
+}
+
+// InfoAndDepositsByNumber is InfoAndDepositsByHash by block number.
+func (s *EthClient) InfoAndDepositsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, []*optypes.DepositTx, error) {
+	header, rawTxs, err := s.blockCall(ctx, "eth_getBlockByNumber", numberID(number))
+	if err != nil {
+		return nil, nil, err
+	}
+	deposits, err := rawTxs.Deposits()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfo(header), deposits, nil
+}
+
+// InfoAndFirstDepositByHash returns the block info and the block's first
+// transaction decoded as a deposit — the L1-info deposit of an L2 block. It
+// returns ErrMissingFirstDeposit if the block has no transactions or the
+// first one is not a deposit.
+func (s *EthClient) InfoAndFirstDepositByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, *optypes.DepositTx, error) {
+	header, rawTxs, err := s.headerAndRawTxsByHash(ctx, hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	deposit, err := rawTxs.FirstDeposit()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfoTrusted(hash, header), deposit, nil
+}
+
+// InfoAndFirstDepositByNumber is InfoAndFirstDepositByHash by block number.
+func (s *EthClient) InfoAndFirstDepositByNumber(ctx context.Context, number uint64) (eth.BlockInfo, *optypes.DepositTx, error) {
+	header, rawTxs, err := s.blockCall(ctx, "eth_getBlockByNumber", numberID(number))
+	if err != nil {
+		return nil, nil, err
+	}
+	deposit, err := rawTxs.FirstDeposit()
+	if err != nil {
+		return nil, nil, err
+	}
+	return eth.HeaderBlockInfo(header), deposit, nil
 }
 
 func (s *EthClient) PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error) {
@@ -338,7 +517,7 @@ func (s *EthClient) PayloadByLabel(ctx context.Context, label eth.BlockLabel) (*
 
 // FetchReceiptsByNumber returns a block info and all of the receipts associated with transactions in the block.
 // It fetches the block hash and calls FetchReceipts.
-func (s *EthClient) FetchReceiptsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, types.Receipts, error) {
+func (s *EthClient) FetchReceiptsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, optypes.Receipts, error) {
 	blockHash, err := s.InfoByNumber(ctx, number)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying block: %w", err)
@@ -349,23 +528,28 @@ func (s *EthClient) FetchReceiptsByNumber(ctx context.Context, number uint64) (e
 // FetchReceipts returns a block info and all of the receipts associated with transactions in the block.
 // It verifies the receipt hash in the block header against the receipt hash of the fetched receipts
 // to ensure that the execution engine did not fail to return any receipts.
-func (s *EthClient) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {
-	info, txs, err := s.InfoAndTxsByHash(ctx, blockHash)
+func (s *EthClient) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, optypes.Receipts, error) {
+	// Tx hashes are computed from the raw encodings: decoding the txs into
+	// go-ethereum types would fail on the OP Stack synthetic tx classes of L2
+	// blocks under upstream go-ethereum.
+	header, rawTxs, err := s.headerAndRawTxsByHash(ctx, blockHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying block: %w", err)
 	}
+	info := eth.HeaderBlockInfoTrusted(blockHash, header)
 
-	txHashes, _ := eth.TransactionsToHashes(txs), eth.ToBlockID(info)
-	receipts, err := s.recProvider.FetchReceipts(ctx, info, txHashes)
+	receipts, err := s.recProvider.FetchReceipts(ctx, info, rawTxs.Hashes())
 	if err != nil {
 		return nil, nil, err
 	}
 	return info, receipts, nil
 }
 
-// TransactionReceipt returns a receipt associated with transaction.
-func (s *EthClient) TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
-	var r *types.Receipt
+// TransactionReceipt returns a receipt associated with transaction. The
+// OP Stack extension fields (L1GasPrice, OperatorFeeScalar, ...) are populated
+// when present in the response.
+func (s *EthClient) TransactionReceipt(ctx context.Context, txHash common.Hash) (*optypes.Receipt, error) {
+	var r *optypes.Receipt
 	err := s.client.CallContext(ctx, &r, "eth_getTransactionReceipt", txHash)
 	if err == nil && r == nil {
 		return nil, ethereum.NotFound
@@ -508,6 +692,12 @@ func ToCallArg(msg ethereum.CallMsg) interface{} {
 	}
 	if msg.GasPrice != nil {
 		arg["gasPrice"] = (*hexutil.Big)(msg.GasPrice)
+	}
+	if msg.GasFeeCap != nil {
+		arg["maxFeePerGas"] = (*hexutil.Big)(msg.GasFeeCap)
+	}
+	if msg.GasTipCap != nil {
+		arg["maxPriorityFeePerGas"] = (*hexutil.Big)(msg.GasTipCap)
 	}
 	if msg.AccessList != nil {
 		arg["accessList"] = msg.AccessList

@@ -13,10 +13,13 @@ var disputeGameFactory []byte
 //go:embed abi/SuperFaultDisputeGame.json
 var superFaultDisputeGame []byte
 
+//go:embed abi/SuperPermissionedDisputeGame.json
+var superPermissionedDisputeGame []byte
+
 //go:embed abi/FaultDisputeGame.json
 var faultDisputeGame []byte
 
-//go:embed abi/OPSuccinctFaultDisputeGame.json
+//go:embed abi/ZKDisputeGame.json
 var zkDisputeGame []byte
 
 //go:embed abi/PreimageOracle.json
@@ -34,12 +37,19 @@ var systemConfig []byte
 //go:embed abi/CrossL2Inbox.json
 var crossL2Inbox []byte
 
+//go:embed abi/AnchorStateRegistry.json
+var anchorStateRegistry []byte
+
 func LoadDisputeGameFactoryABI() *abi.ABI {
 	return loadABI(disputeGameFactory)
 }
 
 func LoadSuperFaultDisputeGameABI() *abi.ABI {
 	return loadABI(superFaultDisputeGame)
+}
+
+func LoadSuperPermissionedDisputeGameABI() *abi.ABI {
+	return loadABI(superPermissionedDisputeGame)
 }
 
 func LoadFaultDisputeGameABI() *abi.ABI {
@@ -67,6 +77,10 @@ func LoadSystemConfigABI() *abi.ABI {
 
 func LoadCrossL2InboxABI() *abi.ABI {
 	return loadABI(crossL2Inbox)
+}
+
+func LoadAnchorStateRegistryABI() *abi.ABI {
+	return loadABI(anchorStateRegistry)
 }
 
 func loadABI(json []byte) *abi.ABI {

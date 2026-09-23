@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-proposer/contracts"
 	"github.com/ethereum-optimism/optimism/op-proposer/metrics"
 	"github.com/ethereum-optimism/optimism/op-proposer/proposer/source"
+	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
@@ -25,9 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-var (
-	ErrProposerNotRunning = errors.New("proposer is not running")
-)
+var ErrProposerNotRunning = errors.New("proposer is not running")
 
 type L1Client interface {
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
@@ -60,6 +59,7 @@ type DriverSetup struct {
 	Log         log.Logger
 	Metr        metrics.Metricer
 	Cfg         ProposerConfig
+	Clock       clock.Clock
 	Txmgr       txmgr.TxManager
 	L1Client    L1Client
 	Multicaller *batching.MultiCaller
@@ -263,14 +263,19 @@ func (l *L2OutputSubmitter) FetchL2OOOutput(ctx context.Context) (source.Proposa
 // The passed context is expected to be a lifecycle context. A network timeout
 // context will be derived from it.
 func (l *L2OutputSubmitter) FetchDGFOutput(ctx context.Context) (source.Proposal, bool, error) {
-	cutoff := time.Now().Add(-l.Cfg.ProposalInterval)
+	proposerClock := l.Clock
+	if proposerClock == nil {
+		proposerClock = clock.SystemClock
+	}
+	now := proposerClock.Now()
+	cutoff := now.Add(-l.Cfg.ProposalInterval)
 	proposedRecently, proposalTime, claim, err := l.dgfContract.HasProposedSince(ctx, l.Txmgr.From(), cutoff, l.Cfg.DisputeGameType)
 	if err != nil {
 		return source.Proposal{}, false, fmt.Errorf("could not check for recent proposal: %w", err)
 	}
 
 	if proposedRecently {
-		l.Log.Debug("Duration since last game not past proposal interval", "duration", time.Since(proposalTime))
+		l.Log.Debug("Duration since last game not past proposal interval", "duration", now.Sub(proposalTime))
 		return source.Proposal{}, false, nil
 	}
 
@@ -378,15 +383,16 @@ func (l *L2OutputSubmitter) waitForL1Head(ctx context.Context, blockNum uint64) 
 // sendTransaction creates & sends transactions through the underlying transaction manager.
 func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.Proposal) error {
 	l.Log.Info("Proposing output root", "output", output.Root, "sequenceNum", output.SequenceNum, "extraData", output.ExtraData())
+
 	var receipt *types.Receipt
-	if l.Cfg.DisputeGameFactoryAddr != nil {
+	if l.dgfContract != nil {
 		candidate, err := l.ProposeL2OutputDGFTxCandidate(ctx, output)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create DGF tx candidate: %w", err)
 		}
 		receipt, err = l.Txmgr.Send(ctx, candidate)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to send proposal tx: %w", err)
 		}
 	} else {
 		err := l.waitForL1Head(ctx, output.Legacy.HeadL1.Number+1)
@@ -395,7 +401,7 @@ func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.P
 		}
 		data, err := l.ProposeL2OutputTxData(output)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create L2OO tx data: %w", err)
 		}
 		receipt, err = l.Txmgr.Send(ctx, txmgr.TxCandidate{
 			TxData:   data,
@@ -403,7 +409,7 @@ func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.P
 			GasLimit: 0,
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to send proposal tx: %w", err)
 		}
 	}
 
@@ -460,7 +466,6 @@ func (l *L2OutputSubmitter) loop() {
 			return
 		}
 	}
-
 }
 
 func (l *L2OutputSubmitter) waitNodeSync() error {
@@ -472,10 +477,13 @@ func (l *L2OutputSubmitter) waitNodeSync() error {
 		return fmt.Errorf("failed to retrieve current L1 block number: %w", err)
 	}
 
-	return dial.WaitL1Sync(l.ctx, l.Log, l1head, time.Second*12, func(ctx context.Context) (eth.L1BlockRef, error) {
+	// CurrentL1 names the L1 block currently being processed: only blocks strictly
+	// below it are fully derived. Wait until the source reports CurrentL1 > l1head
+	// by setting the target one above l1head.
+	return dial.WaitL1Sync(l.ctx, l.Log, l1head+1, time.Second*12, func(ctx context.Context) (eth.BlockID, error) {
 		status, err := l.ProposalSource.SyncStatus(ctx)
 		if err != nil {
-			return eth.L1BlockRef{}, err
+			return eth.BlockID{}, err
 		}
 		return status.CurrentL1, nil
 	})

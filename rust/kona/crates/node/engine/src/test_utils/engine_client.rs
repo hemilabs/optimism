@@ -15,13 +15,12 @@ use alloy_transport::{TransportError, TransportErrorKind, TransportResult};
 use alloy_transport_http::Http;
 use async_trait::async_trait;
 use kona_genesis::RollupConfig;
-use kona_protocol::L2BlockInfo;
 use op_alloy_network::Optimism;
 use op_alloy_provider::ext::engine::OpEngineApi;
 use op_alloy_rpc_types::Transaction as OpTransaction;
 use op_alloy_rpc_types_engine::{
     OpExecutionPayloadEnvelopeV3, OpExecutionPayloadEnvelopeV4, OpExecutionPayloadV4,
-    OpPayloadAttributes, ProtocolVersion,
+    OpPayloadAttributes,
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
@@ -41,8 +40,6 @@ pub fn test_engine_client_builder() -> MockEngineClientBuilder {
 pub struct MockEngineStorage {
     /// Storage for block responses by tag.
     pub l2_blocks_by_label: HashMap<BlockNumberOrTag, Block<OpTransaction>>,
-    /// Storage for block info responses by tag.
-    pub block_info_by_tag: HashMap<BlockNumberOrTag, L2BlockInfo>,
 
     // Version-specific new_payload responses
     /// Storage for `new_payload_v1` responses.
@@ -77,8 +74,6 @@ pub struct MockEngineStorage {
     // Non-versioned responses
     /// Storage for client version responses.
     pub client_versions: Option<Vec<ClientVersionV1>>,
-    /// Storage for protocol version responses.
-    pub protocol_version: Option<ProtocolVersion>,
     /// Storage for capabilities responses.
     pub capabilities: Option<Vec<String>>,
 
@@ -138,12 +133,6 @@ impl MockEngineClientBuilder {
         block: Block<OpTransaction>,
     ) -> Self {
         self.storage.l2_blocks_by_label.insert(tag, block);
-        self
-    }
-
-    /// Sets a block info response for a specific tag.
-    pub fn with_block_info_by_tag(mut self, tag: BlockNumberOrTag, info: L2BlockInfo) -> Self {
-        self.storage.block_info_by_tag.insert(tag, info);
         self
     }
 
@@ -222,12 +211,6 @@ impl MockEngineClientBuilder {
     /// Sets the client versions response.
     pub fn with_client_versions(mut self, versions: Vec<ClientVersionV1>) -> Self {
         self.storage.client_versions = Some(versions);
-        self
-    }
-
-    /// Sets the protocol version response.
-    pub const fn with_protocol_version(mut self, version: ProtocolVersion) -> Self {
-        self.storage.protocol_version = Some(version);
         self
     }
 
@@ -315,11 +298,6 @@ impl MockEngineClient {
         self.storage.write().await.l2_blocks_by_label.insert(tag, block);
     }
 
-    /// Sets a block info response for a specific tag.
-    pub async fn set_block_info_by_tag(&self, tag: BlockNumberOrTag, info: L2BlockInfo) {
-        self.storage.write().await.block_info_by_tag.insert(tag, info);
-    }
-
     /// Sets the `new_payload_v1` response.
     pub async fn set_new_payload_v1_response(&self, status: PayloadStatus) {
         self.storage.write().await.new_payload_v1_response = Some(status);
@@ -378,11 +356,6 @@ impl MockEngineClient {
     /// Sets the client versions response.
     pub async fn set_client_versions(&self, versions: Vec<ClientVersionV1>) {
         self.storage.write().await.client_versions = Some(versions);
-    }
-
-    /// Sets the protocol version response.
-    pub async fn set_protocol_version(&self, version: ProtocolVersion) {
-        self.storage.write().await.protocol_version = Some(version);
     }
 
     /// Sets the capabilities response.
@@ -499,14 +472,6 @@ impl EngineClient for MockEngineClient {
         let storage = self.storage.read().await;
         Ok(storage.l2_blocks_by_label.get(&numtag).cloned())
     }
-
-    async fn l2_block_info_by_label(
-        &self,
-        numtag: BlockNumberOrTag,
-    ) -> Result<Option<L2BlockInfo>, EngineClientError> {
-        let storage = self.storage.read().await;
-        Ok(storage.block_info_by_tag.get(&numtag).copied())
-    }
 }
 
 #[async_trait]
@@ -616,6 +581,19 @@ impl OpEngineApi<Optimism, Http<HyperAuthClient>> for MockEngineClient {
         })
     }
 
+    async fn get_payload_v5(
+        &self,
+        _payload_id: PayloadId,
+    ) -> TransportResult<OpExecutionPayloadEnvelopeV4> {
+        // Osaka reuses the V4-shaped envelope; serve the stored V4 payload.
+        let storage = self.storage.read().await;
+        storage.execution_payload_v4.clone().ok_or_else(|| {
+            TransportError::from(TransportErrorKind::custom_str(
+                "No execution payload v4 set in mock",
+            ))
+        })
+    }
+
     async fn get_payload_bodies_by_hash_v1(
         &self,
         _block_hashes: Vec<BlockHash>,
@@ -650,17 +628,6 @@ impl OpEngineApi<Optimism, Http<HyperAuthClient>> for MockEngineClient {
         let storage = self.storage.read().await;
         storage.client_versions.clone().ok_or_else(|| {
             TransportError::from(TransportErrorKind::custom_str("No client versions set in mock"))
-        })
-    }
-
-    async fn signal_superchain_v1(
-        &self,
-        _recommended: ProtocolVersion,
-        _required: ProtocolVersion,
-    ) -> TransportResult<ProtocolVersion> {
-        let storage = self.storage.read().await;
-        storage.protocol_version.ok_or_else(|| {
-            TransportError::from(TransportErrorKind::custom_str("No protocol version set in mock"))
         })
     }
 

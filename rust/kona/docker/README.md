@@ -69,6 +69,69 @@ To manually trigger a nightly build:
 gh workflow run "Build and Publish Nightly Docker Images"
 ```
 
+## Building Kona Prestates
+
+### Automatic Selection (for local test runs)
+
+```bash
+# From repo root; also what op-acceptance-tests' `just build-deps` runs
+just cannon-prestates
+```
+
+Picks the native build when the MIPS64 cross-linker is on PATH, and the Docker
+build otherwise — so this works on Linux with the toolchain and on macOS with
+Docker, and reports what to install when neither is available. Pin one build
+with `KONA_PRESTATE_BUILD=native` or `KONA_PRESTATE_BUILD=docker`.
+
+### Reproducible Build (Docker — recommended for releases)
+
+```bash
+# From repo root
+just reproducible-prestate-kona
+```
+
+### Native Build (Linux — for development)
+
+#### Prerequisites
+
+Managed by mise (`mise install` from repo root): rustup, stable Rust, the pinned
+dated nightly, Go, just, jq. Both toolchains come from `mise.toml`.
+
+`just install-nightly` then adds the `rust-src` component to the nightly (needed
+for `-Zbuild-std`); `mise.toml` only pulls `rustfmt`.
+
+**MIPS64 cross-compilation toolchain (manual, apt only):**
+
+```bash
+sudo apt install g++-mips64-linux-gnuabi64 libc6-dev-mips64-cross binutils-mips64-linux-gnuabi64
+```
+
+macOS: no package provides this toolchain, so use a Docker path
+(`just reproducible-prestate-kona`, or `just cannon-prestates` which selects it
+for you).
+
+#### Build
+
+```bash
+cd rust
+just build-kona-prestates
+```
+
+#### Custom Configs
+
+```bash
+export KONA_CUSTOM_CONFIGS_DIR=/path/to/custom/configs
+cd rust
+just build-kona-prestates
+```
+
+### cannon-builder Image
+
+The `cannon-builder` Docker image contains only apt-level MIPS64 cross-compilation
+packages. The prestate Dockerfile installs mise on top, and mise pulls Rust (stable
++ nightly), Go, just, and jq from `mise.toml`. The image only needs to be rebuilt
+when the cross-compilation toolchain packages change (rare).
+
 ## Cutting a Release (for maintainers / forks)
 
 To cut a release of the docker image for any of the targets, cut a new annotated tag for the target like so:

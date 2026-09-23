@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -10,6 +11,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/gameargs"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
@@ -17,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
@@ -37,6 +40,10 @@ var (
 
 //go:embed abis/DisputeGameFactory-1.2.0.json
 var disputeGameFactoryAbi120 []byte
+
+var disputeGameStatusABI = mustParseAbi([]byte(`[
+	{"type":"function","name":"status","stateMutability":"view","inputs":[],"outputs":[{"type":"uint8"}]}
+]`))
 
 type gameArgsFunc func(ctx context.Context, caller *batching.MultiCaller, block rpcblock.Block, contract *batching.BoundContract, gameType gameTypes.GameType) ([]byte, error)
 
@@ -103,7 +110,7 @@ func (f *DisputeGameFactoryContract) GetGameCount(ctx context.Context, blockHash
 	if err != nil {
 		return 0, fmt.Errorf("failed to load game count: %w", err)
 	}
-	return result.GetBigInt(0).Uint64(), nil
+	return bigs.Uint64Strict(result.GetBigInt(0)), nil
 }
 
 func (f *DisputeGameFactoryContract) GetGame(ctx context.Context, idx uint64, block rpcblock.Block) (gameTypes.GameMetadata, error) {
@@ -127,6 +134,26 @@ func (f *DisputeGameFactoryContract) GetGameStatus(ctx context.Context, idx uint
 		return 0, fmt.Errorf("failed to create contract bindings for game %s: %w", game.Proxy, err)
 	}
 	return gameContract.GetStatus(ctx)
+}
+
+// GetGameStatusAtBlock returns a game's status from a snapshot pinned to block.
+func (f *DisputeGameFactoryContract) GetGameStatusAtBlock(ctx context.Context, idx uint64, block rpcblock.Block) (gameTypes.GameStatus, error) {
+	defer f.metrics.StartContractRequest("GetGameStatus")()
+	game, err := f.GetGame(ctx, idx, block)
+	if err != nil {
+		return 0, fmt.Errorf("failed to load game status: %w", err)
+	}
+
+	gameContract := batching.NewBoundContract(disputeGameStatusABI, game.Proxy)
+	result, err := f.multiCaller.SingleCall(ctx, block, gameContract.Call(methodStatus))
+	if err != nil {
+		return 0, fmt.Errorf("failed to load game status from game %s: %w", game.Proxy, err)
+	}
+	status, err := gameTypes.GameStatusFromUint8(result.GetUint8(0))
+	if err != nil {
+		return 0, fmt.Errorf("invalid status from game %s: %w", game.Proxy, err)
+	}
+	return status, nil
 }
 
 func (f *DisputeGameFactoryContract) getGameImpl(ctx context.Context, gameType gameTypes.GameType) (common.Address, error) {
@@ -267,19 +294,39 @@ func (f *DisputeGameFactoryContract) GetAllGames(ctx context.Context, blockHash 
 	return games, nil
 }
 
-func (f *DisputeGameFactoryContract) CreateTx(ctx context.Context, gameType uint32, outputRoot common.Hash, l2BlockNum uint64) (txmgr.TxCandidate, error) {
+func (f *DisputeGameFactoryContract) CreateTx(ctx context.Context, gameType uint32, outputRoot common.Hash, l2BlockNum uint64, l2ChainID uint64) (txmgr.TxCandidate, error) {
 	result, err := f.multiCaller.SingleCall(ctx, rpcblock.Latest, f.contract.Call(methodInitBonds, gameType))
 	if err != nil {
 		return txmgr.TxCandidate{}, fmt.Errorf("failed to fetch init bond: %w", err)
 	}
 	initBond := result.GetBigInt(0)
-	call := f.contract.Call(methodCreateGame, gameType, outputRoot, common.BigToHash(big.NewInt(int64(l2BlockNum))).Bytes())
+	rootClaim, extraData := createGameParams(gameType, outputRoot, l2BlockNum, l2ChainID)
+	call := f.contract.Call(methodCreateGame, gameType, rootClaim, extraData)
 	candidate, err := call.ToTxCandidate()
 	if err != nil {
 		return txmgr.TxCandidate{}, err
 	}
 	candidate.Value = initBond
 	return candidate, err
+}
+
+func createGameParams(gameType uint32, outputRoot common.Hash, l2BlockNum uint64, l2ChainID uint64) (common.Hash, []byte) {
+	switch gameTypes.GameType(gameType) {
+	case gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType:
+		extraData := encodeSuperRootProof(l2BlockNum, l2ChainID, outputRoot)
+		return crypto.Keccak256Hash(extraData), extraData
+	default:
+		return outputRoot, common.BigToHash(new(big.Int).SetUint64(l2BlockNum)).Bytes()
+	}
+}
+
+func encodeSuperRootProof(timestamp uint64, l2ChainID uint64, outputRoot common.Hash) []byte {
+	extraData := make([]byte, 1+8+32+32)
+	extraData[0] = 0x01
+	binary.BigEndian.PutUint64(extraData[1:9], timestamp)
+	copy(extraData[9:41], common.BigToHash(new(big.Int).SetUint64(l2ChainID)).Bytes())
+	copy(extraData[41:], outputRoot.Bytes())
+	return extraData
 }
 
 func (f *DisputeGameFactoryContract) DecodeDisputeGameCreatedLog(rcpt *ethTypes.Receipt) (common.Address, uint32, common.Hash, error) {

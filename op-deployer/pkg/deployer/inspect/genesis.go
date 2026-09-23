@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 	"github.com/urfave/cli/v2"
@@ -26,7 +27,12 @@ func GenesisCLI(cliCtx *cli.Context) error {
 		return fmt.Errorf("failed to read intent: %w", err)
 	}
 
-	l2Genesis, _, err := pipeline.RenderGenesisAndRollup(globalState, cfg.ChainID, nil)
+	intent, err := pipeline.ResolveRenderIntent(cfg.Workdir, globalState)
+	if err != nil {
+		return err
+	}
+
+	l2Genesis, _, err := pipeline.RenderGenesisAndRollup(globalState, cfg.ChainID, intent)
 	if err != nil {
 		return fmt.Errorf("failed to generate genesis block: %w", err)
 	}
@@ -73,7 +79,7 @@ func GenesisAndRollup(globalState *state.State, chainID common.Hash) (*core.Gene
 	rollupConfig, err := config.RollupConfig(
 		chainState.StartBlock.ToBlockRef(),
 		l2GenesisBlock.Hash(),
-		l2GenesisBlock.Number().Uint64(),
+		bigs.Uint64Strict(l2GenesisBlock.Number()),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build rollup config: %w", err)

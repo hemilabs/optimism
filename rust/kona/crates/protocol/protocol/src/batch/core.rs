@@ -42,7 +42,7 @@ impl Batch {
         }
 
         // Read the batch type
-        let batch_type = BatchType::from(r[0]);
+        let batch_type = BatchType::try_from(r[0]).map_err(BatchDecodingError::UnknownBatchType)?;
         r.advance(1);
 
         match batch_type {
@@ -85,6 +85,7 @@ mod tests {
     use crate::{SpanBatchElement, SpanBatchError, SpanBatchTransactions};
     use alloc::{vec, vec::Vec};
     use alloy_consensus::{Signed, TxEip2930, TxEnvelope};
+    use alloy_eips::eip2718::Encodable2718;
     use alloy_primitives::{Bytes, Signature, TxKind, address, hex};
 
     #[test]
@@ -107,7 +108,7 @@ mod tests {
         ));
         let mut span_batch_txs = SpanBatchTransactions::default();
         let mut buf = vec![];
-        tx.encode(&mut buf);
+        tx.encode_2718(&mut buf);
         let txs = vec![Bytes::from(buf)];
         let chain_id = 1;
         span_batch_txs.add_txs(txs, chain_id).unwrap();
@@ -129,6 +130,13 @@ mod tests {
             txs: SpanBatchTransactions::default(),
             ..Default::default()
         }), decoded);
+    }
+
+    #[test]
+    fn test_unknown_batch_type_returns_error() {
+        let data = [0xFF, 0x00]; // unknown batch type 0xFF followed by dummy data
+        let result = Batch::decode(&mut data.as_slice(), &RollupConfig::default());
+        assert_eq!(result, Err(BatchDecodingError::UnknownBatchType(0xFF)));
     }
 
     #[test]

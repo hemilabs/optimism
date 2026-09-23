@@ -5,9 +5,8 @@ import (
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
+	"github.com/ethereum-optimism/optimism/op-service/clock"
 )
-
-const supernodeInteropFlakyReason = "known flaky in the default acceptance run"
 
 // TestSupernodeInteropVerifiedAt tests that the VerifiedAt endpoint returns
 // correct data after the interop activity has processed timestamps.
@@ -56,7 +55,6 @@ func TestSupernodeInteropVerifiedAt(gt *testing.T) {
 // This proves the supernode waits for all chains' local safe heads before verifying.
 func TestSupernodeInteropChainLag(gt *testing.T) {
 	t := devtest.ParallelT(gt)
-	t.MarkFlaky(supernodeInteropFlakyReason)
 	sys := newSupernodeInteropWithTimeTravel(t, 0)
 
 	blockTime := sys.L2A.Escape().RollupConfig().BlockTime
@@ -106,7 +104,7 @@ func TestSupernodeInteropChainLag(gt *testing.T) {
 	stableFor := 0
 	start := time.Now()
 	for stableFor < 10 {
-		time.Sleep(time.Second)
+		t.Require().NoError(clock.SystemClock.SleepCtx(ctx, time.Second)) // nosemgrep: flake-sleep-in-test -- asserting absence of progress; no chain event to wait on
 		current := sys.L2BCL.SyncStatus()
 		if current.LocalSafeL2.Number == lastSafe {
 			stableFor++
@@ -138,7 +136,7 @@ func TestSupernodeInteropChainLag(gt *testing.T) {
 			break
 		}
 
-		time.Sleep(time.Second)
+		t.Require().NoError(clock.SystemClock.SleepCtx(ctx, time.Second)) // nosemgrep: flake-sleep-in-test -- asserting absence of progress; no chain event to wait on
 
 		// Check the state
 		newStatusA := sys.L2ACL.SyncStatus()

@@ -47,8 +47,12 @@ func (f *InputFetcher) FetchInputs(ctx context.Context, blockHash common.Hash, o
 		if err != nil {
 			return nil, fmt.Errorf("failed getting tx for block %v: %w", blockNum, err)
 		}
-		for _, tx := range block.Transactions() {
-			inputData, err := f.extractRelevantLeavesFromTx(ctx, oracle, tx, ident)
+		_, receipts, err := f.source.FetchReceipts(ctx, blockRef.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve receipts for block %v: %w", blockNum, err)
+		}
+		for _, rcpt := range receipts {
+			inputData, err := f.extractRelevantLeavesFromReceipt(&rcpt.Receipt, oracle, ident)
 			if err != nil {
 				return nil, err
 			}

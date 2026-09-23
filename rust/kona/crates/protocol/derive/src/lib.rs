@@ -24,8 +24,8 @@ pub use errors::{
 mod pipeline;
 pub use pipeline::{
     AttributesQueueStage, BatchProviderStage, BatchStreamStage, ChannelProviderStage,
-    ChannelReaderStage, DerivationPipeline, FrameQueueStage, IndexedAttributesQueueStage,
-    L1RetrievalStage, PipelineBuilder, PolledAttributesQueueStage,
+    ChannelReaderStage, DerivationPipeline, FrameQueueStage, L1RetrievalStage, PipelineBuilder,
+    PolledAttributesQueueStage,
 };
 
 mod sources;
@@ -35,15 +35,15 @@ mod stages;
 pub use stages::{
     AttributesQueue, BatchProvider, BatchQueue, BatchStream, BatchStreamProvider, BatchValidator,
     ChannelAssembler, ChannelBank, ChannelProvider, ChannelReader, ChannelReaderProvider,
-    FrameQueue, FrameQueueProvider, IndexedTraversal, L1Retrieval, L1RetrievalProvider,
-    NextBatchProvider, NextFrameProvider, PollingTraversal, TraversalStage,
+    FrameQueue, FrameQueueProvider, L1Retrieval, L1RetrievalProvider, NextBatchProvider,
+    NextFrameProvider, PollingTraversal,
 };
 
 mod traits;
 pub use traits::{
     AttributesBuilder, AttributesProvider, BatchValidationProviderDerive, BlobProvider,
     ChainProvider, DataAvailabilityProvider, L2ChainProvider, NextAttributes, OriginAdvancer,
-    OriginProvider, Pipeline, ResetProvider, SignalReceiver,
+    OriginProvider, Pipeline, ResetProvider, SignalReceiver, Stage,
 };
 
 mod types;

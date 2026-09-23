@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -41,15 +42,6 @@ func DecodeTransactions(data []hexutil.Bytes) ([]*types.Transaction, error) {
 	return dest, nil
 }
 
-// TransactionsToHashes computes the transaction-hash for every transaction in the input.
-func TransactionsToHashes(elems []*types.Transaction) []common.Hash {
-	out := make([]common.Hash, len(elems))
-	for i, el := range elems {
-		out[i] = el.Hash()
-	}
-	return out
-}
-
 // CheckRecentTxs checks the depth recent blocks for txs from the account with address addr
 // and returns either:
 //   - blockNum containing the last tx and true if any was found
@@ -79,12 +71,12 @@ func CheckRecentTxs(
 
 	if currentNonce == previousNonce {
 		// Most recent tx is older than the given depth
-		return oldestBlock.Uint64(), false, nil
+		return bigs.Uint64Strict(oldestBlock), false, nil
 	}
 
 	// Use binary search to find the block where the nonce changed
-	low := oldestBlock.Uint64()
-	high := currentBlock.Uint64()
+	low := bigs.Uint64Strict(oldestBlock)
+	high := bigs.Uint64Strict(currentBlock)
 
 	for low < high {
 		mid := (low + high) / 2
@@ -113,5 +105,5 @@ func CheckRecentTxs(
 			low = mid + 1
 		}
 	}
-	return oldestBlock.Uint64(), false, nil
+	return bigs.Uint64Strict(oldestBlock), false, nil
 }

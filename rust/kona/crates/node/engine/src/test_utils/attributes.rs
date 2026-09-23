@@ -87,6 +87,8 @@ impl TestAttributesBuilder {
                 suggested_fee_recipient: self.suggested_fee_recipient,
                 withdrawals: self.withdrawals,
                 parent_beacon_block_root: self.parent_beacon_block_root,
+                slot_number: Default::default(),
+                target_gas_limit: None,
             },
             transactions: self.transactions,
             no_tx_pool: self.no_tx_pool,

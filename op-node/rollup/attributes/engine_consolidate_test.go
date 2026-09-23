@@ -4,16 +4,16 @@ import (
 	"math/rand" // nosemgrep
 	"testing"
 
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/ethereum-optimism/optimism/op-core/eip1559"
 	"github.com/ethereum-optimism/optimism/op-core/forks"
+	opparams "github.com/ethereum-optimism/optimism/op-core/params"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -21,7 +21,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 )
 
-var defaultOpConfig = &params.OptimismConfig{
+var defaultOpConfig = &opparams.OptimismConfig{
 	EIP1559Elasticity:        6,
 	EIP1559Denominator:       50,
 	EIP1559DenominatorCanyon: ptr(uint64(250)),
@@ -49,7 +49,7 @@ func jovianArgs() matchArgs {
 		validTxData, _        = validTx.MarshalBinary()
 		minBaseFee            = uint64(1e9)
 
-		validJovianExtraData = eth.BytesMax32(rollup.EncodeJovianExtraData(
+		validJovianExtraData = eth.BytesMax32(eip1559.EncodeJovianExtraData(
 			*defaultOpConfig.EIP1559DenominatorCanyon, defaultOpConfig.EIP1559Elasticity, minBaseFee))
 		validJovianEIP1559Params = new(eth.Bytes8)
 	)
@@ -214,7 +214,8 @@ func createMismatchedFeeRecipient() matchArgs {
 
 func createMismatchedEIP1559Params() matchArgs {
 	args := holoceneArgs()
-	args.attrs.EIP1559Params[0]++ // so denominator is != 0
+	// Create valid but mismatched EIP-1559 params (both denominator and elasticity must be non-zero or both zero)
+	copy((*args.attrs.EIP1559Params)[:], eip1559.EncodeHolocene1559Params(999, 999))
 	return args
 }
 
@@ -575,7 +576,7 @@ func TestCheckEIP1559ParamsMatch(t *testing.T) {
 			desc:           "err-both-zero",
 			attrParams:     new(eth.Bytes8),
 			blockExtraData: make(eth.BytesMax32, 9),
-			err:            "eip1559 parameters do not match, attributes: 250, 6 (translated from 0,0), block: 0, 0",
+			err:            "invalid block extraData: holocene extraData must encode a non-zero denominator",
 		},
 		{
 			desc:           "err-invalid-params",
@@ -609,7 +610,8 @@ func TestCheckEIP1559ParamsMatch(t *testing.T) {
 				HoloceneTime:  &pastTime,
 				IsthmusTime:   &pastTime,
 				JovianTime:    &futureTime,
-				ChainOpConfig: defaultOpConfig}
+				ChainOpConfig: defaultOpConfig,
+			}
 			err := checkExtraDataParamsMatch(cfg, uint64(2), test.attrParams, nil, test.blockExtraData)
 			if test.err == "" {
 				require.NoError(t, err)
@@ -626,7 +628,7 @@ func TestGetMissingTxnHashes(t *testing.T) {
 	for i := 0; i < len(depositTxs); i++ {
 		rng := rand.New(rand.NewSource(1234 + int64(i)))
 		safeDeposit := testutils.GenerateDeposit(testutils.RandomHash(rng), rng)
-		depositTxs[i] = types.NewTx(safeDeposit)
+		depositTxs[i] = testutils.TxFromDeposit(safeDeposit)
 	}
 
 	tests := []struct {

@@ -10,9 +10,11 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/forge"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
@@ -22,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/urfave/cli/v2"
 )
@@ -33,15 +34,13 @@ type SuperchainConfig struct {
 	Logger           log.Logger
 	ArtifactsLocator *artifacts.Locator
 	CacheDir         string
+	UseForge         bool
 
 	privateKeyECDSA *ecdsa.PrivateKey
 
-	SuperchainProxyAdminOwner  common.Address
-	ProtocolVersionsOwner      common.Address
-	Guardian                   common.Address
-	Paused                     bool
-	RequiredProtocolVersion    params.ProtocolVersion
-	RecommendedProtocolVersion params.ProtocolVersion
+	SuperchainProxyAdminOwner common.Address
+	Guardian                  common.Address
+	Paused                    bool
 }
 
 func (c *SuperchainConfig) Check() error {
@@ -71,10 +70,6 @@ func (c *SuperchainConfig) Check() error {
 		return fmt.Errorf("superchain proxy admin owner must be specified")
 	}
 
-	if c.ProtocolVersionsOwner == (common.Address{}) {
-		return fmt.Errorf("protocol versions owner must be specified")
-	}
-
 	if c.Guardian == (common.Address{}) {
 		return fmt.Errorf("guardian must be specified")
 	}
@@ -96,40 +91,21 @@ func SuperchainCLI(cliCtx *cli.Context) error {
 	}
 
 	superchainProxyAdminOwner := common.HexToAddress(cliCtx.String(SuperchainProxyAdminOwnerFlagName))
-	protocolVersionsOwner := common.HexToAddress(cliCtx.String(ProtocolVersionsOwnerFlagName))
 	guardian := common.HexToAddress(cliCtx.String(GuardianFlagName))
 	paused := cliCtx.Bool(PausedFlagName)
-	requiredVersionStr := cliCtx.String(RequiredProtocolVersionFlagName)
-	recommendedVersionStr := cliCtx.String(RecommendedProtocolVersionFlagName)
 	outfile := cliCtx.String(OutfileFlagName)
 	cacheDir := cliCtx.String(deployer.CacheDirFlag.Name)
+	useForge := cliCtx.Bool(deployer.UseForgeFlagName)
 	cfg := SuperchainConfig{
 		L1RPCUrl:                  l1RPCUrl,
 		PrivateKey:                privateKey,
 		Logger:                    l,
 		ArtifactsLocator:          artifactsLocator,
 		CacheDir:                  cacheDir,
+		UseForge:                  useForge,
 		SuperchainProxyAdminOwner: superchainProxyAdminOwner,
-		ProtocolVersionsOwner:     protocolVersionsOwner,
 		Guardian:                  guardian,
 		Paused:                    paused,
-	}
-
-	// Default to op-geth params.OPStackSupport if not specified for required and recommended protocolversions
-	if requiredVersionStr != "" {
-		if err := cfg.RequiredProtocolVersion.UnmarshalText([]byte(requiredVersionStr)); err != nil {
-			return fmt.Errorf("failed to parse required protocol version: %w", err)
-		}
-	} else {
-		cfg.RequiredProtocolVersion = params.OPStackSupport
-	}
-
-	if recommendedVersionStr != "" {
-		if err := cfg.RecommendedProtocolVersion.UnmarshalText([]byte(recommendedVersionStr)); err != nil {
-			return fmt.Errorf("failed to parse recommended protocol version: %w", err)
-		}
-	} else {
-		cfg.RecommendedProtocolVersion = params.OPStackSupport
 	}
 
 	ctx := ctxinterrupt.WithCancelOnInterrupt(cliCtx.Context)
@@ -142,41 +118,48 @@ func SuperchainCLI(cliCtx *cli.Context) error {
 		return fmt.Errorf("failed to write output: %w", err)
 	}
 
-	if !cliCtx.Bool(deployer.AutoVerifyFlag.Name) {
+	if cliCtx.Bool(deployer.NoVerifyFlag.Name) {
+		l.Warn("Contract verification skipped", "reason", "--no-verify was set")
 		return nil
 	}
 
 	verifyFile := outfile
-	if verifyFile == "" || verifyFile == "-" {
-		tmpFile, err := os.CreateTemp("", "op-deployer-superchain-*.json")
+	if err := func() error {
+		if verifyFile == "" || verifyFile == "-" {
+			tmpFile, err := os.CreateTemp("", "op-deployer-superchain-*.json")
+			if err != nil {
+				return fmt.Errorf("failed to create temp file for verification: %w", err)
+			}
+			tmpPath := tmpFile.Name()
+			tmpFile.Close()
+			defer os.Remove(tmpPath)
+			verifyFile = tmpPath
+			if err := jsonutil.WriteJSON(dso, ioutil.ToBasicFile(tmpPath, 0o644)); err != nil {
+				return fmt.Errorf("failed to write temp file for verification: %w", err)
+			}
+		}
+
+		chainID, err := deployer.ChainIDFromRPC(ctx, l1RPCUrl)
 		if err != nil {
-			return fmt.Errorf("failed to create temp file for verification: %w", err)
+			return fmt.Errorf("failed to get chain ID: %w", err)
 		}
-		tmpPath := tmpFile.Name()
-		tmpFile.Close()
-		defer os.Remove(tmpPath)
-		verifyFile = tmpPath
-		if err := jsonutil.WriteJSON(dso, ioutil.ToBasicFile(tmpPath, 0o644)); err != nil {
-			return fmt.Errorf("failed to write temp file for verification: %w", err)
-		}
-	}
 
-	chainID, err := deployer.ChainIDFromRPC(ctx, l1RPCUrl)
-	if err != nil {
-		return fmt.Errorf("failed to get chain ID: %w", err)
+		return verify.AutoVerify(
+			ctx,
+			l,
+			l1RPCUrl,
+			bigs.Uint64Strict(chainID),
+			verifyFile,
+			outfile,
+			cfg.ArtifactsLocator,
+			cliCtx.String(deployer.VerifierTypeFlagName),
+			cliCtx.String(deployer.VerifierUrlFlagName),
+			cliCtx.String(deployer.VerifierAPIKeyFlagName),
+		)
+	}(); err != nil {
+		verify.LogAutoVerifyFailure(l, outfile, err)
 	}
-
-	return verify.AutoVerify(
-		ctx,
-		l,
-		l1RPCUrl,
-		chainID.Uint64(),
-		verifyFile,
-		cfg.ArtifactsLocator,
-		cliCtx.String(deployer.VerifierTypeFlagName),
-		cliCtx.String(deployer.VerifierUrlFlagName),
-		cliCtx.String(deployer.VerifierAPIKeyFlagName),
-	)
+	return nil
 }
 
 func Superchain(ctx context.Context, cfg SuperchainConfig) (opcm.DeploySuperchainOutput, error) {
@@ -193,68 +176,84 @@ func Superchain(ctx context.Context, cfg SuperchainConfig) (opcm.DeploySuperchai
 		return dso, fmt.Errorf("failed to download artifacts: %w", err)
 	}
 
-	l1Client, err := ethclient.Dial(cfg.L1RPCUrl)
-	if err != nil {
-		return dso, fmt.Errorf("failed to connect to L1 RPC: %w", err)
+	input := opcm.DeploySuperchainInput{
+		SuperchainProxyAdminOwner: cfg.SuperchainProxyAdminOwner,
+		Guardian:                  cfg.Guardian,
+		Paused:                    cfg.Paused,
 	}
 
-	chainID, err := l1Client.ChainID(ctx)
-	if err != nil {
-		return dso, fmt.Errorf("failed to get chain ID: %w", err)
-	}
+	if cfg.UseForge {
+		lgr.Info("using Forge for DeploySuperchain")
+		forgeClient, err := forge.NewStandardClient(fmt.Sprintf("%v", artifactsFS))
+		if err != nil {
+			return dso, fmt.Errorf("failed to create forge client: %w", err)
+		}
 
-	signer := opcrypto.SignerFnFromBind(opcrypto.PrivateKeySignerFn(cfg.privateKeyECDSA, chainID))
-	chainDeployer := crypto.PubkeyToAddress(cfg.privateKeyECDSA.PublicKey)
+		forgeEnv := &opcm.ForgeEnv{
+			Client:     forgeClient,
+			Context:    ctx,
+			L1RPCUrl:   cfg.L1RPCUrl,
+			PrivateKey: cfg.PrivateKey,
+		}
+		dso, err = opcm.DeploySuperchainViaForge(forgeEnv, input)
+		if err != nil {
+			return dso, err
+		}
+	} else {
+		l1Client, err := ethclient.Dial(cfg.L1RPCUrl)
+		if err != nil {
+			return dso, fmt.Errorf("failed to connect to L1 RPC: %w", err)
+		}
 
-	bcaster, err := broadcaster.NewKeyedBroadcaster(broadcaster.KeyedBroadcasterOpts{
-		Logger:  lgr,
-		ChainID: chainID,
-		Client:  l1Client,
-		Signer:  signer,
-		From:    chainDeployer,
-	})
-	if err != nil {
-		return dso, fmt.Errorf("failed to create broadcaster: %w", err)
-	}
+		chainID, err := l1Client.ChainID(ctx)
+		if err != nil {
+			return dso, fmt.Errorf("failed to get chain ID: %w", err)
+		}
 
-	l1RPC, err := rpc.Dial(cfg.L1RPCUrl)
-	if err != nil {
-		return dso, fmt.Errorf("failed to connect to L1 RPC: %w", err)
-	}
+		signer := opcrypto.SignerFnFromBind(opcrypto.PrivateKeySignerFn(cfg.privateKeyECDSA, chainID))
+		chainDeployer := crypto.PubkeyToAddress(cfg.privateKeyECDSA.PublicKey)
 
-	l1Host, err := env.DefaultForkedScriptHost(
-		ctx,
-		bcaster,
-		lgr,
-		chainDeployer,
-		artifactsFS,
-		l1RPC,
-	)
-	if err != nil {
-		return dso, fmt.Errorf("failed to create script host: %w", err)
-	}
+		bcaster, err := broadcaster.NewKeyedBroadcaster(broadcaster.KeyedBroadcasterOpts{
+			Logger:  lgr,
+			ChainID: chainID,
+			Client:  l1Client,
+			Signer:  signer,
+			From:    chainDeployer,
+		})
+		if err != nil {
+			return dso, fmt.Errorf("failed to create broadcaster: %w", err)
+		}
 
-	opcmScripts, err := opcm.NewScripts(l1Host)
-	if err != nil {
-		return dso, fmt.Errorf("failed to load OPCM scripts: %w", err)
-	}
+		l1RPC, err := rpc.Dial(cfg.L1RPCUrl)
+		if err != nil {
+			return dso, fmt.Errorf("failed to connect to L1 RPC: %w", err)
+		}
 
-	dso, err = opcmScripts.DeploySuperchain.Run(
-		opcm.DeploySuperchainInput{
-			SuperchainProxyAdminOwner:  cfg.SuperchainProxyAdminOwner,
-			ProtocolVersionsOwner:      cfg.ProtocolVersionsOwner,
-			Guardian:                   cfg.Guardian,
-			Paused:                     cfg.Paused,
-			RequiredProtocolVersion:    cfg.RequiredProtocolVersion,
-			RecommendedProtocolVersion: cfg.RecommendedProtocolVersion,
-		},
-	)
-	if err != nil {
-		return dso, fmt.Errorf("error deploying superchain: %w", err)
-	}
+		l1Host, err := env.DefaultForkedScriptHost(
+			ctx,
+			bcaster,
+			lgr,
+			chainDeployer,
+			artifactsFS,
+			l1RPC,
+		)
+		if err != nil {
+			return dso, fmt.Errorf("failed to create script host: %w", err)
+		}
 
-	if _, err := bcaster.Broadcast(ctx); err != nil {
-		return dso, fmt.Errorf("failed to broadcast: %w", err)
+		opcmScripts, err := opcm.NewScripts(l1Host)
+		if err != nil {
+			return dso, fmt.Errorf("failed to load OPCM scripts: %w", err)
+		}
+
+		dso, err = opcmScripts.DeploySuperchain.Run(input)
+		if err != nil {
+			return dso, fmt.Errorf("error deploying superchain: %w", err)
+		}
+
+		if _, err := bcaster.Broadcast(ctx); err != nil {
+			return dso, fmt.Errorf("failed to broadcast: %w", err)
+		}
 	}
 
 	lgr.Info("deployed superchain configuration")

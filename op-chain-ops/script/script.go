@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"regexp"
 	"strings"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/addresses"
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/forking"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/srcmap"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 )
 
 // jumpHistory is the amount of successful jumps to track for debugging.
@@ -117,6 +119,9 @@ type Host struct {
 	// useCreate2Deployer uses the Create2Deployer for broadcasted
 	// create2 calls.
 	useCreate2Deployer bool
+
+	// noMaxCodeSize disables the maximum contract bytecode size check.
+	noMaxCodeSize bool
 }
 
 type HostOption func(h *Host)
@@ -158,6 +163,15 @@ func WithIsolatedBroadcasts() HostOption {
 func WithCreate2Deployer() HostOption {
 	return func(h *Host) {
 		h.useCreate2Deployer = true
+	}
+}
+
+// WithNoMaxCodeSize disables the maximum contract bytecode size check.
+// This is useful for development environments where contracts may be compiled
+// without optimizations and exceed the standard 24KB limit.
+func WithNoMaxCodeSize() HostOption {
+	return func(h *Host) {
+		h.noMaxCodeSize = true
 	}
 }
 
@@ -228,7 +242,6 @@ func NewHost(
 		GraniteTime:  nil,
 		HoloceneTime: nil,
 		JovianTime:   nil,
-		InteropTime:  nil,
 		Optimism:     nil,
 	}
 
@@ -266,14 +279,12 @@ func NewHost(
 		BlobBaseFee: big.NewInt(0),
 		Random:      &executionContext.PrevRandao,
 	}
-
 	// Initialize a transaction-context for the EVM to access environment variables.
 	// The transaction context (after embedding inside of the EVM environment) may be mutated later.
 	txContext := vm.TxContext{
 		Origin:       executionContext.Origin,
-		GasPrice:     big.NewInt(0),
+		GasPrice:     big.NewInt(0), // hemi: pinned op-geth uses *big.Int
 		BlobHashes:   executionContext.BlobHashes,
-		BlobFeeCap:   big.NewInt(0),
 		AccessEvents: state.NewAccessEvents(h.baseState.PointCache()),
 	}
 
@@ -297,6 +308,11 @@ func NewHost(
 
 	h.env = WrapEVM(vm.NewEVM(blockContext, h.state, h.chainCfg, vmCfg))
 	h.env.SetTxContext(txContext)
+
+	// Apply noMaxCodeSize after EVM is initialized
+	if h.noMaxCodeSize {
+		h.EnforceMaxCodeSize(false)
+	}
 
 	return h
 }
@@ -348,17 +364,36 @@ func (h *Host) prelude(from common.Address, to *common.Address) {
 	h.env.StateDB().Prepare(rules, from, evmC.Coinbase, to, activePrecompiles, nil)
 }
 
+// expectedRevertPanicRe matches the panic go-ethereum's state journal raises when a
+// snapshot revision cannot be reverted, e.g. "revision id 36 cannot be reverted".
+// Forge scripts trigger this as ordinary control flow, so Host.Call swallows it into
+// a regular revert error.
+var expectedRevertPanicRe = regexp.MustCompile(`revision id \d+ cannot be reverted`)
+
+// isExpectedRevertPanic reports whether a recovered panic value is the expected
+// state-snapshot revert that Host.Call turns into an "execution reverted" error
+// rather than re-panicking. The panic value may be a string or an error.
+func isExpectedRevertPanic(r any) bool {
+	var msg string
+	switch v := r.(type) {
+	case string:
+		msg = v
+	case error:
+		msg = v.Error()
+	default:
+		return false
+	}
+	return expectedRevertPanicRe.MatchString(strings.ToLower(msg))
+}
+
 // Call calls a contract in the EVM. The state changes persist.
 func (h *Host) Call(from common.Address, to common.Address, input []byte, gas uint64, value *uint256.Int) (returnData []byte, leftOverGas uint64, err error) {
 	h.prelude(from, &to)
 
 	defer func() {
 		if r := recover(); r != nil {
-			// Cast to a string to check the error message. If it's not a string it's
-			// an unexpected panic and we should re-raise it.
-			rStr, ok := r.(string)
-			if !ok || !strings.Contains(strings.ToLower(rStr), "revision id 1") {
-				fmt.Println("panic", rStr)
+			if !isExpectedRevertPanic(r) {
+				fmt.Println("panic", r)
 				panic(r)
 			}
 
@@ -767,7 +802,7 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 	baseState := h.baseState
 	// We have to commit the existing state to the trie,
 	// for all the state-changes to be captured by the trie iterator.
-	root, err := baseState.Commit(h.env.Context().BlockNumber.Uint64(), true, false)
+	root, err := baseState.Commit(bigs.Uint64Strict(h.env.Context().BlockNumber), true, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit state: %w", err)
 	}

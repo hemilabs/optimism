@@ -18,10 +18,9 @@ import (
 // TestWrapETH checks WETH interactions, testing both reading and writing on the chain.
 // This demonstrates the usage of DSL for contract bindings
 func TestWrapETH(gt *testing.T) {
-	gt.Skip("Skipping Interop Acceptance Test")
 	t := devtest.ParallelT(gt)
 	require := t.Require()
-	sys := presets.NewMinimal(t)
+	sys := presets.NewMinimalNoFaultProofs(t)
 
 	// alice and bob are funded with 0.1 ETH
 	alice := sys.FunderL2.NewFundedEOA(eth.OneTenthEther)

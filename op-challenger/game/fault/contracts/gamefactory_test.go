@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,23 +136,55 @@ func TestLoadGame(t *testing.T) {
 
 func TestGetGameStatus(t *testing.T) {
 	for _, version := range factoryVersions {
-		t.Run(version.String(), func(t *testing.T) {
-			stubRpc, factory := setupDisputeGameFactoryTest(t, version)
-			game0 := gameTypes.GameMetadata{
-				Index:     0,
-				GameType:  0,
-				Timestamp: 1234,
-				Proxy:     common.Address{0xaa},
-			}
-			expectGetGame(stubRpc, 0, rpcblock.Latest, game0)
-			stubRpc.AddContract(game0.Proxy, snapshots.LoadFaultDisputeGameABI())
-			expectedStatus := gameTypes.GameStatusChallengerWon
-			stubRpc.SetResponse(game0.Proxy, methodVersion, rpcblock.Latest, nil, []interface{}{versLatest})
-			stubRpc.SetResponse(game0.Proxy, methodStatus, rpcblock.Latest, nil, []interface{}{expectedStatus})
-			actual, err := factory.GetGameStatus(context.Background(), 0)
-			require.NoError(t, err)
-			require.Equal(t, expectedStatus, actual)
-		})
+		for _, test := range []struct {
+			name        string
+			block       rpcblock.Block
+			usesBinding bool
+			call        func(*DisputeGameFactoryContract) (gameTypes.GameStatus, error)
+		}{
+			{
+				name:        "latest wrapper",
+				block:       rpcblock.Latest,
+				usesBinding: true,
+				call: func(factory *DisputeGameFactoryContract) (gameTypes.GameStatus, error) {
+					return factory.GetGameStatus(context.Background(), 0)
+				},
+			},
+			{
+				name:  "pinned number",
+				block: rpcblock.ByNumber(123),
+				call: func(factory *DisputeGameFactoryContract) (gameTypes.GameStatus, error) {
+					return factory.GetGameStatusAtBlock(context.Background(), 0, rpcblock.ByNumber(123))
+				},
+			},
+			{
+				name:  "pinned hash",
+				block: rpcblock.ByHash(common.Hash{0x12, 0x34}),
+				call: func(factory *DisputeGameFactoryContract) (gameTypes.GameStatus, error) {
+					return factory.GetGameStatusAtBlock(context.Background(), 0, rpcblock.ByHash(common.Hash{0x12, 0x34}))
+				},
+			},
+		} {
+			t.Run(version.String()+"/"+test.name, func(t *testing.T) {
+				stubRpc, factory := setupDisputeGameFactoryTest(t, version)
+				game0 := gameTypes.GameMetadata{
+					Index:     0,
+					GameType:  0,
+					Timestamp: 1234,
+					Proxy:     common.Address{0xaa},
+				}
+				expectGetGame(stubRpc, 0, test.block, game0)
+				stubRpc.AddContract(game0.Proxy, snapshots.LoadFaultDisputeGameABI())
+				expectedStatus := gameTypes.GameStatusChallengerWon
+				if test.usesBinding {
+					stubRpc.SetResponse(game0.Proxy, methodVersion, rpcblock.Latest, nil, []interface{}{versLatest})
+				}
+				stubRpc.SetResponse(game0.Proxy, methodStatus, test.block, nil, []interface{}{expectedStatus})
+				actual, err := test.call(factory)
+				require.NoError(t, err)
+				require.Equal(t, expectedStatus, actual)
+			})
+		}
 	}
 }
 
@@ -472,7 +506,33 @@ func TestCreateTx(t *testing.T) {
 			bond := big.NewInt(49284294829)
 			stubRpc.SetResponse(factoryAddr, methodInitBonds, rpcblock.Latest, []interface{}{gameType}, []interface{}{bond})
 			stubRpc.SetResponse(factoryAddr, methodCreateGame, rpcblock.Latest, []interface{}{gameType, outputRoot, l2BlockNum}, nil)
-			tx, err := factory.CreateTx(context.Background(), gameType, outputRoot, uint64(456))
+			tx, err := factory.CreateTx(context.Background(), gameType, outputRoot, uint64(456), uint64(0))
+			require.NoError(t, err)
+			stubRpc.VerifyTxCandidate(tx)
+			require.NotNil(t, tx.Value)
+			require.Truef(t, bond.Cmp(tx.Value) == 0, "Expected bond %v but was %v", bond, tx.Value)
+		})
+	}
+}
+
+func TestCreateTxSuperGame(t *testing.T) {
+	for _, version := range factoryVersions {
+		t.Run(version.String(), func(t *testing.T) {
+			stubRpc, factory := setupDisputeGameFactoryTest(t, version)
+			gameType := uint32(gameTypes.SuperCannonKonaGameType)
+			outputRoot := common.Hash{0x01}
+			l2BlockNum := uint64(456)
+			l2ChainID := uint64(11155420)
+			extraData := make([]byte, 1+8+32+32)
+			extraData[0] = 0x01
+			binary.BigEndian.PutUint64(extraData[1:9], l2BlockNum)
+			copy(extraData[9:41], common.BigToHash(new(big.Int).SetUint64(l2ChainID)).Bytes())
+			copy(extraData[41:], outputRoot.Bytes())
+			rootClaim := crypto.Keccak256Hash(extraData)
+			bond := big.NewInt(49284294829)
+			stubRpc.SetResponse(factoryAddr, methodInitBonds, rpcblock.Latest, []interface{}{gameType}, []interface{}{bond})
+			stubRpc.SetResponse(factoryAddr, methodCreateGame, rpcblock.Latest, []interface{}{gameType, rootClaim, extraData}, nil)
+			tx, err := factory.CreateTx(context.Background(), gameType, outputRoot, l2BlockNum, l2ChainID)
 			require.NoError(t, err)
 			stubRpc.VerifyTxCandidate(tx)
 			require.NotNil(t, tx.Value)

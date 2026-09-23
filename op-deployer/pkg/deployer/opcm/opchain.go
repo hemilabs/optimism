@@ -2,6 +2,7 @@ package opcm
 
 import (
 	_ "embed"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
@@ -9,13 +10,31 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// PermissionedGameStartingAnchorRoot is a root of bytes32(hex"dead") for the permissioned game at block 0,
-// and no root for the permissionless game.
-var PermissionedGameStartingAnchorRoot = []byte{
-	0xde, 0xad, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+// PermissionedCannonFallbackPrestatePlaceholder matches the historical bytes32(hex"dead") anchor.
+// Kona prestates cannot select it.
+var PermissionedCannonFallbackPrestatePlaceholder = common.HexToHash(
+	"0xdead000000000000000000000000000000000000000000000000000000000000",
+)
+
+// PermissionedGameStartingAnchorRoot contains the permissioned placeholder at block 0 and no permissionless root.
+var PermissionedGameStartingAnchorRoot = append(
+	PermissionedCannonFallbackPrestatePlaceholder.Bytes(),
+	make([]byte, common.HashLength)...,
+)
+
+// Proposal mirrors the Solidity Proposal tuple used for the starting anchor root.
+type Proposal struct {
+	Root             common.Hash
+	L2SequenceNumber *big.Int
+}
+
+// DefaultStartingAnchorProposal returns the permissioned placeholder proposal.
+// Each call returns an independent sequence number that callers may safely mutate.
+func DefaultStartingAnchorProposal() Proposal {
+	return Proposal{
+		Root:             DefaultStartingAnchorRoot.Root,
+		L2SequenceNumber: new(big.Int),
+	}
 }
 
 type DeployOPChainInput struct {
@@ -33,8 +52,13 @@ type DeployOPChainInput struct {
 	SaltMixer         string
 	GasLimit          uint64
 
-	DisputeGameType              uint32
-	DisputeAbsolutePrestate      common.Hash
+	DisputeGameType         uint32
+	DisputeAbsolutePrestate common.Hash // Selected game prestate.
+	StartingAnchorRoot      Proposal
+	// CannonAbsolutePrestate configures the CANNON_KONA guardian fallback.
+	// PERMISSIONED_CANNON mirrors the selected prestate. The super types (SUPER_CANNON_KONA,
+	// SUPER_PERMISSIONED) leave it zero.
+	CannonAbsolutePrestate       common.Hash
 	DisputeMaxGameDepth          *big.Int
 	DisputeSplitDepth            *big.Int
 	DisputeClockExtension        uint64
@@ -43,6 +67,7 @@ type DeployOPChainInput struct {
 
 	OperatorFeeScalar   uint32
 	OperatorFeeConstant uint64
+	SuperchainConfig    common.Address
 
 	UseCustomGasToken bool
 }
@@ -91,14 +116,12 @@ type ReadImplementationAddressesInput struct {
 	L1StandardBridgeProxy             common.Address
 	OptimismPortalProxy               common.Address
 	DisputeGameFactoryProxy           common.Address
-	DelayedWETHPermissionedGameProxy  common.Address
 	Opcm                              common.Address
 }
 
 type ReadImplementationAddressesOutput struct {
 	DelayedWETH                  common.Address
 	OptimismPortal               common.Address
-	OptimismPortalInterop        common.Address
 	EthLockbox                   common.Address `evm:"ethLockbox"`
 	SystemConfig                 common.Address
 	AnchorStateRegistry          common.Address
@@ -109,15 +132,14 @@ type ReadImplementationAddressesOutput struct {
 	DisputeGameFactory           common.Address
 	MipsSingleton                common.Address
 	PreimageOracleSingleton      common.Address
-	FaultDisputeGameV2           common.Address
-	PermissionedDisputeGameV2    common.Address
+	FaultDisputeGame             common.Address
+	PermissionedDisputeGame      common.Address
 	SuperFaultDisputeGame        common.Address
 	SuperPermissionedDisputeGame common.Address
-	OpcmDeployer                 common.Address
-	OpcmUpgrader                 common.Address
-	OpcmGameTypeAdder            common.Address
+	ZkDisputeGame                common.Address
 	OpcmStandardValidator        common.Address
 	OpcmInteropMigrator          common.Address
+	SP1PlonkAdapter              common.Address `evm:"sp1PlonkAdapter" abi:"sp1PlonkAdapter"`
 }
 
 type ReadImplementationAddressesScript script.DeployScriptWithOutput[ReadImplementationAddressesInput, ReadImplementationAddressesOutput]
@@ -135,4 +157,34 @@ func NewReadImplementationAddressesForgeCaller(client *forge.Client) forge.Scrip
 		&forge.BytesScriptEncoder[ReadImplementationAddressesInput]{TypeName: "ReadImplementationAddressesInput"},
 		&forge.BytesScriptDecoder[ReadImplementationAddressesOutput]{TypeName: "ReadImplementationAddressesOutput"},
 	)
+}
+
+// DeployOPChainViaForge deploys OP Chain contracts using Forge
+func DeployOPChainViaForge(env *ForgeEnv, input DeployOPChainInput) (DeployOPChainOutput, error) {
+	var output DeployOPChainOutput
+	if err := env.validate(true); err != nil {
+		return output, err
+	}
+	forgeCaller := NewDeployOPChainForgeCaller(env.Client)
+	var err error
+	output, _, err = forgeCaller(env.Context, input, env.buildForgeOpts()...)
+	if err != nil {
+		return output, fmt.Errorf("failed to deploy OP Chain with Forge: %w", err)
+	}
+	return output, nil
+}
+
+// ReadImplementationAddressesViaForge reads implementation addresses using Forge
+func ReadImplementationAddressesViaForge(env *ForgeEnv, input ReadImplementationAddressesInput) (ReadImplementationAddressesOutput, error) {
+	var output ReadImplementationAddressesOutput
+	if err := env.validate(false); err != nil {
+		return output, err
+	}
+	forgeCaller := NewReadImplementationAddressesForgeCaller(env.Client)
+	var err error
+	output, _, err = forgeCaller(env.Context, input, env.buildForgeOptsReadOnly()...)
+	if err != nil {
+		return output, fmt.Errorf("failed to run ReadImplementationAddresses with Forge: %w", err)
+	}
+	return output, nil
 }

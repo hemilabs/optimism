@@ -22,10 +22,10 @@ func DefaultGasPriceEstimatorFn(ctx context.Context, backend ETHBackend) (*big.I
 		return nil, nil, nil, errors.New("txmgr does not support pre-london blocks that do not have a base fee")
 	}
 
-	blobFee, err := backend.BlobBaseFee(ctx)
+	blobBaseFee, err := backend.BlobBaseFee(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	return tip, head.BaseFee, blobFee, nil
+	return tip, head.BaseFee, blobBaseFee, nil
 }

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -75,6 +76,22 @@ type L1DevGenesisParams struct {
 	// genesis time.
 	BPO2TimeOffset *uint64 `json:"bpo2TimeOffset" toml:"bpo2TimeOffset"`
 
+	// BPO3TimeOffset configures the BPO3 fork to be activated at the given time after L1 dev
+	// genesis time.
+	BPO3TimeOffset *uint64 `json:"bpo3TimeOffset" toml:"bpo3TimeOffset"`
+
+	// BPO4TimeOffset configures the BPO4 fork to be activated at the given time after L1 dev
+	// genesis time.
+	BPO4TimeOffset *uint64 `json:"bpo4TimeOffset" toml:"bpo4TimeOffset"`
+
+	// BPO5TimeOffset configures the BPO5 fork to be activated at the given time after L1 dev
+	// genesis time.
+	BPO5TimeOffset *uint64 `json:"bpo5TimeOffset" toml:"bpo5TimeOffset"`
+
+	// AmsterdamTimeOffset configures Amsterdam (the EL changes in the Glamsterdam Ethereum
+	// fork) to be activated at the given time after L1 dev genesis time.
+	AmsterdamTimeOffset *uint64 `json:"amsterdamTimeOffset" toml:"amsterdamTimeOffset"`
+
 	BlobSchedule *params.BlobScheduleConfig `json:"blobSchedule"`
 
 	// Prefund is a map of addresses to balances (in wei), to prefund in the L1 dev genesis state.
@@ -94,6 +111,7 @@ type Intent struct {
 	L2ContractsLocator    *artifacts.Locator         `json:"l2ContractsLocator" toml:"l2ContractsLocator"`
 	Chains                []*ChainIntent             `json:"chains" toml:"chains"`
 	GlobalDeployOverrides map[string]any             `json:"globalDeployOverrides" toml:"globalDeployOverrides"`
+	UseInterop            bool                       `json:"useInterop" toml:"useInterop"`
 
 	// L1DevGenesisParams is optional. This may be used to customize the L1 genesis when
 	// the deployer output is directed to produce a L1 genesis state for development.
@@ -103,6 +121,7 @@ type Intent struct {
 var (
 	ErrL1ContractsLocatorUndefined = errors.New("L1ContractsLocator undefined")
 	ErrL2ContractsLocatorUndefined = errors.New("L2ContractsLocator undefined")
+	ErrPAOMustBeSpecified          = errors.New("l1ProxyAdminOwner and l2ProxyAdminOwner must be specified in intent.toml - they are not set by default")
 )
 
 func (c *Intent) L1ChainIDBig() *big.Int {
@@ -169,6 +188,9 @@ func (c *Intent) validateStandardValues() error {
 	}
 
 	for _, chain := range c.Chains {
+		if chain.Roles.L1ProxyAdminOwner == emptyAddress || chain.Roles.L2ProxyAdminOwner == emptyAddress {
+			return fmt.Errorf("%w", ErrPAOMustBeSpecified)
+		}
 		if err := chain.Check(); err != nil {
 			return err
 		}
@@ -183,24 +205,27 @@ func (c *Intent) validateStandardValues() error {
 		if len(chain.AdditionalDisputeGames) > 0 {
 			return fmt.Errorf("%w: chainId=%s additionalDisputeGames must be nil", ErrNonStandardValue, chain.ID)
 		}
-		if chain.UseRevenueShare {
-			if chain.ChainFeesRecipient == emptyAddress {
-				return fmt.Errorf("%w: chainId=%s", ErrRevenueShareZeroAddress, chain.ID)
-			}
-		}
 		if chain.IsCustomGasTokenEnabled() {
 			return fmt.Errorf("%w: chainId=%s custom gas token must be disabled for standard chains", ErrNonStandardValue, chain.ID)
 		}
 	}
 
+	if c.UseInterop {
+		return fmt.Errorf("%w: useInterop must be disabled for standard chains", ErrNonStandardValue)
+	}
+
 	challenger, _ := standard.ChallengerAddressFor(c.L1ChainID)
 	l1ProxyAdminOwner, _ := standard.L1ProxyAdminOwner(c.L1ChainID)
+	l2ProxyAdminOwner, _ := standard.L2ProxyAdminOwner(c.L1ChainID)
 	for chainIndex := range c.Chains {
 		if c.Chains[chainIndex].Roles.Challenger != challenger {
 			return fmt.Errorf("invalid challenger address for chain: %s", c.Chains[chainIndex].ID)
 		}
 		if c.Chains[chainIndex].Roles.L1ProxyAdminOwner != l1ProxyAdminOwner {
 			return fmt.Errorf("invalid l1ProxyAdminOwner address for chain: %s", c.Chains[chainIndex].ID)
+		}
+		if c.Chains[chainIndex].Roles.L2ProxyAdminOwner != l2ProxyAdminOwner {
+			return fmt.Errorf("invalid l2ProxyAdminOwner address for chain: %s", c.Chains[chainIndex].ID)
 		}
 	}
 
@@ -216,14 +241,9 @@ func GetStandardSuperchainRoles(l1ChainId uint64) (*addresses.SuperchainRoles, e
 	if err != nil {
 		return nil, fmt.Errorf("error getting guardian address: %w", err)
 	}
-	protocolVersionsOwner, err := standard.ProtocolVersionsOwner(l1ChainId)
-	if err != nil {
-		return nil, fmt.Errorf("error getting protocol versions owner: %w", err)
-	}
 
 	superchainRoles := &addresses.SuperchainRoles{
 		SuperchainProxyAdminOwner: proxyAdminOwner,
-		ProtocolVersionsOwner:     protocolVersionsOwner,
 		SuperchainGuardian:        guardian,
 	}
 
@@ -273,6 +293,19 @@ func (c *Intent) Chain(id common.Hash) (*ChainIntent, error) {
 
 func (c *Intent) WriteToFile(path string) error {
 	return jsonutil.WriteTOML(c, ioutil.ToAtomicFile(path, 0o755))
+}
+
+// Clone returns a deep copy of the intent, detached from the receiver's pointers.
+func (c *Intent) Clone() (*Intent, error) {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode intent: %w", err)
+	}
+	var clone Intent
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return nil, fmt.Errorf("failed to decode intent: %w", err)
+	}
+	return &clone, nil
 }
 
 func (c *Intent) checkL1Prod() error {
@@ -360,14 +393,8 @@ func NewIntentStandard(l1ChainId uint64, l2ChainIds []common.Hash) (Intent, erro
 	if err != nil {
 		return Intent{}, fmt.Errorf("error getting challenger address: %w", err)
 	}
-	l1ProxyAdminOwner, err := standard.L1ProxyAdminOwner(l1ChainId)
-	if err != nil {
-		return Intent{}, fmt.Errorf("error getting L1ProxyAdminOwner: %w", err)
-	}
-	l2ProxyAdminOwner, err := standard.L2ProxyAdminOwner(l1ChainId)
-	if err != nil {
-		return Intent{}, fmt.Errorf("error getting OpChainProxyAdminOwner: %w", err)
-	}
+	// L1ProxyAdminOwner and L2ProxyAdminOwner are not set by default - users must specify them manually
+	// in intent.toml before deployment.
 
 	for _, l2ChainID := range l2ChainIds {
 		intent.Chains = append(intent.Chains, &ChainIntent{
@@ -378,10 +405,9 @@ func NewIntentStandard(l1ChainId uint64, l2ChainIds []common.Hash) (Intent, erro
 			GasLimit:                 standard.GasLimit,
 			Roles: ChainRoles{
 				Challenger:        challenger,
-				L1ProxyAdminOwner: l1ProxyAdminOwner,
-				L2ProxyAdminOwner: l2ProxyAdminOwner,
+				L1ProxyAdminOwner: common.Address{}, // Must be specified manually in intent.toml
+				L2ProxyAdminOwner: common.Address{}, // Must be specified manually in intent.toml
 			},
-			UseRevenueShare: standard.UseRevenueShare,
 			// CustomGasToken defaults to disabled (all fields nil/empty)
 			CustomGasToken: CustomGasToken{},
 		})

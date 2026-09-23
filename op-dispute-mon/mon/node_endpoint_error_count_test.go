@@ -12,10 +12,10 @@ import (
 )
 
 func TestCheckNodeEndpointErrorCount_NoErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}}, RollupEndpointErrorCount: 0},
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x22}}, RollupEndpointErrorCount: 0},
-		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x33}}, RollupEndpointErrorCount: 0},
+	games := []*types.CommonGameData{
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x11}}, NodeEndpointErrorCount: 0},
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x22}}, NodeEndpointErrorCount: 0},
+		{GameMetadata: gameTypes.GameMetadata{Proxy: common.Address{0x33}}, NodeEndpointErrorCount: 0},
 	}
 
 	metrics := &stubNodeEndpointErrorCountMetrics{}
@@ -28,7 +28,7 @@ func TestCheckNodeEndpointErrorCount_NoErrors(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrorCount_SingleGameWithErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
+	games := []*types.CommonGameData{
 		{
 			GameMetadata:             gameTypes.GameMetadata{Proxy: common.Address{0x11}},
 			RollupEndpointErrorCount: 5,
@@ -49,7 +49,7 @@ func TestCheckNodeEndpointErrorCount_SingleGameWithErrors(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrorCount_MultipleGamesWithErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
+	games := []*types.CommonGameData{
 		{
 			GameMetadata:             gameTypes.GameMetadata{Proxy: common.Address{0x11}},
 			RollupEndpointErrorCount: 3,
@@ -75,7 +75,7 @@ func TestCheckNodeEndpointErrorCount_MultipleGamesWithErrors(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrorCount_MixedGamesWithAndWithoutErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
+	games := []*types.CommonGameData{
 		{
 			GameMetadata:             gameTypes.GameMetadata{Proxy: common.Address{0x11}},
 			RollupEndpointErrorCount: 0,
@@ -105,7 +105,7 @@ func TestCheckNodeEndpointErrorCount_MixedGamesWithAndWithoutErrors(t *testing.T
 }
 
 func TestCheckNodeEndpointErrorCount_EmptyGamesList(t *testing.T) {
-	games := []*types.EnrichedGameData{}
+	games := []*types.CommonGameData{}
 
 	metrics := &stubNodeEndpointErrorCountMetrics{}
 	logger := testlog.Logger(t, log.LvlDebug)
@@ -117,7 +117,7 @@ func TestCheckNodeEndpointErrorCount_EmptyGamesList(t *testing.T) {
 }
 
 func TestCheckNodeEndpointErrorCount_HighVolumeErrors(t *testing.T) {
-	games := []*types.EnrichedGameData{
+	games := []*types.CommonGameData{
 		{
 			GameMetadata:             gameTypes.GameMetadata{Proxy: common.Address{0x11}},
 			RollupEndpointErrorCount: 100,
@@ -145,38 +145,38 @@ func TestCheckNodeEndpointErrorCount_HighVolumeErrors(t *testing.T) {
 func TestCountGamesWithErrors(t *testing.T) {
 	tests := []struct {
 		name     string
-		games    []*types.EnrichedGameData
+		games    []*types.CommonGameData
 		expected int
 	}{
 		{
 			name:     "no games",
-			games:    []*types.EnrichedGameData{},
+			games:    []*types.CommonGameData{},
 			expected: 0,
 		},
 		{
 			name: "no errors",
-			games: []*types.EnrichedGameData{
-				{RollupEndpointErrorCount: 0},
-				{RollupEndpointErrorCount: 0},
+			games: []*types.CommonGameData{
+				{NodeEndpointErrorCount: 0},
+				{NodeEndpointErrorCount: 0},
 			},
 			expected: 0,
 		},
 		{
 			name: "all games have errors",
-			games: []*types.EnrichedGameData{
-				{RollupEndpointErrorCount: 1},
-				{RollupEndpointErrorCount: 5},
-				{RollupEndpointErrorCount: 10},
+			games: []*types.CommonGameData{
+				{NodeEndpointErrorCount: 1},
+				{NodeEndpointErrorCount: 5},
+				{NodeEndpointErrorCount: 10},
 			},
 			expected: 3,
 		},
 		{
 			name: "mixed errors",
-			games: []*types.EnrichedGameData{
-				{RollupEndpointErrorCount: 0},
-				{RollupEndpointErrorCount: 3},
-				{RollupEndpointErrorCount: 0},
-				{RollupEndpointErrorCount: 7},
+			games: []*types.CommonGameData{
+				{NodeEndpointErrorCount: 0},
+				{NodeEndpointErrorCount: 3},
+				{NodeEndpointErrorCount: 0},
+				{NodeEndpointErrorCount: 7},
 			},
 			expected: 2,
 		},

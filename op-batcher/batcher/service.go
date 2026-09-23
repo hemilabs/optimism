@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-batcher/flags"
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-batcher/rpc"
-	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
 	"github.com/ethereum-optimism/optimism/op-node/params"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
@@ -169,7 +168,7 @@ func (bs *BatcherService) initFromCLIConfig(ctx context.Context, closeApp contex
 	if err := bs.initRollupConfig(ctx); err != nil {
 		return fmt.Errorf("failed to load rollup config: %w", err)
 	}
-	if err := bs.initTxManager(cfg); err != nil {
+	if err := bs.initTxManager(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to init Tx manager: %w", err)
 	}
 	// must be init before driver and channel config
@@ -250,7 +249,10 @@ func (bs *BatcherService) initRollupConfig(ctx context.Context) error {
 	if err := bs.RollupConfig.Check(); err != nil {
 		return fmt.Errorf("invalid rollup config: %w", err)
 	}
-	bs.RollupConfig.LogDescription(bs.Log, chaincfg.L2ChainIDToNetworkDisplayName)
+	// No chain-ID→name map: the batcher deliberately keeps op-node/chaincfg (and with it the
+	// superchain-configs bundle) out of its build closure — see TestBundleReachability.
+	// l2_chain_id identifies the chain in the banner.
+	bs.RollupConfig.LogDescription(bs.Log, nil)
 	return nil
 }
 
@@ -288,8 +290,9 @@ func (bs *BatcherService) initChannelConfig(cfg *CLIConfig) error {
 		return fmt.Errorf("cannot use data availability type blobs or auto with Alt-DA")
 	}
 
-	if bs.UseAltDA && !bs.GenericDA && cc.MaxFrameSize > altda.MaxInputSize {
-		return fmt.Errorf("max frame size %d exceeds altDA max input size %d", cc.MaxFrameSize, altda.MaxInputSize)
+	maxInputSize := bs.RollupConfig.AltDAConfig.MaxInputSizeOrDefault()
+	if bs.UseAltDA && !bs.GenericDA && cc.MaxFrameSize > maxInputSize {
+		return fmt.Errorf("max frame size %d exceeds altDA max input size %d", cc.MaxFrameSize, maxInputSize)
 	}
 
 	cc.InitCompressorConfig(cfg.ApproxComprRatio, cfg.Compressor, cfg.CompressionAlgo)
@@ -340,8 +343,14 @@ func (bs *BatcherService) initChannelConfig(cfg *CLIConfig) error {
 	return nil
 }
 
-func (bs *BatcherService) initTxManager(cfg *CLIConfig) error {
-	txManager, err := txmgr.NewSimpleTxManager("batcher", bs.Log, bs.Metrics, cfg.TxMgrConfig)
+func (bs *BatcherService) initTxManager(_ context.Context, cfg *CLIConfig) error {
+	// Create the base config from CLI config
+	txmgrConfig, err := txmgr.NewConfig(cfg.TxMgrConfig, bs.Log)
+	if err != nil {
+		return err
+	}
+
+	txManager, err := txmgr.NewSimpleTxManagerFromConfig("batcher", bs.Log, bs.Metrics, txmgrConfig)
 	if err != nil {
 		return err
 	}
@@ -439,7 +448,7 @@ func (bs *BatcherService) initAltDA(cfg *CLIConfig) error {
 
 // Start runs once upon start of the batcher lifecycle,
 // and starts batch-submission work if the batcher is configured to start submit data on startup.
-func (bs *BatcherService) Start(_ context.Context) error {
+func (bs *BatcherService) Start(ctx context.Context) error {
 	bs.driver.Log.Info("Starting batcher", "notSubmittingOnStart", bs.NotSubmittingOnStart)
 
 	if !bs.NotSubmittingOnStart {
@@ -471,6 +480,7 @@ func (bs *BatcherService) Stop(ctx context.Context) error {
 
 	// close the TxManager first, so that new work is denied, in-flight work is cancelled as early as possible
 	// (transactions which are expected to be confirmed are still waited for)
+	// TxManager.Close() also stops the blob tip oracle if it's running.
 	if bs.TxManager != nil {
 		bs.TxManager.Close()
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	monTypes "github.com/ethereum-optimism/optimism/op-dispute-mon/mon/types"
 	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -17,8 +18,8 @@ import (
 )
 
 var (
-	ErrSupervisorRpcRequired         = errors.New("supervisor rpc required")
-	ErrAllSupervisorNodesUnavailable = errors.New("all supervisor nodes returned errors")
+	ErrSuperRootRpcRequired        = errors.New("super root RPC required")
+	ErrAllSuperRootRpcsUnavailable = errors.New("all super root RPC sources returned errors")
 )
 
 type SuperRootProvider interface {
@@ -42,19 +43,37 @@ func NewSuperAgreementEnricher(logger log.Logger, metrics OutputMetrics, clients
 }
 
 type superRootResult struct {
-	superRoot            common.Hash
-	isSafe               bool
-	notFound             bool
-	err                  error
-	crossSafeDerivedFrom uint64
+	superRoot common.Hash
+	isSafe    bool
+	notFound  bool
+	outOfSync bool
+	err       error
 }
 
-func (e *SuperAgreementEnricher) Enrich(ctx context.Context, block rpcblock.Block, caller GameCaller, game *monTypes.EnrichedGameData) error {
-	if game.UsesOutputRoots() {
+type superRootAgreementMode uint8
+
+const (
+	superGameAgreement superRootAgreementMode = iota
+	zkGameAgreement
+)
+
+func (e *SuperAgreementEnricher) Enrich(ctx context.Context, _ rpcblock.Block, _ GameCaller, game *monTypes.CommonGameData) error {
+	switch gameTypes.GameType(game.GameType) {
+	case gameTypes.SuperPermissionedGameType, gameTypes.SuperCannonKonaGameType:
+	default:
 		return nil
 	}
+	return e.enrich(ctx, game, superGameAgreement)
+}
+
+func (e *SuperAgreementEnricher) enrich(ctx context.Context, game *monTypes.CommonGameData, mode superRootAgreementMode) error {
+	isZKGame := mode == zkGameAgreement
 	if len(e.clients) == 0 {
-		return fmt.Errorf("%w but required for game type %v", ErrSupervisorRpcRequired, game.GameType)
+		return fmt.Errorf("%w but required for game type %v", ErrSuperRootRpcRequired, game.GameType)
+	}
+
+	if !isZKGame {
+		game.NodeEndpointTotalCount = len(e.clients)
 	}
 
 	results := make([]superRootResult, len(e.clients))
@@ -68,8 +87,13 @@ func (e *SuperAgreementEnricher) Enrich(ctx context.Context, block rpcblock.Bloc
 				results[i] = superRootResult{notFound: true}
 				return
 			}
-			if err != nil {
-				results[i] = superRootResult{err: err}
+			// A ZK provider's answer is usable only after it has processed beyond the game L1 head.
+			if isZKGame && response.CurrentL1.Number <= game.L1HeadNum {
+				results[i] = superRootResult{outOfSync: true}
+				return
+			}
+			if response.Data == nil {
+				results[i] = superRootResult{notFound: true}
 				return
 			}
 
@@ -82,25 +106,81 @@ func (e *SuperAgreementEnricher) Enrich(ctx context.Context, block rpcblock.Bloc
 		}(i, client)
 	}
 	wg.Wait()
+	if isZKGame {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 
+	endpointErrors := game.NodeEndpointErrors
+	errorCount := game.NodeEndpointErrorCount
+	notFoundCount := game.NodeEndpointNotFoundCount
+	outOfSyncCount := game.NodeEndpointOutOfSyncCount
+	safeCount := game.NodeEndpointSafeCount
+	unsafeCount := game.NodeEndpointUnsafeCount
+	differentRoots := game.NodeEndpointDifferentRoots
+	if isZKGame {
+		endpointErrors = make(map[string]bool)
+		errorCount = 0
+		notFoundCount = 0
+		outOfSyncCount = 0
+		safeCount = 0
+		unsafeCount = 0
+		differentRoots = false
+		game.NodeEndpointTotalCount = len(e.clients)
+	}
 	validResults := make([]superRootResult, 0, len(results))
 	foundResults := make([]superRootResult, 0, len(results))
 	for idx, result := range results {
 		if result.err != nil {
-			e.log.Error("Failed to fetch super root", "clientIndex", idx, "l2SequenceNumber", game.L2SequenceNumber, "err", result.err)
+			if isZKGame {
+				e.log.Error("Failed to fetch ZK super root", "clientIndex", idx, "l2SequenceNumber", game.L2SequenceNumber, "err", result.err)
+			} else {
+				e.log.Error("Failed to fetch super root", "clientIndex", idx, "l2SequenceNumber", game.L2SequenceNumber, "err", result.err)
+			}
+			endpointID := fmt.Sprintf("client-%d", idx)
+			endpointErrors[endpointID] = true
+			errorCount++
+			continue
+		}
+		if result.outOfSync {
+			outOfSyncCount++
 			continue
 		}
 
 		validResults = append(validResults, result)
 
-		if !result.notFound {
+		if result.notFound {
+			notFoundCount++
+		} else {
 			foundResults = append(foundResults, result)
+			// Track safety counts only for found results where the super root matches the game's root claim
+			if !isZKGame && result.superRoot == game.RootClaim {
+				if result.isSafe {
+					safeCount++
+				} else {
+					unsafeCount++
+				}
+			}
 		}
 	}
+	game.NodeEndpointErrors = endpointErrors
+	game.NodeEndpointErrorCount = errorCount
+	game.NodeEndpointNotFoundCount = notFoundCount
+	game.NodeEndpointOutOfSyncCount = outOfSyncCount
+	game.NodeEndpointSafeCount = safeCount
+	game.NodeEndpointUnsafeCount = unsafeCount
+	game.NodeEndpointDifferentRoots = differentRoots
 
 	// If all results were errors, return an error
 	if len(validResults) == 0 {
-		return fmt.Errorf("failed to get super root at timestamp: %w", ErrAllSupervisorNodesUnavailable)
+		if isZKGame && outOfSyncCount == len(e.clients) {
+			return fmt.Errorf("all ZK super root sources are behind game L1 head %d: %w", game.L1HeadNum, gameTypes.ErrNotInSync)
+		}
+		if isZKGame {
+			return fmt.Errorf("failed to get ZK super root at timestamp: %w", ErrAllSuperRootRpcsUnavailable)
+		}
+		return fmt.Errorf("failed to get super root at timestamp: %w", ErrAllSuperRootRpcsUnavailable)
 	}
 
 	// If all remaining nodes returned "not found", we disagree with any claim.
@@ -119,23 +199,39 @@ func (e *SuperAgreementEnricher) Enrich(ctx context.Context, block rpcblock.Bloc
 	// - Different super roots from nodes that found data.
 	firstResult := foundResults[0]
 	diverged := len(foundResults) < len(validResults)
-	if !diverged {
+	if !diverged || isZKGame {
 		for _, result := range foundResults[1:] {
 			if result.superRoot != firstResult.superRoot {
 				diverged = true
+				differentRoots = true
 				break
 			}
 		}
 	}
+	game.NodeEndpointDifferentRoots = differentRoots
 
 	if diverged {
-		e.log.Warn("Supervisor nodes disagree on super root",
-			"l2SequenceNumber", game.L2SequenceNumber,
-			"firstSuperRoot", firstResult.superRoot,
-			"found", len(foundResults),
-			"valid", len(validResults))
+		if isZKGame {
+			e.log.Warn("ZK super root sources disagree",
+				"l2SequenceNumber", game.L2SequenceNumber,
+				"firstSuperRoot", firstResult.superRoot,
+				"found", len(foundResults),
+				"notFound", notFoundCount,
+				"differentRoots", differentRoots)
+		} else {
+			e.log.Warn("Super nodes disagree on super root",
+				"l2SequenceNumber", game.L2SequenceNumber,
+				"firstSuperRoot", firstResult.superRoot,
+				"found", len(foundResults),
+				"valid", len(validResults))
+		}
 		game.AgreeWithClaim = false
 		game.ExpectedRootClaim = firstResult.superRoot
+		return nil
+	}
+	if isZKGame {
+		game.ExpectedRootClaim = firstResult.superRoot
+		game.AgreeWithClaim = game.RootClaim == firstResult.superRoot
 		return nil
 	}
 

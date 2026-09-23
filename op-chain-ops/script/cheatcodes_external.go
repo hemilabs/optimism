@@ -5,20 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"golang.org/x/exp/maps"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/vm"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 )
 
 // Ffi implements https://book.getfoundry.sh/cheatcodes/ffi
@@ -93,7 +95,7 @@ func (c *CheatCodesPrecompile) Sleep(ms *big.Int) error {
 	if !ms.IsUint64() {
 		return vm.ErrExecutionReverted
 	}
-	time.Sleep(time.Duration(ms.Uint64()) * time.Millisecond)
+	time.Sleep(time.Duration(bigs.Uint64Strict(ms)) * time.Millisecond)
 	return nil
 }
 
@@ -387,7 +389,7 @@ func lookupKeys(v any, query string) ([]string, error) {
 	if query == "$" || query == "" {
 		switch x := v.(type) {
 		case map[string]any:
-			return maps.Keys(x), nil
+			return slices.Collect(maps.Keys(x)), nil
 		default:
 			return nil, fmt.Errorf("JSON value (Type %T) is not an object", x)
 		}
@@ -407,13 +409,13 @@ func lookupKeys(v any, query string) ([]string, error) {
 		return lookupKeys(x[index], trailing)
 	case map[string]any:
 		if stringKey == "" {
-			return nil, fmt.Errorf("expected string key, but got index in path: %q", index)
+			return nil, fmt.Errorf("expected string key, but got index in path: %d", index)
 		}
 		if stringKey == "$" {
 			if trailing != "" {
 				return nil, errors.New("cannot continue query after $ sign")
 			}
-			return maps.Keys(x), nil
+			return slices.Collect(maps.Keys(x)), nil
 		}
 		data, ok := x[stringKey]
 		if !ok {

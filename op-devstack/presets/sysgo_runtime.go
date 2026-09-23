@@ -20,12 +20,12 @@ func newL1ELFrontend(t devtest.T, name string, chainID eth.ChainID, userRPC stri
 	rpcCl, err := client.NewRPC(t.Ctx(), t.Logger(), userRPC, client.WithLazyDial())
 	t.Require().NoError(err)
 	t.Cleanup(rpcCl.Close)
-	return newPresetL1ELNode(t, name, chainID, rpcCl)
+	return newPresetL1ELNode(t, name, chainID, rpcCl, userRPC)
 }
 
 func newL1CLFrontend(t devtest.T, name string, chainID eth.ChainID, beaconHTTPAddr string, lifecycle ...stack.Lifecycle) *l1CLFrontend {
 	beaconCl := client.NewBasicHTTPClient(beaconHTTPAddr, t.Logger())
-	l1CL := newPresetL1CLNode(t, name, chainID, beaconCl)
+	l1CL := newPresetL1CLNode(t, name, chainID, beaconHTTPAddr, beaconCl)
 	if len(lifecycle) > 0 {
 		l1CL.lifecycle = lifecycle[0]
 	}
@@ -46,9 +46,12 @@ func newL2ELFrontend(t devtest.T, name string, chainID eth.ChainID, userRPC stri
 	)
 	t.Require().NoError(err)
 	t.Cleanup(engineRPCCl.Close)
-	l2EL := newPresetL2ELNode(t, name, chainID, userRPCCl, engineRPCCl, rollupCfg)
+	l2EL := newPresetL2ELNode(t, name, chainID, userRPCCl, userRPC, engineRPCCl, rollupCfg)
 	if len(lifecycle) > 0 {
 		l2EL.lifecycle = lifecycle[0]
+		if control, ok := lifecycle[0].(stack.ControlledLifecycle); ok {
+			l2EL.control = control
+		}
 	}
 	return l2EL
 }
@@ -69,10 +72,13 @@ func newL2CLFrontend(t devtest.T, name string, chainID eth.ChainID, userRPC stri
 	rpcCl, err := client.NewRPC(t.Ctx(), t.Logger(), userRPC, client.WithLazyDial())
 	t.Require().NoError(err)
 	t.Cleanup(rpcCl.Close)
-	interopEndpoint, interopJWT := node.InteropRPC()
-	l2CL := newPresetL2CLNode(t, name, chainID, rpcCl, userRPC, interopEndpoint, interopJWT)
+	_ = node // node accessed for lifecycle below
+	l2CL := newPresetL2CLNode(t, name, chainID, rpcCl, userRPC)
 	if lifecycle, ok := any(node).(stack.Lifecycle); ok {
 		l2CL.lifecycle = lifecycle
+	}
+	if control, ok := any(node).(stack.ControlledLifecycle); ok {
+		l2CL.control = control
 	}
 	return l2CL
 }
@@ -84,60 +90,15 @@ func newL2BatcherFrontend(t devtest.T, name string, chainID eth.ChainID, rpcEndp
 	return newPresetL2Batcher(t, name, chainID, rpcCl)
 }
 
-func newOPRBuilderFrontend(t devtest.T, name string, chainID eth.ChainID, userRPC string, flashblocksWSURL string, updateRuleSet func(string) error, rollupCfg *rollup.Config, lifecycle ...stack.Lifecycle) *oprBuilderFrontend {
+func newSupernodeFrontend(t devtest.T, name string, userRPC string, control ...stack.ControlledLifecycle) *supernodeFrontend {
 	rpcCl, err := client.NewRPC(t.Ctx(), t.Logger(), userRPC, client.WithLazyDial())
 	t.Require().NoError(err)
 	t.Cleanup(rpcCl.Close)
-
-	t.Require().NotEmpty(flashblocksWSURL, "missing flashblocks ws url for %s", name)
-	wsCl, err := client.DialWS(t.Ctx(), client.WSConfig{
-		URL: flashblocksWSURL,
-		Log: t.Logger(),
-	})
-	t.Require().NoError(err)
-
-	oprb := newPresetOPRBuilderNode(t, name, chainID, rpcCl, rollupCfg, wsCl, updateRuleSet)
-	if len(lifecycle) > 0 {
-		oprb.lifecycle = lifecycle[0]
+	supernode := newPresetSupernode(t, name, userRPC, rpcCl)
+	if len(control) > 0 {
+		supernode.control = control[0]
 	}
-	return oprb
-}
-
-func newRollupBoostFrontend(t devtest.T, name string, chainID eth.ChainID, userRPC string, flashblocksWSURL string, rollupCfg *rollup.Config, lifecycle ...stack.Lifecycle) *rollupBoostFrontend {
-	rpcCl, err := client.NewRPC(t.Ctx(), t.Logger(), userRPC, client.WithLazyDial())
-	t.Require().NoError(err)
-	t.Cleanup(rpcCl.Close)
-
-	t.Require().NotEmpty(flashblocksWSURL, "missing flashblocks ws url for %s", name)
-	wsCl, err := client.DialWS(t.Ctx(), client.WSConfig{
-		URL: flashblocksWSURL,
-		Log: t.Logger(),
-	})
-	t.Require().NoError(err)
-
-	rollupBoost := newPresetRollupBoostNode(t, name, chainID, rpcCl, rollupCfg, wsCl)
-	if len(lifecycle) > 0 {
-		rollupBoost.lifecycle = lifecycle[0]
-	}
-	return rollupBoost
-}
-
-func newSupervisorFrontend(t devtest.T, name string, userRPC string, lifecycle ...stack.Lifecycle) *supervisorFrontend {
-	rpcCl, err := client.NewRPC(t.Ctx(), t.Logger(), userRPC, client.WithLazyDial())
-	t.Require().NoError(err)
-	t.Cleanup(rpcCl.Close)
-	supervisor := newPresetSupervisor(t, name, rpcCl)
-	if len(lifecycle) > 0 {
-		supervisor.lifecycle = lifecycle[0]
-	}
-	return supervisor
-}
-
-func newSupernodeFrontend(t devtest.T, name string, userRPC string) *supernodeFrontend {
-	rpcCl, err := client.NewRPC(t.Ctx(), t.Logger(), userRPC, client.WithLazyDial())
-	t.Require().NoError(err)
-	t.Cleanup(rpcCl.Close)
-	return newPresetSupernode(t, name, rpcCl)
+	return supernode
 }
 
 func newConductorFrontend(t devtest.T, name string, chainID eth.ChainID, rpcEndpoint string) *conductorFrontend {

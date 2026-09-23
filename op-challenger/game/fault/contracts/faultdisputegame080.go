@@ -44,7 +44,7 @@ func (f *FaultDisputeGameContract080) GetExtendedMetadata(ctx context.Context, b
 		return GameMetadata{}, fmt.Errorf("expected 5 results but got %v", len(results))
 	}
 	l1Head := results[0].GetHash(0)
-	l2BlockNumber := results[1].GetBigInt(0).Uint64()
+	l2BlockNumber := getBlockNumber(results[1], 0)
 	rootClaim := results[2].GetHash(0)
 	status, err := gameTypes.GameStatusFromUint8(results[3].GetUint8(0))
 	if err != nil {
@@ -158,6 +158,18 @@ func (f *FaultDisputeGameContract080) DefendTx(ctx context.Context, parent types
 	return f.txWithBond(ctx, parent.Position.Defend(), call)
 }
 
+func (f *FaultDisputeGameContract080) IsClosed(ctx context.Context) (bool, error) {
+	return isLegacyGameClosed(ctx, f)
+}
+
 func (f *FaultDisputeGameContract080) GetBondDistributionMode(ctx context.Context, block rpcblock.Block) (types.BondDistributionMode, error) {
 	return types.LegacyDistributionMode, nil
+}
+
+func (f *FaultDisputeGameContract080) CloseGameTx(ctx context.Context) (txmgr.TxCandidate, error) {
+	return txmgr.TxCandidate{}, ErrCloseGameNotSupported
+}
+
+func (f *FaultDisputeGameContract080) GetAnchorStateRegistry(_ context.Context, _ rpcblock.Block) (common.Address, error) {
+	return common.Address{}, ErrAnchorStateRegistryNotSupported
 }

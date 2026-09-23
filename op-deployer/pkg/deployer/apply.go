@@ -6,24 +6,24 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 
-	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
-	"github.com/ethereum-optimism/optimism/op-chain-ops/script/forking"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/forge"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/pipeline"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
-	"github.com/ethereum-optimism/optimism/op-service/prestate"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
@@ -39,7 +39,7 @@ type ApplyConfig struct {
 	Logger           log.Logger
 	CacheDir         string
 	privateKeyECDSA  *ecdsa.PrivateKey
-	PreStateBuilder  pipeline.PreStateBuilder
+	UseForge         bool
 }
 
 func (a *ApplyConfig) Check() error {
@@ -89,13 +89,6 @@ func ApplyCLI() func(cliCtx *cli.Context) error {
 		privateKey := cliCtx.String(PrivateKeyFlagName)
 		cacheDir := cliCtx.String(CacheDirFlagName)
 		depTarget, err := NewDeploymentTarget(cliCtx.String(DeploymentTargetFlag.Name))
-		opProgramSvcUrl := cliCtx.String(OpProgramSvcUrlFlag.Name)
-
-		var preStateBuilder pipeline.PreStateBuilder
-		if opProgramSvcUrl != "" {
-			preStateBuilder = prestate.NewPrestateBuilderClient(opProgramSvcUrl)
-		}
-
 		if err != nil {
 			return fmt.Errorf("failed to parse deployment target: %w", err)
 		}
@@ -109,37 +102,47 @@ func ApplyCLI() func(cliCtx *cli.Context) error {
 			DeploymentTarget: depTarget,
 			Logger:           l,
 			CacheDir:         cacheDir,
-			PreStateBuilder:  preStateBuilder,
+			UseForge:         cliCtx.Bool(UseForgeFlagName),
 		}); err != nil {
 			return err
 		}
 
-		if !cliCtx.Bool(AutoVerifyFlag.Name) {
+		if depTarget != DeploymentTargetLive {
+			return nil
+		}
+		if cliCtx.Bool(NoVerifyFlag.Name) {
+			l.Warn("Contract verification skipped", "reason", "--no-verify was set")
 			return nil
 		}
 
 		stateFile := fmt.Sprintf("%s/state.json", workdir)
-		chainID, err := ChainIDFromRPC(ctx, l1RPCUrl)
-		if err != nil {
-			return fmt.Errorf("failed to get chain ID: %w", err)
-		}
+		if err := func() error {
+			chainID, err := ChainIDFromRPC(ctx, l1RPCUrl)
+			if err != nil {
+				return fmt.Errorf("failed to get chain ID: %w", err)
+			}
 
-		intent, err := pipeline.ReadIntent(workdir)
-		if err != nil {
-			return fmt.Errorf("failed to read intent: %w", err)
-		}
+			intent, err := pipeline.ReadIntent(workdir)
+			if err != nil {
+				return fmt.Errorf("failed to read intent: %w", err)
+			}
 
-		return verify.AutoVerify(
-			ctx,
-			l,
-			l1RPCUrl,
-			chainID.Uint64(),
-			stateFile,
-			intent.L1ContractsLocator,
-			cliCtx.String(VerifierTypeFlagName),
-			cliCtx.String(VerifierUrlFlagName),
-			cliCtx.String(VerifierAPIKeyFlagName),
-		)
+			return verify.AutoVerify(
+				ctx,
+				l,
+				l1RPCUrl,
+				bigs.Uint64Strict(chainID),
+				stateFile,
+				stateFile,
+				intent.L1ContractsLocator,
+				cliCtx.String(VerifierTypeFlagName),
+				cliCtx.String(VerifierUrlFlagName),
+				cliCtx.String(VerifierAPIKeyFlagName),
+			)
+		}(); err != nil {
+			verify.LogAutoVerifyFailure(l, stateFile, err)
+		}
+		return nil
 	}
 }
 
@@ -158,6 +161,11 @@ func Apply(ctx context.Context, cfg ApplyConfig) error {
 		return fmt.Errorf("failed to read state: %w", err)
 	}
 
+	// A state produced by the prepare pipeline MUST not be used with apply.
+	if err := st.CheckNotPrepared(); err != nil {
+		return err
+	}
+
 	if err := ApplyPipeline(ctx, ApplyPipelineOpts{
 		L1RPCUrl:           cfg.L1RPCUrl,
 		DeploymentTarget:   cfg.DeploymentTarget,
@@ -167,7 +175,9 @@ func Apply(ctx context.Context, cfg ApplyConfig) error {
 		Logger:             cfg.Logger,
 		StateWriter:        pipeline.WorkdirStateWriter(cfg.Workdir),
 		CacheDir:           cfg.CacheDir,
-		PreStateBuilder:    cfg.PreStateBuilder,
+		UseForge:           cfg.UseForge,
+		PrivateKey:         cfg.PrivateKey,
+		Workdir:            cfg.Workdir,
 	}); err != nil {
 		return err
 	}
@@ -189,41 +199,34 @@ type ApplyPipelineOpts struct {
 	Logger             log.Logger
 	StateWriter        pipeline.StateWriter
 	CacheDir           string
-	PreStateBuilder    pipeline.PreStateBuilder
+	UseForge           bool
+	// DeployMockSP1Verifier is a test-only opt-in for development environments.
+	DeployMockSP1Verifier bool
+	PrivateKey            string
+	Workdir               string
+	ReceiptQueryInterval  time.Duration
 }
 
 func ApplyPipeline(
 	ctx context.Context,
 	opts ApplyPipelineOpts,
 ) error {
+	if opts.DeployMockSP1Verifier && opts.DeploymentTarget != DeploymentTargetGenesis {
+		return fmt.Errorf("mock SP1 verifier deployment is only supported for genesis")
+	}
+
 	intent := opts.Intent
-	if err := intent.Check(); err != nil {
+	st := opts.State
+	if err := pipeline.ValidateInputs(intent, st); err != nil {
 		return err
 	}
-	st := opts.State
 
-	l1ArtifactsFS, err := artifacts.Download(ctx, intent.L1ContractsLocator, ioutil.BarProgressor(), opts.CacheDir)
+	bundle, err := artifacts.DownloadBundle(ctx, intent.L1ContractsLocator, intent.L2ContractsLocator, ioutil.BarProgressor(), opts.CacheDir)
 	if err != nil {
-		return fmt.Errorf("failed to download L1 artifacts: %w", err)
+		return err
 	}
 
-	var l2ArtifactsFS foundry.StatDirFs
-	if intent.L1ContractsLocator.Equal(intent.L2ContractsLocator) {
-		l2ArtifactsFS = l1ArtifactsFS
-	} else {
-		l2Afs, err := artifacts.Download(ctx, intent.L2ContractsLocator, ioutil.BarProgressor(), opts.CacheDir)
-		if err != nil {
-			return fmt.Errorf("failed to download L2 artifacts: %w", err)
-		}
-		l2ArtifactsFS = l2Afs
-	}
-
-	bundle := pipeline.ArtifactsBundle{
-		L1: l1ArtifactsFS,
-		L2: l2ArtifactsFS,
-	}
-
-	deployer := common.Address{0x01}
+	deployer := standard.PlaceholderAddress
 	if opts.DeployerPrivateKey != nil {
 		deployer = crypto.PubkeyToAddress(opts.DeployerPrivateKey.PublicKey)
 	}
@@ -232,39 +235,6 @@ func ApplyPipeline(
 	var l1RPC *rpc.Client
 	var l1Client *ethclient.Client
 	var l1Host *script.Host
-
-	initForkHost := func() error {
-		l1Host, err = env.DefaultScriptHost(
-			bcaster,
-			opts.Logger,
-			deployer,
-			bundle.L1,
-			script.WithForkHook(func(cfg *script.ForkConfig) (forking.ForkSource, error) {
-				src, err := forking.RPCSourceByNumber(cfg.URLOrAlias, l1RPC, *cfg.BlockNumber)
-				if err != nil {
-					return nil, fmt.Errorf("failed to create RPC fork source: %w", err)
-				}
-				return forking.Cache(src), nil
-			}),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create L1 script host: %w", err)
-		}
-
-		latest, err := l1Client.HeaderByNumber(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("failed to get latest block: %w", err)
-		}
-
-		if _, err := l1Host.CreateSelectFork(
-			script.ForkWithURLOrAlias("main"),
-			script.ForkWithBlockNumberU256(latest.Number),
-		); err != nil {
-			return fmt.Errorf("failed to select fork: %w", err)
-		}
-
-		return nil
-	}
 
 	switch opts.DeploymentTarget {
 	case DeploymentTargetLive:
@@ -283,17 +253,19 @@ func ApplyPipeline(
 		signer := opcrypto.SignerFnFromBind(opcrypto.PrivateKeySignerFn(opts.DeployerPrivateKey, chainID))
 
 		bcaster, err = broadcaster.NewKeyedBroadcaster(broadcaster.KeyedBroadcasterOpts{
-			Logger:  opts.Logger,
-			ChainID: new(big.Int).SetUint64(intent.L1ChainID),
-			Client:  l1Client,
-			Signer:  signer,
-			From:    deployer,
+			Logger:               opts.Logger,
+			ChainID:              new(big.Int).SetUint64(intent.L1ChainID),
+			Client:               l1Client,
+			Signer:               signer,
+			From:                 deployer,
+			ReceiptQueryInterval: opts.ReceiptQueryInterval,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create broadcaster: %w", err)
 		}
 
-		if err := initForkHost(); err != nil {
+		l1Host, err = env.DefaultForkedScriptHost(ctx, bcaster, opts.Logger, deployer, bundle.L1, l1RPC)
+		if err != nil {
 			return fmt.Errorf("failed to initialize L1 host: %w", err)
 		}
 	case DeploymentTargetCalldata, DeploymentTargetNoop:
@@ -306,7 +278,8 @@ func ApplyPipeline(
 
 		bcaster = new(broadcaster.CalldataBroadcaster)
 
-		if err := initForkHost(); err != nil {
+		l1Host, err = env.DefaultForkedScriptHost(ctx, bcaster, opts.Logger, deployer, bundle.L1, l1RPC)
+		if err != nil {
 			return fmt.Errorf("failed to initialize L1 host: %w", err)
 		}
 	case DeploymentTargetGenesis:
@@ -316,6 +289,7 @@ func ApplyPipeline(
 			opts.Logger,
 			deployer,
 			bundle.L1,
+			script.WithNoMaxCodeSize(), // Allow unoptimized contracts from the forge lite profile in genesis deployments
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create L1 script host: %w", err)
@@ -332,14 +306,34 @@ func ApplyPipeline(
 		return fmt.Errorf("failed to load OPCM script: %w", err)
 	}
 
+	// Initialize Forge client if UseForge flag is enabled
+	var forgeClient *forge.Client
+	if opts.UseForge {
+		// Forge needs to run from the artifacts directory where foundry.toml is located
+		// The workdir is for storing state, not for running forge commands
+		artifactsPath := fmt.Sprintf("%v", bundle.L1)
+		forgeClient, err = forge.NewStandardClient(artifactsPath)
+		if err != nil {
+			return fmt.Errorf("failed to create Forge client: %w", err)
+		}
+	}
+
 	pEnv := &pipeline.Env{
-		StateWriter:  opts.StateWriter,
-		L1ScriptHost: l1Host,
-		L1Client:     l1Client,
-		Logger:       opts.Logger,
-		Broadcaster:  bcaster,
-		Deployer:     deployer,
-		Scripts:      opcmScripts,
+		StateWriter:               opts.StateWriter,
+		L1ScriptHost:              l1Host,
+		L1Client:                  l1Client,
+		Logger:                    opts.Logger,
+		Broadcaster:               bcaster,
+		Deployer:                  deployer,
+		Scripts:                   opcmScripts,
+		ForgeClient:               forgeClient,
+		UseForge:                  opts.UseForge,
+		IsGenesis:                 opts.DeploymentTarget == DeploymentTargetGenesis,
+		DeployMockSP1Verifier:     opts.DeployMockSP1Verifier,
+		AllowUnoptimizedContracts: opts.DeploymentTarget == DeploymentTargetGenesis,
+		L1RPCUrl:                  opts.L1RPCUrl,
+		PrivateKey:                opts.PrivateKey,
+		Context:                   ctx,
 	}
 
 	pline := []pipelineStage{
@@ -355,9 +349,11 @@ func ApplyPipeline(
 		{"deploy-implementations", func() error {
 			return pipeline.DeployImplementations(pEnv, intent, st)
 		}},
+		{"generate-interop-depset", func() error {
+			return pipeline.GenerateInteropDepset(ctx, pEnv, intent, st)
+		}},
 	}
 
-	// Deploy all OP Chains first.
 	for _, chain := range intent.Chains {
 		chainID := chain.ID
 		pline = append(pline, pipelineStage{
@@ -431,21 +427,19 @@ func ApplyPipeline(
 		})
 	}
 
-	// Generate the interop dependency set
-	pline = append(pline, pipelineStage{
-		"generate-interop-depset",
-		func() error {
-			return pipeline.GenerateInteropDepset(ctx, pEnv, intent, st)
-		},
-	})
-
-	// Generate the prestate for all chains
-	pline = append(pline, pipelineStage{
-		"deploy-pre-state",
-		func() error {
-			return pipeline.GeneratePreState(ctx, pEnv, intent, st, opts.PreStateBuilder)
-		},
-	})
+	// Validate that the deployed state renders into a valid L2 genesis and rollup
+	// config for every chain, so an invalid intent fails during apply rather than
+	// later at inspect time.
+	for _, chain := range intent.Chains {
+		chainID := chain.ID
+		pline = append(pline, pipelineStage{
+			fmt.Sprintf("validate-l2-genesis-%s", chainID.Hex()),
+			func() error {
+				_, _, err := pipeline.RenderGenesisAndRollup(st, chainID, intent)
+				return err
+			},
+		})
+	}
 
 	// Run through the pipeline.
 	for _, stage := range pline {

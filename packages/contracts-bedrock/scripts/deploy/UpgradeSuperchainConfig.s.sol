@@ -2,8 +2,10 @@
 pragma solidity 0.8.15;
 
 import { Script } from "forge-std/Script.sol";
-import { IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
+import { DummyCaller } from "scripts/libraries/DummyCaller.sol";
 
 contract UpgradeSuperchainConfig is Script {
     struct Input {
@@ -17,7 +19,7 @@ contract UpgradeSuperchainConfig is Script {
         // Make sure the input is valid
         assertValidInput(_input);
 
-        IOPContractsManager opcm = _input.opcm;
+        address opcm = _input.opcm;
 
         // Etch DummyCaller contract. This contract is used to mimic the contract that is used
         // as the source of the delegatecall to the OPCM. In practice this will be the governance
@@ -34,9 +36,7 @@ contract UpgradeSuperchainConfig is Script {
 
         // Call into the DummyCaller to perform the delegatecall
         vm.broadcast(msg.sender);
-
-        (bool success,) = DummyCaller(prank).upgradeSuperchainConfig(superchainConfig);
-        require(success, "UpgradeSuperchainConfig: upgradeSuperchainConfig failed");
+        _upgrade(prank, _input);
     }
 
     /// @notice Asserts that the input is valid.
@@ -52,9 +52,22 @@ contract UpgradeSuperchainConfig is Script {
 contract DummyCaller {
     address internal _opcmAddr;
 
-    function upgradeSuperchainConfig(ISuperchainConfig _superchainConfig) external returns (bool, bytes memory) {
-        bytes memory data = abi.encodeCall(IOPContractsManager.upgradeSuperchainConfig, (_superchainConfig));
-        (bool success, bytes memory result) = _opcmAddr.delegatecall(data);
-        return (success, result);
+    /// @notice Helper function to upgrade the superchain config. Performs the delegatecall to the OPCM.
+    /// @param _prank The address of the dummy caller contract.
+    /// @param _input The input.
+    function _upgrade(address _prank, Input memory _input) internal {
+        bytes memory data = abi.encodeCall(
+            IOPContractsManagerV2.upgradeSuperchain,
+            IOPContractsManagerV2.SuperchainUpgradeInput({
+                superchainConfig: _input.superchainConfig,
+                extraInstructions: _input.extraInstructions
+            })
+        );
+        (bool success, bytes memory returnData) = _prank.call(data);
+        if (!success) {
+            assembly {
+                revert(add(returnData, 0x20), mload(returnData))
+            }
+        }
     }
 }

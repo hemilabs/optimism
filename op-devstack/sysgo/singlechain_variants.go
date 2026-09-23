@@ -86,7 +86,6 @@ func NewSimpleWithSyncTesterRuntimeWithConfig(t devtest.T, cfg PresetConfig) *Si
 		IsSequencer:   false,
 		NoDiscovery:   true,
 		EnableReqResp: true,
-		UseReqResp:    true,
 		L2CLOptions:   cfg.GlobalL2CLOptions,
 	})
 	node := newSingleChainNodeRuntime("verifier", false, syncTesterEL, l2CL2)
@@ -95,6 +94,8 @@ func NewSimpleWithSyncTesterRuntimeWithConfig(t devtest.T, cfg PresetConfig) *Si
 	runtime.SyncTester = &SyncTesterRuntime{
 		Service: syncTester,
 		Node:    node,
+		EL:      node.EL,
+		CL:      node.CL,
 	}
 	return runtime
 }
@@ -113,8 +114,18 @@ func NewMinimalWithConductorsRuntimeWithConfig(t devtest.T, cfg PresetConfig) *S
 		StartProposer:   true,
 		StartChallenger: false,
 	})
-	nodeB := addSingleChainOpNode(t, runtime, "b", true, "", cfg.GlobalL2CLOptions...)
-	nodeC := addSingleChainOpNode(t, runtime, "c", true, "", cfg.GlobalL2CLOptions...)
+	// Every conductor member sequences once leadership reaches it, so a binary override has to
+	// apply to all of them or it would silently stop taking effect on transfer. The primary already
+	// received these options from startDefaultSingleChainPrimary.
+	candidateELOpts := append(append([]OpRethOption{}, ResolveMixedL2ELOpts(t)...), cfg.OpRethOptions...)
+	nodeB := addSingleChainOpNodeWithELOpts(t, runtime, "b", true, "", candidateELOpts, cfg.GlobalL2CLOptions...)
+	nodeC := addSingleChainOpNodeWithELOpts(t, runtime, "c", true, "", candidateELOpts, cfg.GlobalL2CLOptions...)
+
+	// A non-candidate node, always stock: it never sequences, so it independently validates every
+	// block the candidates build. Without it an overridden binary on all three members could accept
+	// its own invalid blocks and the run would still pass.
+	nodeVerifier := addSingleChainOpNode(t, runtime, "verifier", false, "", cfg.GlobalL2CLOptions...)
+	connectSingleChainNodes(t, runtime.L2EL, runtime.L2CL, nodeVerifier)
 
 	conductorA := startConductorNode(t, "sequencer", runtime.L2Network, runtime.L2CL.(*OpNode), runtime.L2EL, true, false)
 	conductorB := startConductorNode(t, "b", runtime.L2Network, nodeB.CL.(*OpNode), nodeB.EL, false, true)
@@ -130,7 +141,7 @@ func NewMinimalWithConductorsRuntimeWithConfig(t devtest.T, cfg PresetConfig) *S
 }
 
 func connectSingleChainNodes(t devtest.T, sourceEL L2ELNode, sourceCL L2CLNode, target *SingleChainNodeRuntime) {
-	connectL2ELPeers(t, t.Logger(), sourceEL.UserRPC(), target.EL.UserRPC(), false)
+	connectL2ELPeers(t, t.Logger(), sourceEL.UserRPC(), target.EL.UserRPC())
 	connectSingleChainCLPeer(t, sourceCL, target.CL)
 }
 
@@ -164,19 +175,25 @@ func addSingleChainOpNode(
 	followSource string,
 	l2Opts ...L2CLOption,
 ) *SingleChainNodeRuntime {
+	return addSingleChainOpNodeWithELOpts(t, runtime, name, isSequencer, followSource, nil, l2Opts...)
+}
+
+// addSingleChainOpNodeWithELOpts adds a node whose EL takes op-reth options. Passing none yields a
+// stock op-reth, which is what lets a preset keep an independent check on blocks built by an
+// overridden binary.
+func addSingleChainOpNodeWithELOpts(
+	t devtest.T,
+	runtime *SingleChainRuntime,
+	name string,
+	isSequencer bool,
+	followSource string,
+	elOpts []OpRethOption,
+	l2Opts ...L2CLOption,
+) *SingleChainNodeRuntime {
 	jwtPath := runtime.L2EL.JWTPath()
 	jwtSecret := readJWTSecretFromPath(t, jwtPath)
-	identity := NewELNodeIdentity(0)
-	l2EL := startL2ELNode(t, runtime.L2Network, jwtPath, jwtSecret, name, identity)
-	l2CL := startL2CLNode(t, runtime.Keys, runtime.L1Network, runtime.L2Network, runtime.L1EL, runtime.L1CL, l2EL, jwtSecret, l2CLNodeStartConfig{
-		Key:            name,
-		IsSequencer:    isSequencer,
-		NoDiscovery:    true,
-		EnableReqResp:  true,
-		UseReqResp:     true,
-		L2FollowSource: followSource,
-		L2CLOptions:    l2Opts,
-	})
+	l2EL := startL2ELForKey(t, runtime.L2Network, jwtPath, jwtSecret, name, NewELNodeIdentity(0), elOpts...)
+	l2CL := startL2CLForKey(t, runtime.Keys, runtime.L1Network, runtime.L2Network, runtime.L1EL, runtime.L1CL, l2EL, jwtSecret, name, name, isSequencer, followSource, l2Opts)
 	node := newSingleChainNodeRuntime(name, isSequencer, l2EL, l2CL)
 	runtime.Nodes[name] = node
 	return node
@@ -273,7 +290,7 @@ func startConductorNode(
 		ConsensusPort:           0,
 		ConsensusAdvertisedAddr: "",
 		RaftServerID:            serverID,
-		RaftStorageDir:          filepath.Join(t.TempDir(), "raft"),
+		RaftStorageDir:          filepath.Join(t.TempDirWithPrefix("op-conductor-"+NewComponentTarget(conductorName, l2Net.ChainID()).String()), "raft"),
 		RaftBootstrap:           bootstrap,
 		RaftSnapshotInterval:    120 * time.Second,
 		RaftSnapshotThreshold:   8192,

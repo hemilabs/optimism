@@ -11,6 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -32,7 +34,7 @@ var (
 //	);
 //
 // Additionally, the event log-index and
-func UnmarshalDepositLogEvent(ev *types.Log) (*types.DepositTx, error) {
+func UnmarshalDepositLogEvent(ev *types.Log) (*optypes.DepositTx, error) {
 	if len(ev.Topics) != 4 {
 		return nil, fmt.Errorf("expected 4 event topics (event identity, indexed from, indexed to, indexed version), got %d", len(ev.Topics))
 	}
@@ -73,7 +75,7 @@ func UnmarshalDepositLogEvent(ev *types.Log) (*types.DepositTx, error) {
 	// and then padded to 32 bytes by the EVM.
 	opaqueData := ev.Data[64 : 64+opaqueContentLength.Uint64()]
 
-	var dep types.DepositTx
+	var dep optypes.DepositTx
 
 	source := UserDepositSource{
 		L1BlockHash: ev.BlockHash,
@@ -96,7 +98,7 @@ func UnmarshalDepositLogEvent(ev *types.Log) (*types.DepositTx, error) {
 	return &dep, nil
 }
 
-func unmarshalDepositVersion0(dep *types.DepositTx, to common.Address, opaqueData []byte) error {
+func unmarshalDepositVersion0(dep *optypes.DepositTx, to common.Address, opaqueData []byte) error {
 	if len(opaqueData) < 32+32+8+1 {
 		return fmt.Errorf("unexpected opaqueData length: %d", len(opaqueData))
 	}
@@ -119,7 +121,7 @@ func unmarshalDepositVersion0(dep *types.DepositTx, to common.Address, opaqueDat
 	if !gas.IsUint64() {
 		return fmt.Errorf("bad gas value: %x", opaqueData[offset:offset+8])
 	}
-	dep.Gas = gas.Uint64()
+	dep.Gas = bigs.Uint64Strict(gas)
 	offset += 8
 
 	// uint8 isCreation
@@ -142,7 +144,7 @@ func unmarshalDepositVersion0(dep *types.DepositTx, to common.Address, opaqueDat
 
 // MarshalDepositLogEvent returns an EVM log entry that encodes a TransactionDeposited event from the deposit contract.
 // This is the reverse of the deposit transaction derivation.
-func MarshalDepositLogEvent(depositContractAddr common.Address, deposit *types.DepositTx) (*types.Log, error) {
+func MarshalDepositLogEvent(depositContractAddr common.Address, deposit *optypes.DepositTx) (*types.Log, error) {
 	toBytes := common.Hash{}
 	if deposit.To != nil {
 		toBytes = eth.AddressAsLeftPaddedHash(*deposit.To)
@@ -190,7 +192,7 @@ func MarshalDepositLogEvent(depositContractAddr common.Address, deposit *types.D
 	}, nil
 }
 
-func marshalDepositVersion0(deposit *types.DepositTx) ([]byte, error) {
+func marshalDepositVersion0(deposit *optypes.DepositTx) ([]byte, error) {
 	opaqueData := make([]byte, 32+32+8+1, 32+32+8+1+len(deposit.Data))
 	offset := 0
 

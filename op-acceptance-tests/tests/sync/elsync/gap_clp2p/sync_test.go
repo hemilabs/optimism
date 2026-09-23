@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
+	"github.com/ethereum-optimism/optimism/op-devstack/sysgo"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+
+	safety "github.com/ethereum-optimism/optimism/op-service/eth/safety"
 )
 
 func TestReachUnsafeTipByAppendingUnsafePayload(gt *testing.T) {
@@ -14,13 +16,13 @@ func TestReachUnsafeTipByAppendingUnsafePayload(gt *testing.T) {
 	sys := newGapCLP2PSystem(t)
 	logger := t.Logger()
 
-	sys.L2CL.Advanced(types.LocalUnsafe, 7, 30)
+	sys.L2CL.Advanced(safety.LocalUnsafe, 7, 30)
 
 	// First make verifier reach unsafe tip
 	logger.Info("Initial trial for appending payload until tip")
 	sys.L2CLB.AppendUnsafePayloadUntilTip(sys.L2ELB, sys.L2EL, 400)
 
-	sys.L2CL.Advanced(types.LocalUnsafe, 7, 30)
+	sys.L2CL.Advanced(safety.LocalUnsafe, 7, 30)
 
 	// Try once more to check that filling in the gap works again
 	logger.Info("Second trial for appending payload until tip")
@@ -46,12 +48,22 @@ func TestReachUnsafeTipByAppendingUnsafePayload(gt *testing.T) {
 // while maintaining correct Engine API semantics.
 func TestCLUnsafeNotRewoundOnInvalidDuringELSync(gt *testing.T) {
 	t := devtest.ParallelT(gt)
+	// Example error with op-reth:
+	//
+	// assertions.go:387:             ERROR[03-31|09:41:58.089]
+	// assertions.go:387:             	Error Trace:	/optimism/op-devstack/dsl/l2_cl.go:279
+	// assertions.go:387:             	            				/optimism/op-acceptance-tests/tests/sync/elsync/gap_clp2p/sync_test.go:96
+	// assertions.go:387:             	Error:      	Received unexpected error:
+	// assertions.go:387:             	            	expected head not to advance: unsafe
+	// assertions.go:387:             	Test:       	TestCLUnsafeNotRewoundOnInvalidDuringELSync
+	// assertions.go:387:
+	sysgo.SkipOnOpReth(t, "not supported")
 	sys := newGapCLP2PSystem(t)
 	logger := t.Logger()
 	require := t.Require()
 
 	// Advance few blocks to make sure reference node advanced
-	sys.L2CL.Advanced(types.LocalUnsafe, 7, 30)
+	sys.L2CL.Advanced(safety.LocalUnsafe, 7, 30)
 
 	// Restart L2CLB to always trigger an EL Sync
 	sys.L2CLB.Stop()
@@ -93,7 +105,7 @@ func TestCLUnsafeNotRewoundOnInvalidDuringELSync(gt *testing.T) {
 	_, ok = payload.CheckBlockHash()
 	require.True(ok)
 	sys.L2CLB.PostUnsafePayload(payload)
-	sys.L2CLB.NotAdvanced(types.LocalUnsafe, attempts)
+	sys.L2CLB.NotAdvanced(safety.LocalUnsafe, attempts)
 	sys.L2ELB.NotAdvanced(eth.Unsafe, attempts)
 	// EL did not advance
 	sys.L2ELB.UnsafeHead().NumEqualTo(startNum)

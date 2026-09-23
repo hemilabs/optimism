@@ -11,9 +11,9 @@ import (
 	"time"
 
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	shared "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
 	"github.com/ethereum-optimism/optimism/op-service/crypto"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/stretchr/testify/require"
@@ -37,7 +37,7 @@ type EndpointProvider interface {
 	L2NodeEndpoints() []endpoint.RPC
 	RollupEndpoint(name string) endpoint.RPC
 	L1BeaconEndpoint() endpoint.RestHTTP
-	SupervisorEndpoint() endpoint.RPC
+	SupernodeEndpoint() endpoint.RPC
 	IsSupersystem() bool
 }
 
@@ -45,7 +45,6 @@ type System interface {
 	RollupCfgs() []*rollup.Config
 	L1Genesis() *core.Genesis
 	L2Geneses() []*core.Genesis
-	PrestateVariant() shared.PrestateVariant
 }
 type Helper struct {
 	log     log.Logger
@@ -129,27 +128,39 @@ type MinimalT interface {
 
 func handleOptError(t *testing.T, opt shared.Option) Option {
 	return func(c *config.Config) {
-		require.NoError(t, opt(c))
+		require.NoError(t, opt(t.Context(), c))
 	}
 }
-func WithCannon(t *testing.T, system System) Option {
-	return func(c *config.Config) {
-		handleOptError(t, shared.WithCannonConfig(system.RollupCfgs(), system.L1Genesis(), system.L2Geneses(), system.PrestateVariant()))(c)
-		handleOptError(t, shared.WithCannonGameType())(c)
-	}
+
+// withPermissionedCannonVMConfig wires the base Cannon VM config (VM binary and genesis files) with
+// a dummy absolute prestate. op-e2e does not run the legacy Cannon game type; this base config only
+// exists to satisfy the challenger's config validation. The permissioned game type that uses it
+// skips prestate validation and resolves without reaching step(); output games use cannon-kona,
+// which configures its own prestate.
+func withPermissionedCannonVMConfig(t *testing.T, system System) Option {
+	return handleOptError(t, shared.WithPermissionedCannonConfig(system.RollupCfgs(), system.L1Genesis(), system.L2Geneses()))
 }
 
 func WithPermissioned(t *testing.T, system System) Option {
 	return func(c *config.Config) {
-		handleOptError(t, shared.WithCannonConfig(system.RollupCfgs(), system.L1Genesis(), system.L2Geneses(), system.PrestateVariant()))(c)
+		withPermissionedCannonVMConfig(t, system)(c)
 		handleOptError(t, shared.WithPermissionedGameType())(c)
 	}
 }
 
-func WithSuperCannon(t *testing.T, system System) Option {
+func WithCannonKona(t *testing.T, system System) Option {
 	return func(c *config.Config) {
-		handleOptError(t, shared.WithCannonConfig(system.RollupCfgs(), system.L1Genesis(), system.L2Geneses(), system.PrestateVariant()))(c)
-		handleOptError(t, shared.WithSuperCannonGameType())(c)
+		withPermissionedCannonVMConfig(t, system)(c)
+		handleOptError(t, shared.WithCannonKonaConfig(system.RollupCfgs(), system.L1Genesis(), system.L2Geneses()))(c)
+		handleOptError(t, shared.WithCannonKonaGameType())(c)
+	}
+}
+
+func WithSuperCannonKona(t *testing.T, system System) Option {
+	return func(c *config.Config) {
+		withPermissionedCannonVMConfig(t, system)(c)
+		handleOptError(t, shared.WithCannonKonaInteropConfig(system.RollupCfgs(), system.L1Genesis(), system.L2Geneses()))(c)
+		handleOptError(t, shared.WithSuperCannonKonaGameType())(c)
 	}
 }
 
@@ -188,11 +199,12 @@ func NewChallengerConfig(t *testing.T, sys EndpointProvider, l2NodeName string, 
 		for _, l2Node := range sys.L2NodeEndpoints() {
 			l2Endpoints = append(l2Endpoints, l2Node.RPC())
 		}
-		cfg = config.NewInteropConfig(common.Address{}, l1Endpoint, l1Beacon, sys.SupervisorEndpoint().RPC(), l2Endpoints, t.TempDir())
+		cfg = config.NewInteropConfig(common.Address{}, l1Endpoint, l1Beacon, sys.SupernodeEndpoint().RPC(), l2Endpoints, t.TempDir())
 	} else {
 		cfg = config.NewConfig(common.Address{}, l1Endpoint, l1Beacon, sys.RollupEndpoint(l2NodeName).RPC(), sys.NodeEndpoint(l2NodeName).RPC(), t.TempDir())
 	}
 	cfg.Cannon.L2Custom = true
+	cfg.CannonKona.L2Custom = true
 	// The devnet can't set the absolute prestate output root because the contracts are deployed in L1 genesis
 	// before the L2 genesis is known.
 	cfg.AllowInvalidPrestate = true
@@ -217,13 +229,9 @@ func NewChallengerConfig(t *testing.T, sys EndpointProvider, l2NodeName string, 
 		_, err := os.Stat(cfg.Cannon.VmBin)
 		require.NoError(t, err, "cannon should be built. Make sure you've run make cannon-prestates")
 	}
-	if cfg.Cannon.Server != "" {
-		_, err := os.Stat(cfg.Cannon.Server)
-		require.NoError(t, err, "op-program should be built. Make sure you've run make cannon-prestates")
-	}
-	if cfg.CannonAbsolutePreState != "" {
-		_, err := os.Stat(cfg.CannonAbsolutePreState)
-		require.NoError(t, err, "cannon pre-state should be built. Make sure you've run make cannon-prestates")
+	if cfg.CannonKona.Server != "" {
+		_, err := os.Stat(cfg.CannonKona.Server)
+		require.NoError(t, err, "kona-host should be built. Run: cd rust/kona && just build-native --profile=release")
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = time.Second

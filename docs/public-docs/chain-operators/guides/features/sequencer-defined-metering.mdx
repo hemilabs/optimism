@@ -1,0 +1,89 @@
+---
+title: "SDM: Sequencer Defined Metering"
+description: "Technical guide for chain operators integrating or verifying Sequencer Defined Metering (SDM)."
+diataxis: how-to
+hidden: true
+---
+
+<Warning>
+SDM is not yet live. Stock public `op-reth` supports the SDM consensus and verification
+mechanism, but it does **not** implement a refund-producing policy. Enabling its operator gate does
+not cause it to issue refunds or append PostExec transactions.
+</Warning>
+
+**Sequencer Defined Metering (SDM)** lets a block producer define per-transaction gas rebates and
+commit them in a synthetic **PostExec transaction**. The public OP Stack implementation keeps the
+consensus format, validation, derivation, receipt settlement, and fault-proof support open while
+leaving policy selection to producers.
+
+## How rebates are recorded
+
+When a producer issues rebates, it appends one PostExec transaction (type `0x7D`) as the last
+transaction in the block. The transaction is non-executable and carries an RLP-encoded payload of
+transaction indexes and gas refunds.
+
+A rebated transaction receipt includes `opGasRefund`. Its `gasUsed` is the canonical amount charged;
+the pre-rebate amount is `gasUsed + opGasRefund`. Deposits and the PostExec transaction cannot
+receive refunds, and a refund cannot exceed the transaction's pre-refund EVM gas usage.
+
+Verifier nodes do not execute the producer's private policy. They validate the committed payload,
+apply its settlement effects, and reproduce the same receipts and state root. Consensus-layer
+clients derive the trailing PostExec transaction from L1 data like any other transaction.
+
+## Protocol activation
+
+SDM is gated by the **Lagoon** hardfork. Before Lagoon, a PostExec transaction is invalid. At or
+after activation, an SDM-aware verifier accepts a structurally valid producer-supplied PostExec
+transaction and verifies its consensus effects.
+
+Run SDM-capable versions of:
+
+* `op-reth` on execution nodes; and
+* `op-node` or `kona-node` on consensus nodes.
+
+Verifier operators need no policy opt-in.
+
+## Stock `op-reth` production behavior
+
+Released public `op-reth` uses a null refund policy. It never creates a non-empty refund payload and
+never appends a PostExec transaction, even when Lagoon is active and
+`admin_setOperatorSdmOptIn(true)` has been called. The admin surface remains available for protocol
+compatibility and downstream producer integrations; it is not a policy-selection interface in
+stock `op-reth`.
+
+The `op-reth-sdm-fixture` binary in the source tree is only a deterministic acceptance-test fixture.
+It is excluded from release packaging, images, and deployment manifests.
+Do not deploy it as a sequencer.
+
+If you use a third-party or proprietary SDM producer, follow that producer's policy and opt-in
+documentation. The producer must emit blocks that stock verifier nodes accept; no producer-specific
+policy code is required on verifiers.
+
+## Confirming producer output
+
+To inspect a receipt produced by an SDM-enabled producer:
+
+```bash title="Inspect a receipt"
+cast receipt <TX_HASH> --rpc-url <RPC_URL> --json | jq '.opGasRefund'
+```
+
+You can also fetch the containing block and check whether its last transaction has type `0x7D`.
+A block without rebates has no PostExec transaction, so absence alone does not indicate whether the
+protocol is active.
+
+## Debug replay
+
+`debug_replaySDMBlock` is an operator/research diagnostic. It re-executes a historical block's
+non-PostExec transactions under standard gas accounting to recover each transaction's raw
+(pre-rebate) gas, then reports that alongside the block's claimed refunds and flags structurally
+invalid claims — a refund targeting a deposit or the PostExec transaction itself, a duplicate or
+out-of-range index, or a refund larger than the transaction's raw gas.
+
+It does not recompute what the refunds should have been: that requires the producer's policy, which
+stock `op-reth` does not implement. The endpoint requires historical state and should not be exposed
+on public RPC interfaces.
+
+## References
+
+* [EIP-2929: Gas cost increases for state access opcodes](https://eips.ethereum.org/EIPS/eip-2929)
+* [EIP-3529: Reduction in refunds](https://eips.ethereum.org/EIPS/eip-3529)

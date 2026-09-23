@@ -1,6 +1,40 @@
 package sysgo
 
-import gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+import (
+	"fmt"
+	"time"
+
+	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+	nodeSync "github.com/ethereum-optimism/optimism/op-node/rollup/sync"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
+)
+
+type PreGenesisSuperGameConfig struct {
+	ClaimedOutputs []eth.Bytes32
+}
+
+// ZKDisputeGameConfig configures the shared ZK dispute game installed after
+// the interop migration. OPCM injects the release-owned SP1 adapter.
+type ZKDisputeGameConfig struct {
+	MaxChallengeDuration time.Duration
+	MaxProveDuration     time.Duration
+}
+
+func (c ZKDisputeGameConfig) validate() error {
+	if c.MaxChallengeDuration <= 0 {
+		return fmt.Errorf("ZK maximum challenge duration must be positive")
+	}
+	if c.MaxChallengeDuration%time.Second != 0 {
+		return fmt.Errorf("ZK maximum challenge duration must use whole seconds")
+	}
+	if c.MaxProveDuration <= 0 {
+		return fmt.Errorf("ZK maximum prove duration must be positive")
+	}
+	if c.MaxProveDuration%time.Second != 0 {
+		return fmt.Errorf("ZK maximum prove duration must use whole seconds")
+	}
+	return nil
+}
 
 // PresetConfig captures preset constructor mutations.
 // It is independent from orchestrator lifecycle hooks.
@@ -9,118 +43,44 @@ type PresetConfig struct {
 	DeployerOptions            []DeployerOption
 	BatcherOptions             []BatcherOption
 	ProposerOptions            []ProposerOption
-	OPRBuilderOptions          []OPRBuilderNodeOption
+	OpRethOptions              []OpRethOption
 	GlobalL2CLOptions          []L2CLOption
 	GlobalSyncTesterELOptions  []SyncTesterELOption
 	L1ELKind                   string
 	L1GethExecPath             string
 	AddedGameTypes             []gameTypes.GameType
 	RespectedGameTypes         []gameTypes.GameType
-	EnableCannonKonaForChall   bool
 	EnableTimeTravel           bool
 	MaxSequencingWindow        *uint64
 	RequireInteropNotAtGen     bool
+	MessageExpiryWindow        *uint64
+	UseInteropFilter           bool
+	// InteropLogBackfillDepth, if non-zero, configures the supernode to backfill
+	// initiating-message logs backward from the tip by this duration at startup.
+	InteropLogBackfillDepth time.Duration
+	PreGenesisSuperGame     *PreGenesisSuperGameConfig
+	ZKDisputeGame           *ZKDisputeGameConfig
+	ZKProposerOptions       []ZKProposerOption
+	// SkipHonestProposer skips starting the honest proposer (op-proposer, or kona-sp1-proposer for the ZK preset).
+	SkipHonestProposer bool
+	// SkipHonestChallenger skips starting the honest challenger.
+	SkipHonestChallenger bool
+	// SupernodeVerifierSyncMode overrides the supernode VN's sync mode when set.
+	SupernodeVerifierSyncMode *nodeSync.Mode
+	// InteropActivationDelaySeconds offsets Interop activation past genesis (0 = at genesis).
+	InteropActivationDelaySeconds uint64
+	// InteropAtGenesis activates Interop on the L2 chain at genesis and provisions a
+	// DependencySet for op-node startup (without a supervisor). Required by tests that
+	// exercise Interop-gated consensus features (e.g. SDM PostExec) on the default
+	// single-chain runtime.
+	InteropAtGenesis bool
+	// SupernodeVNSequencerForBootstrap, in the light-sequencer supernode interop preset,
+	// enables sequencing on the supernode VN and starts the light follow-mode ELSync
+	// sequencers stopped, so the VN can bootstrap the chain the light sequencers EL-sync
+	// from before a test hands off sequencing to them.
+	SupernodeVNSequencerForBootstrap bool
 }
 
-type PresetOption interface {
-	apply(cfg *PresetConfig)
-}
-
-type presetOptionFn func(cfg *PresetConfig)
-
-func (fn presetOptionFn) apply(cfg *PresetConfig) {
-	fn(cfg)
-}
-
-func NewPresetConfig(opts ...PresetOption) PresetConfig {
-	cfg := PresetConfig{}
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt.apply(&cfg)
-	}
-	return cfg
-}
-
-func WithDeployerOptions(opts ...DeployerOption) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		cfg.DeployerOptions = append(cfg.DeployerOptions, opts...)
-	})
-}
-
-func WithBatcherOption(opt BatcherOption) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		if opt == nil {
-			return
-		}
-		cfg.BatcherOptions = append(cfg.BatcherOptions, opt)
-	})
-}
-
-func WithProposerOption(opt ProposerOption) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		if opt == nil {
-			return
-		}
-		cfg.ProposerOptions = append(cfg.ProposerOptions, opt)
-	})
-}
-
-func WithOPRBuilderOption(opt OPRBuilderNodeOption) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		if opt == nil {
-			return
-		}
-		cfg.OPRBuilderOptions = append(cfg.OPRBuilderOptions, opt)
-	})
-}
-
-func WithGlobalL2CLOption(opt L2CLOption) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		if opt == nil {
-			return
-		}
-		cfg.GlobalL2CLOptions = append(cfg.GlobalL2CLOptions, opt)
-	})
-}
-
-func WithGlobalSyncTesterELOption(opt SyncTesterELOption) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		if opt == nil {
-			return
-		}
-		cfg.GlobalSyncTesterELOptions = append(cfg.GlobalSyncTesterELOptions, opt)
-	})
-}
-
-func WithGameTypeAdded(gameType gameTypes.GameType) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		cfg.AddedGameTypes = append(cfg.AddedGameTypes, gameType)
-	})
-}
-
-func WithRespectedGameTypeOverride(gameType gameTypes.GameType) PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		cfg.RespectedGameTypes = append(cfg.RespectedGameTypes, gameType)
-	})
-}
-
-func WithCannonKonaGameTypeAdded() PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		cfg.EnableCannonKonaForChall = true
-		cfg.AddedGameTypes = append(cfg.AddedGameTypes, gameTypes.CannonKonaGameType)
-	})
-}
-
-func WithChallengerCannonKonaEnabled() PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		cfg.EnableCannonKonaForChall = true
-	})
-}
-
-func WithTimeTravelEnabled() PresetOption {
-	return presetOptionFn(func(cfg *PresetConfig) {
-		cfg.EnableTimeTravel = true
-	})
+func NewPresetConfig() PresetConfig {
+	return PresetConfig{}
 }

@@ -6,12 +6,11 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-core/eip1559"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
@@ -24,7 +23,7 @@ const defaultGasLimit = 30_000_000
 var HoloceneExtraData = eip1559.EncodeHoloceneExtraData(250, 6)
 
 // MinBaseFeeExtraData represents the default extra data for Jovian-genesis chains.
-var MinBaseFeeExtraData = rollup.EncodeJovianExtraData(250, 6, 0)
+var MinBaseFeeExtraData = eip1559.EncodeJovianExtraData(250, 6, 0)
 
 // NewL2Genesis will create a new L2 genesis
 func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Genesis, error) {
@@ -45,7 +44,10 @@ func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Gene
 		eip1559Elasticity = 10
 	}
 
-	l1StartTime := l1StartHeader.Time
+	l2GenesisTime, err := config.L2GenesisTime(l1StartHeader.Time)
+	if err != nil {
+		return nil, err
+	}
 
 	optimismChainConfig := params.ChainConfig{
 		ChainID:                 new(big.Int).SetUint64(config.L2ChainID),
@@ -67,18 +69,19 @@ func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Gene
 		MergeNetsplitBlock:      big.NewInt(0),
 		TerminalTotalDifficulty: big.NewInt(0),
 		BedrockBlock:            new(big.Int).SetUint64(uint64(config.L2GenesisBlockNumber)),
-		RegolithTime:            config.RegolithTime(l1StartTime),
-		CanyonTime:              config.CanyonTime(l1StartTime),
-		ShanghaiTime:            config.CanyonTime(l1StartTime),
-		CancunTime:              config.EcotoneTime(l1StartTime),
-		EcotoneTime:             config.EcotoneTime(l1StartTime),
-		FjordTime:               config.FjordTime(l1StartTime),
-		GraniteTime:             config.GraniteTime(l1StartTime),
-		HoloceneTime:            config.HoloceneTime(l1StartTime),
-		IsthmusTime:             config.IsthmusTime(l1StartTime),
-		JovianTime:              config.JovianTime(l1StartTime),
-		PragueTime:              config.IsthmusTime(l1StartTime),
-		InteropTime:             config.InteropTime(l1StartTime),
+		RegolithTime:            config.RegolithTime(l2GenesisTime),
+		CanyonTime:              config.CanyonTime(l2GenesisTime),
+		ShanghaiTime:            config.CanyonTime(l2GenesisTime),
+		CancunTime:              config.EcotoneTime(l2GenesisTime),
+		EcotoneTime:             config.EcotoneTime(l2GenesisTime),
+		FjordTime:               config.FjordTime(l2GenesisTime),
+		GraniteTime:             config.GraniteTime(l2GenesisTime),
+		HoloceneTime:            config.HoloceneTime(l2GenesisTime),
+		IsthmusTime:             config.IsthmusTime(l2GenesisTime),
+		JovianTime:              config.JovianTime(l2GenesisTime),
+		PragueTime:              config.IsthmusTime(l2GenesisTime),
+		// hemi: the pinned hemilabs/op-geth has no Karst/Lagoon fields; Lagoon is the interop fork.
+		InteropTime: config.LagoonTime(l2GenesisTime),
 		Optimism: &params.OptimismConfig{
 			EIP1559Denominator:       eip1559Denom,
 			EIP1559Elasticity:        eip1559Elasticity,
@@ -102,7 +105,7 @@ func NewL2Genesis(config *DeployConfig, l1StartHeader *eth.BlockRef) (*core.Gene
 	genesis := &core.Genesis{
 		Config:     &optimismChainConfig,
 		Nonce:      uint64(config.L2GenesisBlockNonce),
-		Timestamp:  l1StartTime,
+		Timestamp:  l2GenesisTime,
 		GasLimit:   uint64(gasLimit),
 		Difficulty: difficulty.ToInt(),
 		Mixhash:    config.L2GenesisBlockMixHash,
@@ -165,6 +168,10 @@ type DevL1DeployConfigMinimal struct {
 	L1BPO3TimeOffset *uint64
 	// When BPO4 activates. Relative to L1 genesis.
 	L1BPO4TimeOffset *uint64
+	// When BPO5 activates. Relative to L1 genesis.
+	L1BPO5TimeOffset *uint64
+	// When Amsterdam activates. Relative to L1 genesis.
+	L1AmsterdamTimeOffset *uint64
 	// Blob schedule config.
 	BlobScheduleConfig *params.BlobScheduleConfig
 }
@@ -241,6 +248,14 @@ func NewL1GenesisMinimal(config *DevL1DeployConfigMinimal) (*core.Genesis, error
 	if config.L1BPO4TimeOffset != nil {
 		bpo4Time := uint64(timestamp) + uint64(*config.L1BPO4TimeOffset)
 		chainConfig.BPO4Time = &bpo4Time
+	}
+	if config.L1BPO5TimeOffset != nil {
+		bpo5Time := uint64(timestamp) + uint64(*config.L1BPO5TimeOffset)
+		chainConfig.BPO5Time = &bpo5Time
+	}
+	if config.L1AmsterdamTimeOffset != nil {
+		// hemi: the pinned hemilabs/op-geth does not support the Amsterdam fork.
+		return nil, errors.New("L1 Amsterdam fork is not supported by the pinned hemilabs/op-geth")
 	}
 	if config.BlobScheduleConfig != nil {
 		chainConfig.BlobScheduleConfig = config.BlobScheduleConfig

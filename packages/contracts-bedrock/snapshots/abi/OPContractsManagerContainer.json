@@ -42,22 +42,12 @@
           },
           {
             "internalType": "address",
-            "name": "protocolVersionsImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
             "name": "l1ERC721BridgeImpl",
             "type": "address"
           },
           {
             "internalType": "address",
             "name": "optimismPortalImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismPortalInteropImpl",
             "type": "address"
           },
           {
@@ -127,7 +117,17 @@
           },
           {
             "internalType": "address",
+            "name": "zkDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
             "name": "storageSetterImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "sp1PlonkAdapterImpl",
             "type": "address"
           }
         ],
@@ -210,22 +210,12 @@
           },
           {
             "internalType": "address",
-            "name": "protocolVersionsImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
             "name": "l1ERC721BridgeImpl",
             "type": "address"
           },
           {
             "internalType": "address",
             "name": "optimismPortalImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismPortalInteropImpl",
             "type": "address"
           },
           {
@@ -295,7 +285,17 @@
           },
           {
             "internalType": "address",
+            "name": "zkDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
             "name": "storageSetterImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "sp1PlonkAdapterImpl",
             "type": "address"
           }
         ],

@@ -1,6 +1,6 @@
 //! Tests for custom genesis block number support.
 
-use alloy_consensus::BlockHeader;
+use alloy_consensus::{BlockHeader, Sealable};
 use alloy_genesis::Genesis;
 use alloy_primitives::B256;
 use reth_chainspec::EthChainSpec;
@@ -30,8 +30,9 @@ async fn test_op_node_custom_genesis_number() {
     genesis.number = Some(genesis_number);
     genesis.parent_hash = Some(B256::random());
 
-    let chain_spec =
-        Arc::new(OpChainSpecBuilder::base_mainnet().genesis(genesis).ecotone_activated().build());
+    let chain_spec = Arc::new(
+        OpChainSpecBuilder::optimism_sepolia().genesis(genesis).ecotone_activated().build(),
+    );
 
     let wallet = Arc::new(Mutex::new(Wallet::default().with_chain_id(chain_spec.chain().into())));
 
@@ -88,8 +89,13 @@ async fn test_op_node_custom_genesis_number() {
         assert!(header.is_none(), "Block {block_num} before genesis should not exist");
     }
 
-    // Advance the chain with a single block
-    let _ = wallet; // wallet available for future use
+    // Initialize the forkchoice state with the genesis block hash so that
+    // `current_forkchoice_state()` can resolve the latest header. With storage_v2,
+    // the canonical chain tip must be explicitly set via a forkchoice update.
+    let genesis_hash = genesis_header.unwrap().seal_slow().hash();
+    node.update_forkchoice(genesis_hash, genesis_hash).await.unwrap();
+
+    // Advance the chain with a single block.
     let block_payloads = node
         .advance(1, |_| {
             Box::pin({
@@ -117,6 +123,6 @@ async fn test_op_node_custom_genesis_number() {
     assert_eq!(
         block.number(),
         1001,
-        "Block number should be 1001 after advancing from genesis 100"
+        "Block number should be 1001 after advancing from genesis 1000"
     );
 }

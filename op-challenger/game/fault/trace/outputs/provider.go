@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/utils"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -59,7 +61,7 @@ func (o *OutputTraceProvider) ClaimedBlockNumber(pos types.Position) (uint64, er
 		return 0, fmt.Errorf("%w: %v", ErrIndexTooBig, traceIndex)
 	}
 
-	outputBlock := traceIndex.Uint64() + o.prestateBlock + 1
+	outputBlock := bigs.Uint64Strict(traceIndex) + o.prestateBlock + 1
 	if outputBlock > o.poststateBlock {
 		outputBlock = o.poststateBlock
 	}
@@ -114,7 +116,9 @@ func (o *OutputTraceProvider) GetL2BlockNumberChallenge(ctx context.Context) (*t
 	if err != nil {
 		return nil, err
 	}
-	header, err := o.l2Client.HeaderByNumber(ctx, new(big.Int).SetUint64(outputBlock))
+	tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	header, err := o.l2Client.HeaderByNumber(tCtx, new(big.Int).SetUint64(outputBlock))
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve L2 block header %v: %w", outputBlock, err)
 	}

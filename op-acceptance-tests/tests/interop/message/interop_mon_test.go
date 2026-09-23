@@ -11,13 +11,13 @@ import (
 	"github.com/ethereum-optimism/optimism/op-interop-mon/monitor"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
+	metricstest "github.com/ethereum-optimism/optimism/op-service/metrics/test"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/stretchr/testify/assert"
 )
 
 // TestInteropMon is testing that the op-interop-mon metrics are correctly collected
 func TestInteropMon(gt *testing.T) {
-	gt.Skip("Skipping Interop Acceptance Test")
 	t := devtest.ParallelT(gt)
 	sys := presets.NewSimpleInterop(t)
 
@@ -35,7 +35,7 @@ func TestInteropMon(gt *testing.T) {
 		MetricsConfig: opmetrics.CLIConfig{
 			Enabled: true,
 		},
-	}, clients, []monitor.FailsafeClient{}, t.Logger())
+	}, clients, t.Logger())
 	t.Require().NoError(err)
 	require.NoError(im.Start(t.Ctx()))
 
@@ -53,7 +53,7 @@ func TestInteropMon(gt *testing.T) {
 
 	// Ensure the metrics are generated
 	require.EventuallyWithT(func(t *assert.CollectT) {
-		checker := opmetrics.NewMetricChecker(t, im.Metrics.(opmetrics.RegistryMetricer).Registry())
+		checker := metricstest.NewMetricChecker(t, im.Metrics.(opmetrics.RegistryMetricer).Registry())
 		checker.FindByName("op_interop_mon_default_message_status")
 	}, 2*time.Minute, 100*time.Millisecond)
 	t.Log("op-interop-mon metrics check successful")

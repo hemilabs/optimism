@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
@@ -54,11 +56,15 @@ var (
 	methodL2BlockNumberChallenger = "l2BlockNumberChallenger"
 	methodChallengeRootL2Block    = "challengeRootL2Block"
 	methodBondDistributionMode    = "bondDistributionMode"
+	methodCloseGame               = "closeGame"
+	methodAnchorStateRegistry     = "anchorStateRegistry"
 )
 
 var (
-	ErrSimulationFailed             = errors.New("tx simulation failed")
-	ErrChallengeL2BlockNotSupported = errors.New("contract version does not support challenging L2 block number")
+	ErrSimulationFailed                = errors.New("tx simulation failed")
+	ErrChallengeL2BlockNotSupported    = errors.New("contract version does not support challenging L2 block number")
+	ErrCloseGameNotSupported           = errors.New("contract version does not support closeGame")
+	ErrAnchorStateRegistryNotSupported = errors.New("contract version does not support anchorStateRegistry")
 )
 
 type FaultDisputeGameContractLatest struct {
@@ -81,10 +87,16 @@ func NewFaultDisputeGameContract(ctx context.Context, metrics metrics.ContractMe
 		return nil, fmt.Errorf("failed to detect game type: %w", err)
 	}
 	switch gameType {
-	case gameTypes.SuperCannonGameType, gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType, gameTypes.SuperAsteriscKonaGameType:
+	case gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType:
 		return NewSuperFaultDisputeGameContract(ctx, metrics, addr, caller)
-	default:
+	case gameTypes.CannonGameType,
+		gameTypes.PermissionedGameType,
+		gameTypes.CannonKonaGameType,
+		gameTypes.AlphabetGameType,
+		gameTypes.FastGameType:
 		return NewPreInteropFaultDisputeGameContract(ctx, metrics, addr, caller)
+	default:
+		return nil, fmt.Errorf("%w: %v", ErrUnsupportedGameType, gameType)
 	}
 }
 
@@ -197,9 +209,17 @@ func (f *FaultDisputeGameContractLatest) GetGameRange(ctx context.Context) (pres
 		retErr = fmt.Errorf("expected 2 results but got %v", len(results))
 		return
 	}
-	prestateBlock = results[0].GetBigInt(0).Uint64()
-	poststateBlock = results[1].GetBigInt(0).Uint64()
+	prestateBlock = getBlockNumber(results[0], 0)
+	poststateBlock = getBlockNumber(results[1], 0)
 	return
+}
+
+func getBlockNumber(result *batching.CallResult, idx int) uint64 {
+	val := result.GetBigInt(idx)
+	if val.IsUint64() {
+		return bigs.Uint64Strict(val)
+	}
+	return math.MaxUint64
 }
 
 type GameMetadata struct {
@@ -231,7 +251,7 @@ func (f *FaultDisputeGameContractLatest) GetExtendedMetadata(ctx context.Context
 		return GameMetadata{}, fmt.Errorf("expected 7 results but got %v", len(results))
 	}
 	l1Head := results[0].GetHash(0)
-	l2BlockNumber := results[1].GetBigInt(0).Uint64()
+	l2BlockNumber := getBlockNumber(results[1], 0)
 	rootClaim := results[2].GetHash(0)
 	status, err := gameTypes.GameStatusFromUint8(results[3].GetUint8(0))
 	if err != nil {
@@ -267,7 +287,7 @@ func (f *FaultDisputeGameContractLatest) GetMetadata(ctx context.Context, block 
 		return GenericGameMetadata{}, fmt.Errorf("expected 4 results but got %v", len(results))
 	}
 	l1Head := results[0].GetHash(0)
-	l2BlockNumber := results[1].GetBigInt(0).Uint64()
+	l2BlockNumber := getBlockNumber(results[1], 0)
 	rootClaim := results[2].GetHash(0)
 	status, err := gameTypes.GameStatusFromUint8(results[3].GetUint8(0))
 	if err != nil {
@@ -291,6 +311,15 @@ func (f *FaultDisputeGameContractLatest) GetResolvedAt(ctx context.Context, bloc
 	return resolvedAt, nil
 }
 
+func (f *FaultDisputeGameContractLatest) GetAnchorStateRegistry(ctx context.Context, block rpcblock.Block) (common.Address, error) {
+	defer f.metrics.StartContractRequest("GetAnchorStateRegistry")()
+	result, err := f.multiCaller.SingleCall(ctx, block, f.contract.Call(methodAnchorStateRegistry))
+	if err != nil {
+		return common.Address{}, fmt.Errorf("failed to retrieve anchor state registry: %w", err)
+	}
+	return result.GetAddress(0), nil
+}
+
 func (f *FaultDisputeGameContractLatest) GetStartingRootHash(ctx context.Context) (common.Hash, error) {
 	defer f.metrics.StartContractRequest("GetStartingRootHash")()
 	startingRootHash, err := f.multiCaller.SingleCall(ctx, rpcblock.Latest, f.contract.Call(methodStartingRootHash))
@@ -306,7 +335,7 @@ func (f *FaultDisputeGameContractLatest) GetSplitDepth(ctx context.Context) (typ
 	if err != nil {
 		return 0, fmt.Errorf("failed to retrieve split depth: %w", err)
 	}
-	return types.Depth(splitDepth.GetBigInt(0).Uint64()), nil
+	return types.Depth(bigs.Uint64Strict(splitDepth.GetBigInt(0))), nil
 }
 
 func (f *FaultDisputeGameContractLatest) GetCredit(ctx context.Context, recipient common.Address) (*big.Int, gameTypes.GameStatus, error) {
@@ -456,7 +485,7 @@ func (f *FaultDisputeGameContractLatest) GetMaxGameDepth(ctx context.Context) (t
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch max game depth: %w", err)
 	}
-	return types.Depth(result.GetBigInt(0).Uint64()), nil
+	return types.Depth(bigs.Uint64Strict(result.GetBigInt(0))), nil
 }
 
 func (f *FaultDisputeGameContractLatest) GetAbsolutePrestateHash(ctx context.Context) (common.Hash, error) {
@@ -492,7 +521,7 @@ func (f *FaultDisputeGameContractLatest) GetClaimCount(ctx context.Context) (uin
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch claim count: %w", err)
 	}
-	return result.GetBigInt(0).Uint64(), nil
+	return bigs.Uint64Strict(result.GetBigInt(0)), nil
 }
 
 func (f *FaultDisputeGameContractLatest) GetClaim(ctx context.Context, idx uint64) (types.Claim, error) {
@@ -520,12 +549,30 @@ func (f *FaultDisputeGameContractLatest) GetAllClaims(ctx context.Context, block
 	return claims, nil
 }
 
+func (f *FaultDisputeGameContractLatest) IsClosed(ctx context.Context) (bool, error) {
+	mode, err := f.GetBondDistributionMode(ctx, rpcblock.Latest)
+	if err != nil {
+		return false, err
+	}
+	return mode != types.UndecidedDistributionMode, nil
+}
+
 func (f *FaultDisputeGameContractLatest) GetBondDistributionMode(ctx context.Context, block rpcblock.Block) (types.BondDistributionMode, error) {
 	result, err := f.multiCaller.SingleCall(ctx, block, f.contract.Call(methodBondDistributionMode))
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch bond mode: %w", err)
 	}
 	return types.BondDistributionMode(result.GetUint8(0)), nil
+}
+
+func (f *FaultDisputeGameContractLatest) CloseGameTx(ctx context.Context) (txmgr.TxCandidate, error) {
+	defer f.metrics.StartContractRequest("CloseGame")()
+	call := f.contract.Call(methodCloseGame)
+	_, err := f.multiCaller.SingleCall(ctx, rpcblock.Latest, call)
+	if err != nil {
+		return txmgr.TxCandidate{}, fmt.Errorf("%w: %w", ErrSimulationFailed, err)
+	}
+	return call.ToTxCandidate()
 }
 
 func (f *FaultDisputeGameContractLatest) IsResolved(ctx context.Context, block rpcblock.Block, claims ...types.Claim) ([]bool, error) {
@@ -681,6 +728,7 @@ type FaultDisputeGameContract interface {
 	GetExtendedMetadata(ctx context.Context, block rpcblock.Block) (GameMetadata, error)
 	GetStartingRootHash(ctx context.Context) (common.Hash, error)
 	GetSplitDepth(ctx context.Context) (types.Depth, error)
+	IsClosed(ctx context.Context) (bool, error)
 	GetCredit(ctx context.Context, recipient common.Address) (*big.Int, gameTypes.GameStatus, error)
 	GetRequiredBonds(ctx context.Context, block rpcblock.Block, positions ...*big.Int) ([]*big.Int, error)
 	GetCredits(ctx context.Context, block rpcblock.Block, recipients ...common.Address) ([]*big.Int, error)
@@ -706,4 +754,6 @@ type FaultDisputeGameContract interface {
 	ResolveClaimTx(claimIdx uint64) (txmgr.TxCandidate, error)
 	Vm(ctx context.Context) (*VMContract, error)
 	GetBondDistributionMode(ctx context.Context, block rpcblock.Block) (types.BondDistributionMode, error)
+	CloseGameTx(ctx context.Context) (txmgr.TxCandidate, error)
+	GetAnchorStateRegistry(ctx context.Context, block rpcblock.Block) (common.Address, error)
 }

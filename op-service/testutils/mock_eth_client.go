@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -76,6 +77,96 @@ func (m *MockEthClient) ExpectInfoAndTxsByLabel(label eth.BlockLabel, info eth.B
 	m.Mock.On("InfoAndTxsByLabel", label).Once().Return(info, transactions, err)
 }
 
+func (m *MockEthClient) InfoAndUserTxsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, types.Transactions, error) {
+	out := m.Mock.Called(hash)
+	return out.Get(0).(eth.BlockInfo), out.Get(1).(types.Transactions), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectInfoAndUserTxsByHash(hash common.Hash, info eth.BlockInfo, transactions types.Transactions, err error) {
+	m.Mock.On("InfoAndUserTxsByHash", hash).Once().Return(info, transactions, err)
+}
+
+func (m *MockEthClient) InfoAndUserTxsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, types.Transactions, error) {
+	out := m.Mock.Called(number)
+	return out.Get(0).(eth.BlockInfo), out.Get(1).(types.Transactions), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectInfoAndUserTxsByNumber(number uint64, info eth.BlockInfo, transactions types.Transactions, err error) {
+	m.Mock.On("InfoAndUserTxsByNumber", number).Once().Return(info, transactions, err)
+}
+
+func (m *MockEthClient) InfoAndDepositsByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, []*optypes.DepositTx, error) {
+	out := m.Mock.Called(hash)
+	return out.Get(0).(eth.BlockInfo), out.Get(1).([]*optypes.DepositTx), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectInfoAndDepositsByHash(hash common.Hash, info eth.BlockInfo, deposits []*optypes.DepositTx, err error) {
+	m.Mock.On("InfoAndDepositsByHash", hash).Once().Return(info, deposits, err)
+}
+
+func (m *MockEthClient) InfoAndDepositsByNumber(ctx context.Context, number uint64) (eth.BlockInfo, []*optypes.DepositTx, error) {
+	out := m.Mock.Called(number)
+	return out.Get(0).(eth.BlockInfo), out.Get(1).([]*optypes.DepositTx), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectInfoAndDepositsByNumber(number uint64, info eth.BlockInfo, deposits []*optypes.DepositTx, err error) {
+	m.Mock.On("InfoAndDepositsByNumber", number).Once().Return(info, deposits, err)
+}
+
+func (m *MockEthClient) InfoAndFirstDepositByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, *optypes.DepositTx, error) {
+	out := m.Mock.Called(hash)
+	return out.Get(0).(eth.BlockInfo), out.Get(1).(*optypes.DepositTx), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectInfoAndFirstDepositByHash(hash common.Hash, info eth.BlockInfo, deposit *optypes.DepositTx, err error) {
+	m.Mock.On("InfoAndFirstDepositByHash", hash).Once().Return(info, deposit, err)
+}
+
+func (m *MockEthClient) InfoAndFirstDepositByNumber(ctx context.Context, number uint64) (eth.BlockInfo, *optypes.DepositTx, error) {
+	out := m.Mock.Called(number)
+	return out.Get(0).(eth.BlockInfo), out.Get(1).(*optypes.DepositTx), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectInfoAndFirstDepositByNumber(number uint64, info eth.BlockInfo, deposit *optypes.DepositTx, err error) {
+	m.Mock.On("InfoAndFirstDepositByNumber", number).Once().Return(info, deposit, err)
+}
+
+func (m *MockEthClient) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	out := m.Mock.Called(hash)
+	return out.Get(0).(*types.Header), out.Error(1)
+}
+
+func (m *MockEthClient) ExpectHeaderByHash(hash common.Hash, header *types.Header, err error) {
+	m.Mock.On("HeaderByHash", hash).Once().Return(header, err)
+}
+
+func (m *MockEthClient) HeaderByNumber(ctx context.Context, number uint64) (*types.Header, error) {
+	out := m.Mock.Called(number)
+	return out.Get(0).(*types.Header), out.Error(1)
+}
+
+func (m *MockEthClient) ExpectHeaderByNumber(number uint64, header *types.Header, err error) {
+	m.Mock.On("HeaderByNumber", number).Once().Return(header, err)
+}
+
+func (m *MockEthClient) HeaderByLabel(ctx context.Context, label eth.BlockLabel) (*types.Header, error) {
+	out := m.Mock.Called(label)
+	return out.Get(0).(*types.Header), out.Error(1)
+}
+
+func (m *MockEthClient) ExpectHeaderByLabel(label eth.BlockLabel, header *types.Header, err error) {
+	m.Mock.On("HeaderByLabel", label).Once().Return(header, err)
+}
+
+func (m *MockEthClient) HeaderAndTxsByHash(ctx context.Context, hash common.Hash) (*types.Header, types.Transactions, error) {
+	out := m.Mock.Called(hash)
+	return out.Get(0).(*types.Header), out.Get(1).(types.Transactions), out.Error(2)
+}
+
+func (m *MockEthClient) ExpectHeaderAndTxsByHash(hash common.Hash, header *types.Header, transactions types.Transactions, err error) {
+	m.Mock.On("HeaderAndTxsByHash", hash).Once().Return(header, transactions, err)
+}
+
 func (m *MockEthClient) PayloadByHash(ctx context.Context, hash common.Hash) (*eth.ExecutionPayloadEnvelope, error) {
 	out := m.Mock.Called(hash)
 	return out.Get(0).(*eth.ExecutionPayloadEnvelope), out.Error(1)
@@ -103,12 +194,12 @@ func (m *MockEthClient) ExpectPayloadByLabel(label eth.BlockLabel, payload *eth.
 	m.Mock.On("PayloadByLabel", label).Once().Return(payload, err)
 }
 
-func (m *MockEthClient) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {
+func (m *MockEthClient) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, optypes.Receipts, error) {
 	out := m.Mock.Called(blockHash)
-	return *out.Get(0).(*eth.BlockInfo), out.Get(1).(types.Receipts), out.Error(2)
+	return *out.Get(0).(*eth.BlockInfo), out.Get(1).(optypes.Receipts), out.Error(2)
 }
 
-func (m *MockEthClient) ExpectFetchReceipts(hash common.Hash, info eth.BlockInfo, receipts types.Receipts, err error) {
+func (m *MockEthClient) ExpectFetchReceipts(hash common.Hash, info eth.BlockInfo, receipts optypes.Receipts, err error) {
 	m.Mock.On("FetchReceipts", hash).Once().Return(&info, receipts, err)
 }
 

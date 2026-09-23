@@ -3,8 +3,6 @@ package helpers
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/binary"
-	"errors"
 	"math/big"
 	"time"
 
@@ -26,7 +24,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-proposer/metrics"
 	"github.com/ethereum-optimism/optimism/op-proposer/proposer"
 	"github.com/ethereum-optimism/optimism/op-proposer/proposer/source"
-	"github.com/ethereum-optimism/optimism/op-service/dial"
+	"github.com/ethereum-optimism/optimism/op-service/clock"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
@@ -42,6 +40,7 @@ type ProposerCfg struct {
 	AllowNonFinalized      bool
 	AllocType              config.AllocType
 	ChainID                eth.ChainID
+	Clock                  clock.Clock
 }
 
 type L2Proposer struct {
@@ -53,7 +52,6 @@ type L2Proposer struct {
 	address                common.Address
 	privKey                *ecdsa.PrivateKey
 	lastTx                 common.Hash
-	allocType              config.AllocType
 }
 
 type fakeTxMgr struct {
@@ -96,7 +94,7 @@ func (f fakeTxMgr) SuggestGasPriceCaps(context.Context) (*big.Int, *big.Int, *bi
 	panic("unimplemented")
 }
 
-func NewL2Proposer(t Testing, log log.Logger, cfg *ProposerCfg, l1 *ethclient.Client, rollupCl *sources.RollupClient) *L2Proposer {
+func NewL2Proposer(t Testing, log log.Logger, cfg *ProposerCfg, l1 *ethclient.Client, proposalSource source.ProposalSource) *L2Proposer {
 	proposerConfig := proposer.ProposerConfig{
 		PollInterval:           time.Second,
 		NetworkTimeout:         time.Second,
@@ -105,24 +103,23 @@ func NewL2Proposer(t Testing, log log.Logger, cfg *ProposerCfg, l1 *ethclient.Cl
 		DisputeGameType:        cfg.DisputeGameType,
 		AllowNonFinalized:      cfg.AllowNonFinalized,
 	}
-	rollupProvider, err := dial.NewStaticL2RollupProviderFromExistingRollup(rollupCl)
-	require.NoError(t, err)
 
+	t.Cleanup(proposalSource.Close)
 	driverSetup := proposer.DriverSetup{
 		Log:            log,
 		Metr:           metrics.NoopMetrics,
 		Cfg:            proposerConfig,
+		Clock:          cfg.Clock,
 		Txmgr:          fakeTxMgr{from: crypto.PubkeyToAddress(cfg.ProposerKey.PublicKey), chainID: cfg.ChainID},
 		L1Client:       l1,
 		Multicaller:    batching.NewMultiCaller(l1.Client(), batching.DefaultBatchSize),
-		ProposalSource: source.NewRollupProposalSource(rollupProvider),
+		ProposalSource: proposalSource,
 	}
 
 	dr, err := proposer.NewL2OutputSubmitter(driverSetup)
 	require.NoError(t, err)
 
 	address := crypto.PubkeyToAddress(cfg.ProposerKey.PublicKey)
-
 	disputeGameFactory, err := bindings.NewDisputeGameFactoryCaller(*cfg.DisputeGameFactoryAddr, l1)
 	require.NoError(t, err)
 
@@ -134,13 +131,12 @@ func NewL2Proposer(t Testing, log log.Logger, cfg *ProposerCfg, l1 *ethclient.Cl
 		disputeGameFactoryAddr: cfg.DisputeGameFactoryAddr,
 		address:                address,
 		privKey:                cfg.ProposerKey,
-		allocType:              cfg.AllocType,
 	}
 }
 
 // sendTx reimplements creating & sending transactions because we need to do the final send as async in
 // the action tests while we do it synchronously in the real system.
-func (p *L2Proposer) sendTx(t Testing, data []byte) {
+func (p *L2Proposer) sendTx(t Testing, data []byte, value *big.Int) {
 	gasTipCap := big.NewInt(2 * params.GWei)
 	pendingHeader, err := p.l1.HeaderByNumber(t.Ctx(), big.NewInt(-1))
 	require.NoError(t, err, "need l1 pending header for gas price estimation")
@@ -155,6 +151,7 @@ func (p *L2Proposer) sendTx(t Testing, data []byte) {
 		To:        p.disputeGameFactoryAddr,
 		GasFeeCap: gasFeeCap,
 		GasTipCap: gasTipCap,
+		Value:     value,
 		Data:      data,
 	})
 	require.NoError(t, err)
@@ -163,6 +160,7 @@ func (p *L2Proposer) sendTx(t Testing, data []byte) {
 		Nonce:     nonce,
 		To:        p.disputeGameFactoryAddr,
 		Data:      data,
+		Value:     value,
 		GasFeeCap: gasFeeCap,
 		GasTipCap: gasTipCap,
 		Gas:       gasLimit,
@@ -194,21 +192,16 @@ func estimateGasPending(ctx context.Context, ec *ethclient.Client, msg ethereum.
 func (p *L2Proposer) fetchNextOutput(t Testing) (source.Proposal, bool, error) {
 	output, shouldPropose, err := p.driver.FetchDGFOutput(t.Ctx())
 	if err != nil || !shouldPropose {
-		return source.Proposal{}, false, err
+		return output, shouldPropose, err
 	}
-	if output.IsSuperRootProposal() {
-		return source.Proposal{}, false, errors.New("unexpected super root proposal")
-	}
-	encodedBlockNumber := make([]byte, 32)
-	binary.BigEndian.PutUint64(encodedBlockNumber[24:], output.SequenceNum)
-	game, err := p.disputeGameFactory.Games(&bind.CallOpts{}, p.driver.Cfg.DisputeGameType, output.Root, encodedBlockNumber)
+
+	game, err := p.disputeGameFactory.Games(&bind.CallOpts{Context: t.Ctx()}, p.driver.Cfg.DisputeGameType, output.Root, output.ExtraData())
 	if err != nil {
 		return source.Proposal{}, false, err
 	}
 	if game.Timestamp != 0 {
 		return source.Proposal{}, false, nil
 	}
-
 	return output, true, nil
 }
 
@@ -228,11 +221,10 @@ func (p *L2Proposer) ActMakeProposalTx(t Testing) {
 
 	tx, err := p.driver.ProposeL2OutputDGFTxCandidate(context.Background(), output)
 	require.NoError(t, err)
-	txData := tx.TxData
 
 	// Note: Use L1 instead of the output submitter's transaction manager because
 	// this is non-blocking while the txmgr is blocking & deadlocks the tests
-	p.sendTx(t, txData)
+	p.sendTx(t, tx.TxData, tx.Value)
 }
 
 func (p *L2Proposer) LastProposalTx() common.Hash {

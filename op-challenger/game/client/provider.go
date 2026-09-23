@@ -22,11 +22,12 @@ type Provider struct {
 	l1Client *ethclient.Client
 	caller   *batching.MultiCaller
 
-	l2EL             *ethclient.Client
-	rollupClient     *sources.RollupClient
-	syncValidator    *RollupSyncStatusValidator
-	supervisorClient *sources.SupervisorClient
-	toClose          []func()
+	l2EL               *ethclient.Client
+	rollupClient       *sources.RollupClient
+	syncValidator      *RollupSyncStatusValidator
+	superSyncValidator types.SyncValidator
+	superNodeClient    *sources.SuperNodeClient
+	toClose            []func()
 }
 
 func NewProvider(ctx context.Context, logger log.Logger, cfg *config.Config, l1Client *ethclient.Client) *Provider {
@@ -96,12 +97,16 @@ func (c *Provider) RollupClients() (*sources.RollupClient, *RollupSyncStatusVali
 	return rollupClient, c.syncValidator, nil
 }
 
-func (c *Provider) SuperchainClients() (*sources.SupervisorClient, *SupervisorSyncValidator, error) {
-	supervisorClient, err := dial.DialSupervisorClientWithTimeout(c.ctx, c.logger, c.cfg.SupervisorRPC)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to dial supervisor: %w", err)
+func (c *Provider) SuperchainClients() (*sources.SuperNodeClient, types.SyncValidator, error) {
+	if c.superNodeClient != nil {
+		return c.superNodeClient, c.superSyncValidator, nil
 	}
-	c.supervisorClient = supervisorClient
-	c.toClose = append(c.toClose, supervisorClient.Close)
-	return supervisorClient, NewSupervisorSyncValidator(supervisorClient), nil
+	superNodeClient, err := dial.DialSuperNodeClientWithTimeout(c.ctx, c.logger, c.cfg.SuperRootRPC)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to dial super root RPC client: %w", err)
+	}
+	c.superNodeClient = superNodeClient
+	c.superSyncValidator = &NoopSyncStatusValidator{}
+	c.toClose = append(c.toClose, superNodeClient.Close)
+	return c.superNodeClient, c.superSyncValidator, nil
 }

@@ -2,7 +2,6 @@ package super
 
 import (
 	"context"
-	"fmt"
 	"math/big"
 	"path/filepath"
 
@@ -25,7 +24,7 @@ func NewSuperCannonTraceAccessor(
 	cfg vm.Config,
 	serverExecutor vm.OracleServerExecutor,
 	prestateProvider PreimagePrestateProvider,
-	rootProvider RootProvider,
+	superNodeProvider SuperNodeRootProvider,
 	cannonPrestate string,
 	dir string,
 	l1Head eth.BlockID,
@@ -33,11 +32,7 @@ func NewSuperCannonTraceAccessor(
 	prestateTimestamp uint64,
 	poststateTimestamp uint64,
 ) (*trace.Accessor, error) {
-	rollupCfgs, err := NewRollupConfigs(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load rollup configs: %w", err)
-	}
-	outputProvider := NewSuperTraceProvider(logger, rollupCfgs, prestateProvider, rootProvider, l1Head, splitDepth, prestateTimestamp, poststateTimestamp)
+	outputProvider := NewSuperNodeTraceProvider(logger, prestateProvider, superNodeProvider, l1Head, splitDepth, prestateTimestamp, poststateTimestamp)
 	cannonCreator := func(ctx context.Context, localContext common.Hash, depth types.Depth, claimInfo ClaimInfo) (types.TraceProvider, error) {
 		logger := logger.New("agreedPrestate", hexutil.Bytes(claimInfo.AgreedPrestate), "claim", claimInfo.Claim, "localContext", localContext)
 		subdir := filepath.Join(dir, localContext.Hex())

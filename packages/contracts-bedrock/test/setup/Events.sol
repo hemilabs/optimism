@@ -20,6 +20,7 @@ abstract contract Events {
     event WithdrawalFinalized(bytes32 indexed withdrawalHash, bool success);
     event WithdrawalProven(bytes32 indexed withdrawalHash, address indexed from, address indexed to);
     event WithdrawalProvenExtension1(bytes32 indexed withdrawalHash, address indexed proofSubmitter);
+    event WithdrawalProofDeleted(bytes32 indexed withdrawalHash, address indexed proofSubmitter);
     event DisputeGameBlacklisted(IDisputeGame indexed disputeGame);
     event RespectedGameTypeSet(GameType indexed newGameType, Timestamp indexed updatedAt);
 
@@ -46,14 +47,6 @@ abstract contract Events {
         bool isCreation,
         bytes data
     );
-    event WhatHappened(bool success, bytes returndata);
-
-    event OutputProposed(
-        bytes32 indexed outputRoot, uint256 indexed l2OutputIndex, uint256 indexed l2BlockNumber, uint256 l1Timestamp
-    );
-
-    event OutputsDeleted(uint256 indexed prevNextOutputIndex, uint256 indexed newNextOutputIndex);
-
     event Withdrawal(uint256 value, address to, address from);
     event Withdrawal(uint256 value, address to, address from, Types.WithdrawalNetwork withdrawalNetwork);
 
@@ -74,10 +67,6 @@ abstract contract Events {
     );
 
     event DepositFinalized(
-        address indexed l1Token, address indexed l2Token, address indexed from, address to, uint256 amount, bytes data
-    );
-
-    event DepositFailed(
         address indexed l1Token, address indexed l2Token, address indexed from, address to, uint256 amount, bytes data
     );
 

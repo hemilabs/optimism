@@ -5,12 +5,13 @@ use alloy_eips::BlockNumHash;
 use alloy_op_hardforks::{
     OP_SEPOLIA_CANYON_TIMESTAMP, OP_SEPOLIA_ECOTONE_TIMESTAMP, OP_SEPOLIA_FJORD_TIMESTAMP,
     OP_SEPOLIA_GRANITE_TIMESTAMP, OP_SEPOLIA_HOLOCENE_TIMESTAMP, OP_SEPOLIA_ISTHMUS_TIMESTAMP,
-    OP_SEPOLIA_JOVIAN_TIMESTAMP,
+    OP_SEPOLIA_JOVIAN_TIMESTAMP, OP_SEPOLIA_KARST_TIMESTAMP,
 };
 use alloy_primitives::{address, b256, uint};
+#[cfg(feature = "rollup_config_override")]
+use kona_genesis::FJORD_MAX_SEQUENCER_DRIFT;
 use kona_genesis::{
-    ChainGenesis, DEFAULT_INTEROP_MESSAGE_EXPIRY_WINDOW, HardForkConfig,
-    OP_SEPOLIA_BASE_FEE_CONFIG, RollupConfig, SystemConfig,
+    ChainGenesis, HardForkConfig, OP_SEPOLIA_BASE_FEE_CONFIG, RollupConfig, SystemConfig,
 };
 
 /// The [`RollupConfig`] for OP Sepolia.
@@ -45,6 +46,8 @@ pub const OP_SEPOLIA_CONFIG: RollupConfig = RollupConfig {
     seq_window_size: 3600,
     channel_timeout: 300,
     granite_channel_timeout: 50,
+    #[cfg(feature = "rollup_config_override")]
+    fjord_max_sequencer_drift: FJORD_MAX_SEQUENCER_DRIFT,
     l1_chain_id: 11155111,
     l2_chain_id: Chain::optimism_sepolia(),
     chain_op_config: OP_SEPOLIA_BASE_FEE_CONFIG,
@@ -60,15 +63,14 @@ pub const OP_SEPOLIA_CONFIG: RollupConfig = RollupConfig {
         pectra_blob_schedule_time: Some(1742486400),
         isthmus_time: Some(OP_SEPOLIA_ISTHMUS_TIMESTAMP),
         jovian_time: Some(OP_SEPOLIA_JOVIAN_TIMESTAMP),
-        karst_time: None,
-        interop_time: None,
+        karst_time: Some(OP_SEPOLIA_KARST_TIMESTAMP),
+        keep_karst_upgrade_gas: true,
+        lagoon_time: None,
     },
     batch_inbox_address: address!("ff00000000000000000000000000000011155420"),
     deposit_contract_address: address!("16fc5058f25648194471939df75cf27a2fdc48bc"),
     l1_system_config_address: address!("034edd2a225f7f429a63e0f1d2084b9e0a93b538"),
-    protocol_versions_address: address!("79add5713b383daa0a138d3c4780c7a1804a8090"),
     superchain_config_address: Some(address!("C2Be75506d5724086DEB7245bd260Cc9753911Be")),
     da_challenge_address: None,
     blobs_enabled_l1_timestamp: None,
-    interop_message_expiry_window: DEFAULT_INTEROP_MESSAGE_EXPIRY_WINDOW,
 };

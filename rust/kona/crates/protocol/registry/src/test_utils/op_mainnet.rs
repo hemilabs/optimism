@@ -5,12 +5,13 @@ use alloy_eips::BlockNumHash;
 use alloy_op_hardforks::{
     OP_MAINNET_CANYON_TIMESTAMP, OP_MAINNET_ECOTONE_TIMESTAMP, OP_MAINNET_FJORD_TIMESTAMP,
     OP_MAINNET_GRANITE_TIMESTAMP, OP_MAINNET_HOLOCENE_TIMESTAMP, OP_MAINNET_ISTHMUS_TIMESTAMP,
-    OP_MAINNET_JOVIAN_TIMESTAMP,
+    OP_MAINNET_JOVIAN_TIMESTAMP, OP_MAINNET_KARST_TIMESTAMP,
 };
 use alloy_primitives::{address, b256, uint};
+#[cfg(feature = "rollup_config_override")]
+use kona_genesis::FJORD_MAX_SEQUENCER_DRIFT;
 use kona_genesis::{
-    ChainGenesis, DEFAULT_INTEROP_MESSAGE_EXPIRY_WINDOW, HardForkConfig,
-    OP_MAINNET_BASE_FEE_CONFIG, RollupConfig, SystemConfig,
+    ChainGenesis, HardForkConfig, OP_MAINNET_BASE_FEE_CONFIG, RollupConfig, SystemConfig,
 };
 
 /// The [`RollupConfig`] for OP Mainnet.
@@ -45,6 +46,8 @@ pub const OP_MAINNET_CONFIG: RollupConfig = RollupConfig {
     seq_window_size: 3600_u64,
     channel_timeout: 300_u64,
     granite_channel_timeout: 50,
+    #[cfg(feature = "rollup_config_override")]
+    fjord_max_sequencer_drift: FJORD_MAX_SEQUENCER_DRIFT,
     l1_chain_id: 1_u64,
     l2_chain_id: Chain::optimism_mainnet(),
     chain_op_config: OP_MAINNET_BASE_FEE_CONFIG,
@@ -60,15 +63,14 @@ pub const OP_MAINNET_CONFIG: RollupConfig = RollupConfig {
         pectra_blob_schedule_time: None,
         isthmus_time: Some(OP_MAINNET_ISTHMUS_TIMESTAMP),
         jovian_time: Some(OP_MAINNET_JOVIAN_TIMESTAMP),
-        karst_time: None,
-        interop_time: None,
+        karst_time: Some(OP_MAINNET_KARST_TIMESTAMP),
+        keep_karst_upgrade_gas: true,
+        lagoon_time: None,
     },
     batch_inbox_address: address!("ff00000000000000000000000000000000000010"),
     deposit_contract_address: address!("beb5fc579115071764c7423a4f12edde41f106ed"),
     l1_system_config_address: address!("229047fed2591dbec1ef1118d64f7af3db9eb290"),
-    protocol_versions_address: address!("8062abc286f5e7d9428a0ccb9abd71e50d93b935"),
     superchain_config_address: Some(address!("95703e0982140D16f8ebA6d158FccEde42f04a4C")),
     da_challenge_address: None,
     blobs_enabled_l1_timestamp: None,
-    interop_message_expiry_window: DEFAULT_INTEROP_MESSAGE_EXPIRY_WINDOW,
 };

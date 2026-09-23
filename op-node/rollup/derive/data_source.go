@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
@@ -22,8 +23,8 @@ type L1TransactionFetcher interface {
 }
 
 type L1BlobsFetcher interface {
-	// GetBlobs fetches blobs that were confirmed in the given L1 block with the given indexed hashes.
-	GetBlobs(ctx context.Context, ref eth.L1BlockRef, hashes []eth.IndexedBlobHash) ([]*eth.Blob, error)
+	// GetBlobsByHash fetches blobs that were confirmed at the given timestamp with the given versioned hashes.
+	GetBlobsByHash(ctx context.Context, time uint64, hashes []common.Hash) ([]*eth.Blob, error)
 }
 
 type AltDAInputFetcher interface {
@@ -39,12 +40,13 @@ type AltDAInputFetcher interface {
 // batch submitter transactions.
 // This is not a stage in the pipeline, but a wrapper for another stage in the pipeline
 type DataSourceFactory struct {
-	log          log.Logger
-	dsCfg        DataSourceConfig
-	fetcher      L1Fetcher
-	blobsFetcher L1BlobsFetcher
-	altDAFetcher AltDAInputFetcher
-	ecotoneTime  *uint64
+	log               log.Logger
+	dsCfg             DataSourceConfig
+	fetcher           L1Fetcher
+	blobsFetcher      L1BlobsFetcher
+	altDAFetcher      AltDAInputFetcher
+	altDAMaxInputSize uint64
+	ecotoneTime       *uint64
 }
 
 func NewDataSourceFactory(log log.Logger, cfg *rollup.Config, fetcher L1Fetcher, blobsFetcher L1BlobsFetcher, altDAFetcher AltDAInputFetcher) *DataSourceFactory {
@@ -54,12 +56,13 @@ func NewDataSourceFactory(log log.Logger, cfg *rollup.Config, fetcher L1Fetcher,
 		altDAEnabled:      cfg.AltDAEnabled(),
 	}
 	return &DataSourceFactory{
-		log:          log,
-		dsCfg:        config,
-		fetcher:      fetcher,
-		blobsFetcher: blobsFetcher,
-		altDAFetcher: altDAFetcher,
-		ecotoneTime:  cfg.EcotoneTime,
+		log:               log,
+		dsCfg:             config,
+		fetcher:           fetcher,
+		blobsFetcher:      blobsFetcher,
+		altDAFetcher:      altDAFetcher,
+		altDAMaxInputSize: cfg.AltDAConfig.MaxInputSizeOrDefault(),
+		ecotoneTime:       cfg.EcotoneTime,
 	}
 }
 
@@ -70,7 +73,7 @@ func (ds *DataSourceFactory) OpenData(ctx context.Context, ref eth.L1BlockRef, b
 	var src DataIter
 	if ds.ecotoneTime != nil && ref.Time >= *ds.ecotoneTime {
 		if ds.blobsFetcher == nil {
-			return nil, fmt.Errorf("ecotone upgrade active but beacon endpoint not configured")
+			return nil, NewCriticalError(fmt.Errorf("ecotone upgrade active but beacon endpoint not configured"))
 		}
 		src = NewBlobDataSource(ctx, ds.log, ds.dsCfg, ds.fetcher, ds.blobsFetcher, ref, batcherAddr, hemitrapEnabled)
 	} else {
@@ -78,7 +81,7 @@ func (ds *DataSourceFactory) OpenData(ctx context.Context, ref eth.L1BlockRef, b
 	}
 	if ds.dsCfg.altDAEnabled {
 		// altDA([calldata | blobdata](l1Ref)) -> data
-		return NewAltDADataSource(ds.log, src, ds.fetcher, ds.altDAFetcher, ref), nil
+		return NewAltDADataSource(ds.log, src, ds.fetcher, ds.altDAFetcher, ds.altDAMaxInputSize, ref), nil
 	}
 	return src, nil
 }
@@ -96,7 +99,7 @@ type DataSourceConfig struct {
 //  3. the transaction has a valid signature from the batcher address
 func isValidBatchTx(tx *types.Transaction, l1Signer types.Signer, batchInboxAddr, batcherAddr common.Address, logger log.Logger) bool {
 	// For now, we want to disallow the SetCodeTx type or any future types.
-	if tx.Type() > types.BlobTxType && tx.Type() != types.DepositTxType {
+	if tx.Type() > types.BlobTxType && tx.Type() != optypes.DepositTxType {
 		return false
 	}
 

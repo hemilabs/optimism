@@ -8,6 +8,7 @@ import { Test } from "forge-std/Test.sol";
 import { Setup } from "test/setup/Setup.sol";
 import { Events } from "test/setup/Events.sol";
 import { FFIInterface } from "test/setup/FFIInterface.sol";
+import { MockSP1Verifier } from "test/dispute/zk/MockSP1Verifier.sol";
 
 // Scripts
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
@@ -29,13 +30,13 @@ abstract contract CommonTest is Test, Setup, Events {
     address alice;
     address bob;
 
-    bytes32 constant nonZeroHash = keccak256(abi.encode("NON_ZERO"));
+    /// @notice The default initial bond value for dispute games.
+    uint256 constant DEFAULT_DISPUTE_GAME_INIT_BOND = 0.08 ether;
 
     FFIInterface constant ffi = FFIInterface(address(uint160(uint256(keccak256(abi.encode("optimism.ffi"))))));
 
     bool useAltDAOverride;
     bool useInteropOverride;
-    bool useRevenueShareOverride;
     bool useCustomGasToken;
 
     /// @dev This value is only used in forked tests. During forked tests, the default is to perform the upgrade before
@@ -44,16 +45,11 @@ abstract contract CommonTest is Test, Setup, Events {
     ///      itself, rather than simply ensuring that the tests pass after the upgrade.
     bool useUpgradedFork = true;
 
-    // Needed for testing purposes to check the contracts were properly deployed and setup.
-    address chainFeesRecipient = makeAddr("chainFeesRecipient");
-    address l1FeesDepositor = makeAddr("l1FeesDepositor");
-
     ERC20 L1Token;
     ERC20 BadL1Token;
     IOptimismMintableERC20Full L2Token;
     ILegacyMintableERC20Full LegacyL2Token;
     ERC20 NativeL2Token;
-    IOptimismMintableERC20Full RemoteL1Token;
 
     function setUp() public virtual override {
         // Setup.setup() may switch the tests over to a newly forked network. Therefore
@@ -75,20 +71,6 @@ abstract contract CommonTest is Test, Setup, Events {
         if (useAltDAOverride) {
             deploy.cfg().setUseAltDA(true);
         }
-        if (useInteropOverride) {
-            deploy.cfg().setUseInterop(true);
-        }
-        if (useRevenueShareOverride) {
-            // Revenue share is not supported when custom gas token is enabled
-            if (Config.sysFeatureCustomGasToken()) {
-                vm.skip(true);
-            }
-
-            console.log("CommonTest: enabling revenue share");
-            deploy.cfg().setUseRevenueShare(true);
-            deploy.cfg().setChainFeesRecipient(chainFeesRecipient);
-            deploy.cfg().setL1FeesDepositor(l1FeesDepositor);
-        }
         if (useUpgradedFork) {
             deploy.cfg().setUseUpgradedFork(true);
         }
@@ -104,7 +86,20 @@ abstract contract CommonTest is Test, Setup, Events {
             deploy.cfg().setOperatorFeeVaultWithdrawalNetwork(1);
         }
 
-        if (isForkTest()) {
+        if (useInteropOverride) {
+            console.log("CommonTest: enabling interop");
+            devFeatureBitmap |= DevFeatures.OPTIMISM_PORTAL_INTEROP;
+            deploy.cfg().setUseInterop(true);
+        }
+
+        // Sync the bitmap to deploy config after overrides
+        deploy.cfg().setDevFeatureBitmap(devFeatureBitmap);
+        if (DevFeatures.isDevFeatureEnabled(devFeatureBitmap, DevFeatures.ZK_DISPUTE_GAME)) {
+            address sp1Verifier = address(new MockSP1Verifier());
+            deploy.cfg().setSP1Verifier(sp1Verifier);
+        }
+
+        if (isL1ForkTest()) {
             // Skip any test suite which uses a nonstandard configuration.
             if (useAltDAOverride || useInteropOverride) {
                 vm.skip(true);
@@ -171,14 +166,6 @@ abstract contract CommonTest is Test, Setup, Events {
 
         NativeL2Token = new ERC20("Native L2 Token", "L2T");
 
-        RemoteL1Token = IOptimismMintableERC20Full(
-            l1OptimismMintableERC20Factory.createStandardL2Token(
-                address(NativeL2Token),
-                string(abi.encodePacked("L1-", NativeL2Token.name())),
-                string(abi.encodePacked("L1-", NativeL2Token.symbol()))
-            )
-        );
-
         BadL1Token = ERC20(
             l1OptimismMintableERC20Factory.createStandardL2Token(
                 address(1),
@@ -227,12 +214,6 @@ abstract contract CommonTest is Test, Setup, Events {
     function enableInterop() public {
         _checkNotDeployed("interop");
         useInteropOverride = true;
-    }
-
-    /// @dev Enables revenue sharing mode for testing
-    function enableRevenueShare() public {
-        _checkNotDeployed("revenue share");
-        useRevenueShareOverride = true;
     }
 
     /// @dev Disables upgrade mode for testing. By default the fork testing env will be upgraded to the latest

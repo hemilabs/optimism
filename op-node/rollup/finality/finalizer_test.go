@@ -473,36 +473,6 @@ func TestEngineQueue_Finalize(t *testing.T) {
 		emitter.AssertExpectations(t)
 	})
 
-	// The Finalizer does not promote any blocks to finalized status after interop.
-	// Blocks after interop are finalized with the interop deriver and interop backend.
-	t.Run("disable-after-interop", func(t *testing.T) {
-		logger := testlog.Logger(t, log.LevelInfo)
-		l1F := &testutils.MockL1Source{}
-		defer l1F.AssertExpectations(t)
-		l1F.ExpectL1BlockRefByNumber(refD.Number, refD, nil)
-		l1F.ExpectL1BlockRefByNumber(refD.Number, refD, nil)
-
-		emitter := &testutils.MockEmitter{}
-		ec := new(fakeEngineController)
-		fi := NewFinalizer(context.Background(), logger, &rollup.Config{
-			InteropTime: &refC1.Time,
-		}, nil, l1F, ec)
-		fi.AttachEmitter(emitter)
-
-		// now say C0 and C1 were included in D and became the new safe head
-		fi.OnEvent(ctx, engine.SafeDerivedEvent{Safe: refC0, Source: refD})
-		fi.OnEvent(ctx, engine.SafeDerivedEvent{Safe: refC1, Source: refD})
-		fi.OnEvent(ctx, derive.DeriverIdleEvent{Origin: refD})
-		emitter.AssertExpectations(t)
-
-		emitter.ExpectOnce(TryFinalizeEvent{})
-		fi.OnL1Finalized(refD)
-
-		// C1 was Interop, C0 was not yet interop and can be finalized
-		fi.OnEvent(ctx, TryFinalizeEvent{})
-		require.Equal(t, refC0, ec.finalizedL2)
-		emitter.AssertExpectations(t)
-	})
 }
 
 func TestFinalizerConfig(t *testing.T) {

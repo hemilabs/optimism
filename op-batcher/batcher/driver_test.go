@@ -5,23 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-batcher/batcher/throttler"
 	"github.com/ethereum-optimism/optimism/op-batcher/config"
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	metricstest "github.com/ethereum-optimism/optimism/op-service/metrics/test"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +45,7 @@ func newEndpointProvider() *mockL2EndpointProvider {
 	}
 }
 
-func (p *mockL2EndpointProvider) EthClient(context.Context) (dial.EthClientInterface, error) {
+func (p *mockL2EndpointProvider) PayloadSource(context.Context) (dial.PayloadSource, error) {
 	return p.ethClient, p.ethClientErr
 }
 
@@ -154,33 +159,40 @@ func (q *MockTxQueue) Load(id string) txmgr.TxCandidate {
 	return c.(txmgr.TxCandidate)
 }
 
-func TestBatchSubmitter_sendTx_FloorDataGas(t *testing.T) {
+func TestBatchSubmitter_sendTx_GasLimit(t *testing.T) {
 	bs, _ := setup(t, nil)
 
-	q := new(MockTxQueue)
-
-	txData := txData{
-		frames: []frameData{
-			{
-				data: []byte{0x01, 0x02, 0x03}, // 3 nonzero bytes = 12 tokens https://github.com/ethereum/EIPs/blob/master/EIPS/eip-7623.md
-			},
+	tests := []struct {
+		name     string
+		data     []byte
+		expected uint64
+	}{
+		{
+			name:     "PreAmsterdamFloorIsHigher",
+			data:     []byte{0x01, 0x02, 0x03},
+			expected: params.TxGas + 3*params.TxTokenPerNonZeroByte*params.TxCostFloorPerToken,
+		},
+		{
+			name:     "AmsterdamFloorIsHigher",
+			data:     make([]byte, 371),
+			expected: 15_000 + 371*64,
 		},
 	}
-	candidate := txmgr.TxCandidate{
-		To:     &bs.RollupConfig.BatchInboxAddress,
-		TxData: txData.CallData(),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := new(MockTxQueue)
+			txData := txData{frames: []frameData{{data: tt.data}}}
+			candidate := txmgr.TxCandidate{
+				To:     &bs.RollupConfig.BatchInboxAddress,
+				TxData: tt.data,
+			}
+
+			bs.sendTx(txData, false, &candidate, q, make(chan txmgr.TxReceipt[txRef]))
+
+			candidateOut := q.Load(txData.ID().String())
+			require.Equal(t, tt.expected, candidateOut.GasLimit)
+		})
 	}
-
-	bs.sendTx(txData,
-		false,
-		&candidate,
-		q,
-		make(chan txmgr.TxReceipt[txRef]))
-
-	candidateOut := q.Load(txData.ID().String())
-
-	expectedFloorDataGas := uint64(21_000 + 12*10)
-	require.GreaterOrEqual(t, candidateOut.GasLimit, expectedFloorDataGas)
 }
 
 type handlerFailureMode string
@@ -233,11 +245,14 @@ func createHTTPHandler(t *testing.T, cb func(), failureMode handlerFailureMode) 
 func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 	// Set a very long timeout to avoid flakiness
 	timeout := time.Second * 120
-	testThrottlingEndpoints := func(numHealthyServers, numUnhealthyServers int) func(t *testing.T) {
+	testThrottlingEndpoints := func(numHealthyServers, numUnhealthyServers int, throttlingEnabled bool) func(t *testing.T) {
 
 		return func(t *testing.T) {
-			healthyCalls := make([]int, numHealthyServers)
-			unHealthyCalls := make([]int, numUnhealthyServers)
+			// The call counters and the shutdown error are written by the test
+			// servers' handler goroutines and read by the test goroutine, so
+			// every one of them has to be accessed atomically.
+			healthyCalls := make([]atomic.Int64, numHealthyServers)
+			unHealthyCalls := make([]atomic.Int64, numUnhealthyServers)
 
 			healthyServers := make([]*httptest.Server, numHealthyServers)
 			unhealthyServers := make([]*httptest.Server, numUnhealthyServers)
@@ -245,51 +260,94 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 			urls := make([]string, 0, numHealthyServers+numUnhealthyServers)
 
 			for i := range healthyCalls {
-				healthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { healthyCalls[i]++ }, noFailure))
+				healthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { healthyCalls[i].Add(1) }, noFailure))
 				urls = append(urls, healthyServers[i].URL)
 				defer healthyServers[i].Close()
 			}
 			for i := range unHealthyCalls {
-				unhealthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { unHealthyCalls[i]++ }, internalError))
+				unhealthyServers[i] = httptest.NewServer(createHTTPHandler(t, func() { unHealthyCalls[i].Add(1) }, internalError))
 				urls = append(urls, unhealthyServers[i].URL)
 				defer unhealthyServers[i].Close()
+			}
+
+			anyUncalled := func(calls []atomic.Int64) bool {
+				for i := range calls {
+					if calls[i].Load() == 0 {
+						return true
+					}
+				}
+				return false
 			}
 
 			// Setup test context
 			ctx, cancel := context.WithCancel(context.Background())
 
-			// Add in an endpoint with no server at all, representing an "always down" endpoint
-			urls = append(urls, "http://invalid/")
+			// Add in an endpoint with no server at all, representing an "always down" endpoint (only when throttling enabled)
+			if throttlingEnabled {
+				urls = append(urls, "http://invalid/")
+			}
 
 			t.Log("Throttling endpoints:", urls)
+			t.Logf("Throttling enabled: %v", throttlingEnabled)
 
-			var batcherShutdownError error
+			var batcherShutdownError atomic.Pointer[error]
 
-			// Create test BatchSubmitter using the setup function
-			bs, _ := setup(t, func(cause error) {
-				batcherShutdownError = cause
+			// Create real metrics instead of NoopMetrics so we can verify metric recording
+			metr := metrics.NewMetrics("test")
+
+			ep := newEndpointProvider()
+			cfg := defaultTestRollupConfig
+			cfg.Genesis.L1.Number = genesisL1Origin
+
+			// Set threshold values based on whether throttling is enabled
+			lowerThreshold := uint64(0)
+			upperThreshold := uint64(0)
+			if throttlingEnabled {
+				lowerThreshold = 10000
+				upperThreshold = 20000
+			}
+
+			// Create test BatchSubmitter
+			bs := NewBatchSubmitter(DriverSetup{
+				closeApp:     func(cause error) { batcherShutdownError.Store(&cause) },
+				Log:          testlog.Logger(t, log.LevelDebug),
+				Metr:         metr, // Use real metrics
+				RollupConfig: cfg,
+				Config: BatcherConfig{
+					ThrottleParams: config.ThrottleParams{
+						ControllerType:      config.StepControllerType,
+						LowerThreshold:      lowerThreshold,
+						UpperThreshold:      upperThreshold,
+						TxSizeLowerLimit:    5000,
+						TxSizeUpperLimit:    10000,
+						BlockSizeLowerLimit: 20000,
+						BlockSizeUpperLimit: 30000,
+						Endpoints:           urls,
+					},
+					NetworkTimeout: time.Second,
+				},
+				ChannelConfig:    defaultTestChannelConfig(),
+				EndpointProvider: ep,
 			})
+
 			bs.shutdownCtx = ctx
-			bs.Config.NetworkTimeout = time.Second
-			bs.Config.ThrottleParams.Endpoints = urls
-			bs.throttleController = throttler.NewThrottleController(
-				throttler.NewStepStrategy(10000),
-				throttler.ThrottleConfig{
-					TxSizeLowerLimit:    5000,
-					TxSizeUpperLimit:    10000,
-					BlockSizeLowerLimit: 20000,
-					BlockSizeUpperLimit: 30000,
-				})
 
 			// Test the throttling loop
 			pendingBytesUpdated := make(chan int64, 1)
 			wg1 := sync.WaitGroup{}
-			wg1.Add(1)
 
-			// Start throttling loop in a goroutine
-			go bs.throttlingLoop(&wg1, pendingBytesUpdated)
+			// Start throttling loop in a goroutine only if throttling is enabled
+			if throttlingEnabled {
+				wg1.Add(1)
+				go bs.throttlingLoop(&wg1, pendingBytesUpdated)
+			}
 
-			// Simulate block loading by sending periodically on pendingBytesUpdated
+			// Add a block to the channel manager so unsafeDABytes() returns > 0
+			testBlock := newMiniL2Block(5) // Create a block with 5 transactions
+			err := bs.channelMgr.AddL2Block(mustPayloadFromGeth(testBlock))
+			require.NoError(t, err, "Should be able to add block to channel manager")
+
+			// Simulate block loading by calling sendToThrottlingLoop periodically
 			wg2 := sync.WaitGroup{}
 			blockLoadingCtx, cancelBlockLoading := context.WithCancel(context.Background())
 			go func() {
@@ -300,8 +358,9 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 					case <-blockLoadingCtx.Done():
 						return
 					default:
-						// Simulate block loading
-						pendingBytesUpdated <- 20000 // the value doesn't actually matter for this test
+						// Simulate block loading - use sendToThrottlingLoop which records metrics
+						// and sends to the channel (this is what the real block loading loop does)
+						bs.sendToThrottlingLoop(pendingBytesUpdated)
 					}
 				}
 
@@ -316,69 +375,92 @@ func TestBatchSubmitter_ThrottlingEndpoints(t *testing.T) {
 				cancel()
 			})
 
-			require.Eventually(t,
-				func() bool {
-					// Check that all endpoints were called
-					if slices.Contains(healthyCalls, 0) || slices.Contains(unHealthyCalls, 0) {
-						return false
+			// Verify metrics: unsafe_da_bytes metric should be recorded in all cases
+			time.Sleep(200 * time.Millisecond) // Wait for metric updates
+			c := metricstest.NewMetricChecker(t, metr.Registry())
+			prefix := "op_batcher_test_"
+			unsafeDABytesFamily := c.FindByName(prefix + "unsafe_da_bytes")
+			require.NotNil(t, unsafeDABytesFamily, "unsafe_da_bytes metric should exist")
+			unsafeDABytesMetric := unsafeDABytesFamily.FindByLabels(map[string]string{})
+			require.NotNil(t, unsafeDABytesMetric, "unsafe_da_bytes metric should be queryable")
+			metricValue := unsafeDABytesMetric.Gauge.GetValue()
+			require.Greater(t, metricValue, 0.0, "unsafe_da_bytes should be > 0 after adding blocks")
+			t.Logf("unsafe_da_bytes metric value: %.0f", metricValue)
+
+			if throttlingEnabled {
+				// Only check endpoint calls when throttling is enabled
+				require.Eventually(t,
+					func() bool {
+						// Check that all endpoints were called
+						return !anyUncalled(healthyCalls) && !anyUncalled(unHealthyCalls)
+					}, time.Second*10, time.Millisecond*10, "All endpoints should have been called within 10s")
+
+				startTestServerAtAddr := func(addr string, handler http.HandlerFunc) *httptest.Server {
+					ln, err := net.Listen("tcp", addr)
+					require.NoError(t, err, "Failed to create new listener for test server")
+
+					s := &httptest.Server{
+						Listener: ln,
+						Config:   &http.Server{Handler: handler},
 					}
-					return true
-				}, time.Second*10, time.Millisecond*10, "All endpoints should have been called within 10s")
-
-			startTestServerAtAddr := func(addr string, handler http.HandlerFunc) *httptest.Server {
-				ln, err := net.Listen("tcp", addr)
-				require.NoError(t, err, "Failed to create new listener for test server")
-
-				s := &httptest.Server{
-					Listener: ln,
-					Config:   &http.Server{Handler: handler},
+					s.Start()
+					return s
 				}
-				s.Start()
-				return s
-			}
 
-			// Take one of the healthy servers down, wait 2s and restart. Check it is called again.
-			if len(healthyServers) > 0 {
-				restartedServerCalled := false
+				// Take one of the healthy servers down, wait 2s and restart. Check it is called again.
+				if len(healthyServers) > 0 {
+					var restartedServerCalled atomic.Bool
 
-				addr := healthyServers[0].Listener.Addr().String()
-				healthyServers[0].Close()
-				time.Sleep(time.Second * 2)
-				startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled = true }, noFailure))
-				defer healthyServers[0].Close()
-				t.Log("restarted server at", addr)
+					addr := healthyServers[0].Listener.Addr().String()
+					healthyServers[0].Close()
+					time.Sleep(time.Second * 2)
+					startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled.Store(true) }, noFailure))
+					defer healthyServers[0].Close()
+					t.Log("restarted server at", addr)
 
-				require.Eventually(t, func() bool {
-					return restartedServerCalled
-				}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
-			}
+					require.Eventually(t, func() bool {
+						return restartedServerCalled.Load()
+					}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
+				}
 
-			// Take an unhealthy server down, wait 2s and bring it back up with misconfiguration. Check the batcher exits.
-			if len(unhealthyServers) > 0 {
-				restartedServerCalled := false
+				// Take an unhealthy server down, wait 2s and bring it back up with misconfiguration. Check the batcher exits.
+				if len(unhealthyServers) > 0 {
+					var restartedServerCalled atomic.Bool
 
-				addr := unhealthyServers[0].Listener.Addr().String()
-				unhealthyServers[0].Close()
-				time.Sleep(time.Second * 2)
-				startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled = true }, methodNotFound))
-				defer unhealthyServers[0].Close()
-				t.Log("restarted server at", addr)
+					addr := unhealthyServers[0].Listener.Addr().String()
+					unhealthyServers[0].Close()
+					time.Sleep(time.Second * 2)
+					startTestServerAtAddr(addr, createHTTPHandler(t, func() { restartedServerCalled.Store(true) }, methodNotFound))
+					defer unhealthyServers[0].Close()
+					t.Log("restarted server at", addr)
 
-				require.Eventually(t, func() bool {
-					return restartedServerCalled
-				}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
+					require.Eventually(t, func() bool {
+						return restartedServerCalled.Load()
+					}, timeout, time.Millisecond*10, "Restarted server should have been called within 2s")
 
-				require.Eventually(t, func() bool {
-					return batcherShutdownError != nil
-				}, timeout, time.Millisecond*10, "Batcher should have triggered self shutdown within 2s")
+					require.Eventually(t, func() bool {
+						return batcherShutdownError.Load() != nil
+					}, timeout, time.Millisecond*10, "Batcher should have triggered self shutdown within 2s")
 
-				require.Equal(t, batcherShutdownError.Error(), ErrSetMaxDASizeRPCMethodUnavailable("http://"+addr, errors.New("method not found")).Error(), "Batcher shutdown error should be the same as the expected error")
+					require.Equal(t, (*batcherShutdownError.Load()).Error(), ErrSetMaxDASizeRPCMethodUnavailable("http://"+addr, errors.New("method not found")).Error(), "Batcher shutdown error should be the same as the expected error")
+				}
+			} else {
+				// When throttling is disabled, verify endpoints were NOT called
+				time.Sleep(time.Second * 2) // Wait to ensure no calls are made
+				for i := range healthyCalls {
+					require.Zero(t, healthyCalls[i].Load(), "No endpoint calls should be made when throttling is disabled")
+				}
+				for i := range unHealthyCalls {
+					require.Zero(t, unHealthyCalls[i].Load(), "No endpoint calls should be made when throttling is disabled")
+				}
+				t.Log("Verified: no endpoint calls when throttling disabled")
 			}
 		}
 	}
-	t.Run("two normal endpoints", testThrottlingEndpoints(2, 0))
-	t.Run("two failing endpoints", testThrottlingEndpoints(0, 2))
-	t.Run("one normal endpoint, one failing endpoint", testThrottlingEndpoints(1, 1))
+	t.Run("two normal endpoints", testThrottlingEndpoints(2, 0, true))
+	t.Run("two failing endpoints", testThrottlingEndpoints(0, 2, true))
+	t.Run("one normal endpoint, one failing endpoint", testThrottlingEndpoints(1, 1, true))
+	t.Run("throttling disabled", testThrottlingEndpoints(1, 0, false))
 }
 
 func TestBatchSubmitter_CriticalError(t *testing.T) {
@@ -406,4 +488,46 @@ func TestBatchSubmitter_CriticalError(t *testing.T) {
 		assert.False(t, isCriticalThrottlingRPCError(e), "false negative: %s", e)
 	}
 
+}
+
+// TestBatchSubmitter_LoadBlocksIntoState_DepositPayload loads a deposit-bearing
+// payload through loadBlocksIntoState, covering the L1-info extraction from the
+// payload's opaque first transaction (derive.PayloadToBlockRef): payload
+// transactions carry raw encodings, so the deposit must decode without
+// go-ethereum's typed-transaction support.
+func TestBatchSubmitter_LoadBlocksIntoState_DepositPayload(t *testing.T) {
+	const blockNumber = uint64(5)
+	const blockTimestamp = uint64(1000)
+
+	mkPayload := func(t *testing.T, firstTx []byte) *eth.ExecutionPayloadEnvelope {
+		return &eth.ExecutionPayloadEnvelope{ExecutionPayload: &eth.ExecutionPayload{
+			BlockHash:    common.Hash{0x01},
+			ParentHash:   common.Hash{0x02},
+			BlockNumber:  hexutil.Uint64(blockNumber),
+			Timestamp:    hexutil.Uint64(blockTimestamp),
+			Transactions: []eth.Data{firstTx},
+		}}
+	}
+
+	t.Run("l1 info deposit first tx", func(t *testing.T) {
+		bs, ep := setup(t, nil)
+		rng := rand.New(rand.NewSource(789))
+		l1Info := testutils.RandomBlockInfo(rng)
+		l1InfoTx, err := derive.L1InfoDepositBytes(bs.RollupConfig, params.MergedTestChainConfig,
+			eth.SystemConfig{BatcherAddr: common.Address{0x42}}, 3, l1Info, blockTimestamp)
+		require.NoError(t, err)
+		ep.ethClient.ExpectPayloadByNumber(blockNumber, mkPayload(t, l1InfoTx), nil)
+
+		require.NoError(t, bs.loadBlocksIntoState(context.Background(), blockNumber, blockNumber, nil, nil))
+		ep.ethClient.AssertExpectations(t)
+	})
+
+	t.Run("non-deposit first tx rejected", func(t *testing.T) {
+		bs, ep := setup(t, nil)
+		ep.ethClient.ExpectPayloadByNumber(blockNumber, mkPayload(t, []byte{0x02, 0xc0}), nil)
+
+		err := bs.loadBlocksIntoState(context.Background(), blockNumber, blockNumber, nil, nil)
+		require.ErrorContains(t, err, "failed to decode L1 info deposit")
+		ep.ethClient.AssertExpectations(t)
+	})
 }

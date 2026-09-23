@@ -13,7 +13,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/outputs"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/super"
 	gameTypes "github.com/ethereum-optimism/optimism/op-challenger/game/types"
-	shared "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/challenger"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/disputegame/preimage"
@@ -26,10 +26,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -45,11 +43,10 @@ var (
 )
 
 const (
-	cannonGameType            uint32 = 0
-	permissionedGameType      uint32 = 1
-	superCannonGameType       uint32 = 4
-	superPermissionedGameType uint32 = 5
-	alphabetGameType          uint32 = 255
+	cannonKonaGameType      uint32 = 8
+	permissionedGameType    uint32 = 1
+	superCannonKonaGameType uint32 = 9
+	alphabetGameType        uint32 = 255
 )
 
 type GameCfg struct {
@@ -79,12 +76,12 @@ func WithFutureProposal() GameOpt {
 
 type DisputeSystem interface {
 	L1BeaconEndpoint() endpoint.RestHTTP
-	SupervisorClient() *sources.SupervisorClient
+	SupernodeClient() *sources.SuperNodeClient
 	NodeEndpoint(name string) endpoint.RPC
 	L2NodeEndpoints() []endpoint.RPC
 	NodeClient(name string) *ethclient.Client
 	RollupEndpoint(name string) endpoint.RPC
-	SupervisorEndpoint() endpoint.RPC
+	SupernodeEndpoint() endpoint.RPC
 	RollupClient(name string) *sources.RollupClient
 	IsSupersystem() bool
 	DisputeGameFactoryAddr() common.Address
@@ -92,7 +89,6 @@ type DisputeSystem interface {
 	DependencySet() *depset.StaticConfigDependencySet
 	L1Genesis() *core.Genesis
 	L2Geneses() []*core.Genesis
-	PrestateVariant() shared.PrestateVariant
 
 	AdvanceTime(time.Duration)
 }
@@ -153,7 +149,7 @@ func (h *FactoryHelper) PreimageHelper(ctx context.Context) *preimage.Helper {
 	caller := batching.NewMultiCaller(h.Client.Client(), batching.DefaultBatchSize)
 	dgf, err := contracts.NewDisputeGameFactoryContract(ctx, metrics.NoopContractMetrics, h.FactoryAddr, caller)
 	h.Require.NoError(err)
-	vm, err := dgf.GetGameVm(ctx, gameTypes.GameType(cannonGameType))
+	vm, err := dgf.GetGameVm(ctx, gameTypes.GameType(cannonKonaGameType))
 	h.Require.NoError(err)
 	oracle, err := vm.Oracle(ctx)
 	h.Require.NoError(err)
@@ -171,13 +167,26 @@ func NewGameCfg(opts ...GameOpt) *GameCfg {
 func (h *FactoryHelper) StartOutputCannonGameWithCorrectRoot(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputCannonGameHelper {
 	cfg := NewGameCfg(opts...)
 	h.WaitForBlock(l2Node, l2BlockNumber, cfg)
-	output, err := h.System.RollupClient(l2Node).OutputAtBlock(ctx, l2BlockNumber)
+	output, err := wait.ForOutputAtBlock(ctx, h.System.RollupClient(l2Node), l2BlockNumber)
 	h.Require.NoErrorf(err, "Failed to get output at block %v", l2BlockNumber)
 	return h.StartOutputCannonGame(ctx, l2Node, l2BlockNumber, common.Hash(output.OutputRoot), opts...)
 }
 
 func (h *FactoryHelper) StartOutputCannonGame(ctx context.Context, l2Node string, l2BlockNumber uint64, rootClaim common.Hash, opts ...GameOpt) *OutputCannonGameHelper {
-	return h.startOutputCannonGameOfType(ctx, l2Node, l2BlockNumber, rootClaim, cannonGameType, opts...)
+	return h.startOutputCannonGameOfType(ctx, l2Node, l2BlockNumber, rootClaim, cannonKonaGameType, opts...)
+}
+
+// SkipIfPermissionedGameNotRegistered skips the test unless the DisputeGameFactory has an
+// implementation for the legacy permissioned game type. Super root games replace it, so it is only
+// registered while the super root games migration is disabled.
+// TODO(#21662): Remove along with the permissioned game tests when super root games can no longer
+// be disabled.
+func (h *FactoryHelper) SkipIfPermissionedGameNotRegistered(ctx context.Context) {
+	impl, err := h.Factory.GameImpls(&bind.CallOpts{Context: ctx}, permissionedGameType)
+	h.Require.NoError(err, "failed to load permissioned game implementation")
+	if impl == (common.Address{}) {
+		h.T.Skip("permissioned game type is not registered, super root games are enabled")
+	}
 }
 
 func (h *FactoryHelper) StartPermissionedGame(ctx context.Context, l2Node string, l2BlockNumber uint64, rootClaim common.Hash, opts ...GameOpt) *OutputCannonGameHelper {
@@ -194,6 +203,11 @@ func (h *FactoryHelper) startOutputCannonGameOfType(ctx context.Context, l2Node 
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
+
+	bond, err := h.Factory.InitBonds(nil, gameType)
+	h.Require.NoError(err, "get init bond for game type")
+	h.Opts.Value = bond
+	defer func() { h.Opts.Value = nil }()
 
 	tx, err := transactions.PadGasEstimate(h.Opts, 2, func(opts *bind.TransactOpts) (*types.Transaction, error) {
 		return h.Factory.Create(opts, gameType, rootClaim, extraData)
@@ -225,17 +239,13 @@ func (h *FactoryHelper) StartSuperCannonGameWithCorrectRoot(ctx context.Context,
 	require.NoError(h.T, err)
 	l2Timestamp := b.Time()
 	h.WaitForSuperTimestamp(l2Timestamp, cfg)
-	output, err := h.System.SupervisorClient().SuperRootAtTimestamp(ctx, hexutil.Uint64(l2Timestamp))
-	h.Require.NoErrorf(err, "Failed to get output at timestamp %v", l2Timestamp)
-	return h.startSuperCannonGameOfType(ctx, l2Timestamp, common.Hash(output.SuperRoot), superCannonGameType, opts...)
+	return h.startSuperCannonGameOfType(ctx, l2Timestamp, superCannonKonaGameType, opts...)
 }
 
 func (h *FactoryHelper) StartSuperCannonGameWithCorrectRootAtTimestamp(ctx context.Context, l2Timestamp uint64, opts ...GameOpt) *SuperCannonGameHelper {
 	cfg := NewGameCfg(opts...)
 	h.WaitForSuperTimestamp(l2Timestamp, cfg)
-	output, err := h.System.SupervisorClient().SuperRootAtTimestamp(ctx, hexutil.Uint64(l2Timestamp))
-	h.Require.NoErrorf(err, "Failed to get output at timestamp %v", l2Timestamp)
-	return h.startSuperCannonGameOfType(ctx, l2Timestamp, common.Hash(output.SuperRoot), superCannonGameType, opts...)
+	return h.startSuperCannonGameOfType(ctx, l2Timestamp, superCannonKonaGameType, opts...)
 }
 
 func (h *FactoryHelper) StartSuperCannonGame(ctx context.Context, rootClaim common.Hash, opts ...GameOpt) *SuperCannonGameHelper {
@@ -243,45 +253,49 @@ func (h *FactoryHelper) StartSuperCannonGame(ctx context.Context, rootClaim comm
 	require.NoError(h.T, wait.ForBlock(ctx, h.Client, 1))
 	b, err := h.Client.BlockByNumber(ctx, nil)
 	require.NoError(h.T, err)
-	return h.startSuperCannonGameOfType(ctx, b.Time(), rootClaim, superCannonGameType, opts...)
+	return h.startSuperCannonGameOfType(ctx, b.Time(), superCannonKonaGameType, opts...)
 }
 
-func (h *FactoryHelper) StartSuperCannonGameAtTimestamp(ctx context.Context, timestamp uint64, rootClaim common.Hash, opts ...GameOpt) *SuperCannonGameHelper {
-	return h.startSuperCannonGameOfType(ctx, timestamp, rootClaim, superCannonGameType, opts...)
+func (h *FactoryHelper) StartSuperCannonGameAtTimestamp(ctx context.Context, timestamp uint64, opts ...GameOpt) *SuperCannonGameHelper {
+	return h.startSuperCannonGameOfType(ctx, timestamp, superCannonKonaGameType, opts...)
 }
 
 func (h *FactoryHelper) startSuperCannonGameOfType(ctx context.Context, timestamp uint64, rootClaim common.Hash, gameType uint32, opts ...GameOpt) *SuperCannonGameHelper {
 	cfg := NewGameCfg(opts...)
 	logger := testlog.Logger(h.T, log.LevelInfo).New("role", "CannonGameHelper")
-	rootProvider := h.System.SupervisorClient()
+	rootProvider := h.System.SupernodeClient()
 
 	extraData := h.CreateSuperGameExtraData(ctx, rootProvider, timestamp, cfg)
 
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
+	timedCtx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
+
+	bond, err := h.Factory.InitBonds(nil, gameType)
+	h.Require.NoError(err, "get init bond for game type")
+	h.Opts.Value = bond
+	defer func() { h.Opts.Value = nil }()
 
 	tx, err := transactions.PadGasEstimate(h.Opts, 2, func(opts *bind.TransactOpts) (*types.Transaction, error) {
 		return h.Factory.Create(opts, gameType, rootClaim, extraData)
 	})
 	h.Require.NoErrorf(err, "create fault dispute game at timestamp %v. extraData: %x", timestamp, extraData)
-	rcpt, err := wait.ForReceiptOK(ctx, h.Client, tx.Hash())
+	rcpt, err := wait.ForReceiptOK(timedCtx, h.Client, tx.Hash())
 	h.Require.NoError(err, "wait for create fault dispute game receipt to be OK")
 	h.Require.Len(rcpt.Logs, 2, "should have emitted a single DisputeGameCreated event")
 	createdEvent, err := h.Factory.ParseDisputeGameCreated(*rcpt.Logs[1])
 	h.Require.NoError(err)
-	game, err := contracts.NewFaultDisputeGameContract(ctx, metrics.NoopContractMetrics, createdEvent.DisputeProxy, batching.NewMultiCaller(h.Client.Client(), batching.DefaultBatchSize))
+	game, err := contracts.NewFaultDisputeGameContract(timedCtx, metrics.NoopContractMetrics, createdEvent.DisputeProxy, batching.NewMultiCaller(h.Client.Client(), batching.DefaultBatchSize))
 	h.Require.NoError(err)
 
-	prestateTimestamp, poststateTimestamp, err := game.GetGameRange(ctx)
+	prestateTimestamp, poststateTimestamp, err := game.GetGameRange(timedCtx)
 	h.Require.NoError(err, "Failed to load starting block number")
-	splitDepth, err := game.GetSplitDepth(ctx)
+	splitDepth, err := game.GetSplitDepth(timedCtx)
 	h.Require.NoError(err, "Failed to load split depth")
-	l1Head := h.GetL1Head(ctx, game)
+	l1Head := h.GetL1Head(timedCtx, game)
+	h.waitForSupernodePastL1(ctx, l1Head)
 
-	prestateProvider := super.NewSuperRootPrestateProvider(rootProvider, prestateTimestamp)
-	rollupCfgs, err := super.NewRollupConfigsFromParsed(h.System.RollupCfgs()...)
-	require.NoError(h.T, err, "failed to create rollup configs")
-	provider := super.NewSuperTraceProvider(logger, rollupCfgs, prestateProvider, rootProvider, l1Head, splitDepth, prestateTimestamp, poststateTimestamp)
+	prestateProvider := super.NewSuperNodePrestateProvider(rootProvider, prestateTimestamp)
+	provider := super.NewSuperNodeTraceProvider(logger, prestateProvider, rootProvider, l1Head, splitDepth, prestateTimestamp, poststateTimestamp)
 
 	return NewSuperCannonGameHelper(h.T, h.Client, h.Opts, h.PrivKey, game, h.FactoryAddr, createdEvent.DisputeProxy, provider, h.System)
 }
@@ -291,14 +305,28 @@ func (h *FactoryHelper) GetL1Head(ctx context.Context, game contracts.FaultDispu
 	h.Require.NoError(err, "Failed to load L1 head")
 	l1Header, err := h.Client.HeaderByHash(ctx, l1HeadHash)
 	h.Require.NoError(err, "Failed to load L1 header")
-	l1Head := eth.HeaderBlockID(l1Header)
-	return l1Head
+	return eth.HeaderBlockID(l1Header)
+}
+
+// waitForSupernodePastL1 blocks until the supernode's CurrentL1 has advanced past l1Head, so
+// the trace provider can return data instead of ErrNotInSync.
+func (h *FactoryHelper) waitForSupernodePastL1(ctx context.Context, l1Head eth.BlockID) {
+	timedCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	err := wait.For(timedCtx, 500*time.Millisecond, func() (bool, error) {
+		status, statusErr := h.System.SupernodeClient().SyncStatus(ctx)
+		if statusErr != nil {
+			return false, statusErr
+		}
+		return status.CurrentL1.Number > l1Head.Number, nil
+	})
+	h.Require.NoErrorf(err, "supernode did not advance past game L1 head %d", l1Head.Number)
 }
 
 func (h *FactoryHelper) StartOutputAlphabetGameWithCorrectRoot(ctx context.Context, l2Node string, l2BlockNumber uint64, opts ...GameOpt) *OutputAlphabetGameHelper {
 	cfg := NewGameCfg(opts...)
 	h.WaitForBlock(l2Node, l2BlockNumber, cfg)
-	output, err := h.System.RollupClient(l2Node).OutputAtBlock(ctx, l2BlockNumber)
+	output, err := wait.ForOutputAtBlock(ctx, h.System.RollupClient(l2Node), l2BlockNumber)
 	h.Require.NoErrorf(err, "Failed to get output at block %v", l2BlockNumber)
 	return h.StartOutputAlphabetGame(ctx, l2Node, l2BlockNumber, common.Hash(output.OutputRoot))
 }
@@ -348,12 +376,12 @@ func (h *FactoryHelper) CreateBisectionGameExtraData(l2Node string, l2BlockNumbe
 	return extraData
 }
 
-func (h *FactoryHelper) CreateSuperGameExtraData(ctx context.Context, supervisor *sources.SupervisorClient, timestamp uint64, cfg *GameCfg) []byte {
+func (h *FactoryHelper) createSuperGameExtraData(ctx context.Context, sn *sources.SuperNodeClient, timestamp uint64, cfg *GameCfg) []byte {
 	if !cfg.allowFuture {
 		timedCtx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		err := wait.For(timedCtx, time.Second, func() (bool, error) {
-			status, err := supervisor.SyncStatus(ctx)
+			status, err := sn.SyncStatus(ctx)
 			if err != nil {
 				return false, err
 			}
@@ -361,10 +389,26 @@ func (h *FactoryHelper) CreateSuperGameExtraData(ctx context.Context, supervisor
 		})
 		require.NoError(h.T, err, "Safe head did not reach proposal timestamp")
 	}
-	h.T.Logf("Creating game with l2 timestamp: %v", timestamp)
-	extraData := make([]byte, 32)
-	binary.BigEndian.PutUint64(extraData[24:], timestamp)
-	return extraData
+
+	super := cfg.super
+	if super == nil {
+		h.T.Logf("Creating game with l2 timestamp: %v", timestamp)
+		superResponse, err := h.System.SupernodeClient().SuperRootAtTimestamp(ctx, uint64(timestamp))
+		h.Require.NoErrorf(err, "Failed to get super root at timestamp %v", timestamp)
+		h.Require.NotNilf(superResponse.Data, "supernode returned no super root data at timestamp %v", timestamp)
+		super = superResponse.Data.Super
+	}
+
+	superV1, ok := super.(*eth.SuperV1)
+	h.Require.Truef(ok, "Unsupported super type %T", super)
+	superV1.Timestamp = timestamp // override in case it's different from the game timestamp
+	if len(cfg.superOutputRoots) != 0 {
+		h.Require.Len(cfg.superOutputRoots, len(superV1.Chains), "Super output roots length mismatch")
+		for i := range superV1.Chains {
+			superV1.Chains[i].Output = cfg.superOutputRoots[i]
+		}
+	}
+	return superV1.Marshal()
 }
 
 func (h *FactoryHelper) WaitForBlock(l2Node string, l2BlockNumber uint64, cfg *GameCfg) {
@@ -389,7 +433,7 @@ func (h *FactoryHelper) WaitForSuperTimestamp(l2Timestamp uint64, cfg *GameCfg) 
 		return
 	}
 
-	client := h.System.SupervisorClient()
+	client := h.System.SupernodeClient()
 	absoluteTimeout := 5 * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), absoluteTimeout)
 	defer cancel()
@@ -406,7 +450,7 @@ func (h *FactoryHelper) WaitForSuperTimestamp(l2Timestamp uint64, cfg *GameCfg) 
 			if cfg.allowUnsafe {
 				localUnsafeAtTimestamp := true
 				for _, chain := range status.Chains {
-					if chain.LocalUnsafe.Time < l2Timestamp {
+					if chain.UnsafeL2.Time < l2Timestamp {
 						localUnsafeAtTimestamp = false
 						break
 					}

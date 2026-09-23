@@ -15,10 +15,9 @@ mod attributes;
 pub use attributes::OpPayloadAttributes;
 
 mod envelope;
-pub use envelope::{
-    OpExecutionData, OpExecutionPayloadEnvelope, OpNetworkPayloadEnvelope,
-    PayloadEnvelopeEncodeError, PayloadEnvelopeError, PayloadHash,
-};
+pub use envelope::{OpExecutionData, OpExecutionPayloadEnvelope, PayloadHash};
+
+mod execution;
 
 mod sidecar;
 pub use sidecar::OpExecutionPayloadSidecar;
@@ -29,11 +28,6 @@ pub use payload::{
     error::OpPayloadError,
     v3::OpExecutionPayloadEnvelopeV3,
     v4::{OpExecutionPayloadEnvelopeV4, OpExecutionPayloadV4},
-};
-
-mod superchain;
-pub use superchain::{
-    ProtocolVersion, ProtocolVersionError, ProtocolVersionFormatV0, SuperchainSignal,
 };
 
 pub mod flashblock;

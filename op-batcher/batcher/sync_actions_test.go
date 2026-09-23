@@ -35,9 +35,9 @@ func (tcs testChannelStatuser) isTimedOut() bool {
 
 func TestBatchSubmitter_computeSyncActions(t *testing.T) {
 
-	block101 := SizedBlock{Block: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(101)})}
-	block102 := SizedBlock{Block: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(102)})}
-	block103 := SizedBlock{Block: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(103)})}
+	block101 := mustSizedBlockFromGeth(types.NewBlockWithHeader(&types.Header{Number: big.NewInt(101), BaseFee: big.NewInt(7)}))
+	block102 := mustSizedBlockFromGeth(types.NewBlockWithHeader(&types.Header{Number: big.NewInt(102), BaseFee: big.NewInt(7)}))
+	block103 := mustSizedBlockFromGeth(types.NewBlockWithHeader(&types.Header{Number: big.NewInt(103), BaseFee: big.NewInt(7)}))
 
 	channel103 := testChannelStatuser{
 		latestL2:       eth.ToBlockID(block103),
@@ -46,7 +46,7 @@ func TestBatchSubmitter_computeSyncActions(t *testing.T) {
 		timedOut:       false,
 	}
 
-	block104 := SizedBlock{Block: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(104)})}
+	block104 := mustSizedBlockFromGeth(types.NewBlockWithHeader(&types.Header{Number: big.NewInt(104), BaseFee: big.NewInt(7)}))
 
 	channel104 := testChannelStatuser{
 		latestL2:       eth.ToBlockID(block104),
@@ -75,6 +75,17 @@ func TestBatchSubmitter_computeSyncActions(t *testing.T) {
 		{name: "empty sync status",
 			// This can happen when the sequencer recovers from a reorg
 			newSyncStatus:        eth.SyncStatus{},
+			expected:             syncActions{},
+			expectedSeqOutOfSync: true,
+			expectedLogs:         []string{"empty BlockRef in sync status"},
+		},
+		{name: "empty currentL1",
+			newSyncStatus: eth.SyncStatus{
+				HeadL1:      eth.BlockRef{Number: 2},
+				CurrentL1:   eth.BlockRef{},
+				LocalSafeL2: eth.L2BlockRef{Number: 100},
+				UnsafeL2:    eth.L2BlockRef{Number: 101},
+			},
 			expected:             syncActions{},
 			expectedSeqOutOfSync: true,
 			expectedLogs:         []string{"empty BlockRef in sync status"},

@@ -594,8 +594,8 @@ func (b *SpanBatch) ToRawSpanBatch() (*RawSpanBatch, error) {
 // Since SpanBatchElement does not contain EpochHash, set EpochHash from the given L1 blocks.
 // The result SingularBatches do not contain ParentHash yet. It must be set by the BatchQueue/Stage.
 //
-// If the span batch is overlapping the safe head, it may happen that the batch is found to be invalid
-// only at this point and that the span batch passed the previous span batch prefix checks.
+// It may happen that the batch is found to be invalid only at this point, having passed the
+// Holocene span batch checks (which are not exhaustive).
 // In this case, an error is returned and the whole span batch must be dropped.
 func (b *SpanBatch) GetSingularBatches(l1Origins []eth.L1BlockRef, l2SafeHead eth.L2BlockRef) ([]*SingularBatch, error) {
 	var singularBatches []*SingularBatch
@@ -643,13 +643,12 @@ func NewSpanBatch(genesisTimestamp uint64, chainID *big.Int) *SpanBatch {
 }
 
 // DeriveSpanBatch derives SpanBatch from BatchData.
-func DeriveSpanBatch(batchData *BatchData, blockTime, genesisTimestamp uint64, chainID *big.Int) (*SpanBatch, error) {
+func DeriveSpanBatch(batchData *BatchData, cfg *rollup.Config) (*SpanBatch, error) {
 	rawSpanBatch, ok := batchData.inner.(*RawSpanBatch)
 	if !ok {
 		return nil, NewCriticalError(errors.New("failed type assertion to SpanBatch"))
 	}
-	// If the batch type is Span batch, derive block inputs from RawSpanBatch.
-	return rawSpanBatch.ToSpanBatch(blockTime, genesisTimestamp, chainID)
+	return rawSpanBatch.ToSpanBatch(cfg.BlockTime, cfg.Genesis.L2Time, cfg.L2ChainID)
 }
 
 // ReadTxData reads raw RLP tx data from reader and returns txData and txType

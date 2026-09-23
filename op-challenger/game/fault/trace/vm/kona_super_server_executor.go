@@ -54,8 +54,8 @@ func (s *KonaSuperExecutor) OracleCommand(cfg Config, dataDir string, inputs uti
 		args = append(args, "--l1-config-path", cfg.L1GenesisPath)
 	}
 
-	if cfg.EnableExperimentalWitnessEndpoint {
-		args = append(args, "--enable-experimental-witness-endpoint")
+	if cfg.DepsetConfigPath != "" {
+		args = append(args, "--depset-cfg", cfg.DepsetConfigPath)
 	}
 
 	return args, nil

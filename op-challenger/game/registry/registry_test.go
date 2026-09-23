@@ -75,10 +75,18 @@ func TestBondContracts(t *testing.T) {
 
 type stubBondContract struct{}
 
+func (s *stubBondContract) IsClosed(_ context.Context) (bool, error) {
+	panic("not supported")
+}
+
 func (s *stubBondContract) GetCredit(_ context.Context, _ common.Address) (*big.Int, types.GameStatus, error) {
 	panic("not supported")
 }
 
 func (s *stubBondContract) ClaimCreditTx(_ context.Context, _ common.Address) (txmgr.TxCandidate, error) {
+	panic("not supported")
+}
+
+func (s *stubBondContract) CloseGameTx(_ context.Context) (txmgr.TxCandidate, error) {
 	panic("not supported")
 }

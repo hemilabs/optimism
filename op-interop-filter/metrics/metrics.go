@@ -14,8 +14,20 @@ type Metricer interface {
 	RecordInfo(version string)
 	RecordUp()
 	RecordFailsafeEnabled(enabled bool)
+	RecordPassthroughEnabled(enabled bool)
+	RecordFailsafeReason(reason string, active bool)
 	RecordChainHead(chainID uint64, blockNum uint64)
+	RecordChainTip(chainID uint64, blockNum uint64)
+	RecordTipLagBlocks(chainID uint64, lag uint64)
+	RecordIngestionLagSeconds(chainID uint64, lagSeconds float64)
 	RecordCheckAccessList(success bool)
+	RecordCheckAccessListDuration(duration float64)
+	RecordCheckAccessListRejection(reason string)
+	RecordBackfillProgress(chainID uint64, progress float64)
+	RecordReorgDetected(chainID uint64)
+	RecordLogsAdded(chainID uint64, count int64)
+	RecordBlocksSealed(chainID uint64, count int64)
+	RecordCrossUnsafeValidatedTimestamp(timestamp uint64)
 }
 
 type Metrics struct {
@@ -23,11 +35,26 @@ type Metrics struct {
 	registry *prometheus.Registry
 	factory  opmetrics.Factory
 
-	info             *prometheus.GaugeVec
-	up               prometheus.Gauge
-	failsafeEnabled  prometheus.Gauge
-	chainHead        *prometheus.GaugeVec
-	checkAccessTotal *prometheus.CounterVec
+	info                     *prometheus.GaugeVec
+	up                       prometheus.Gauge
+	failsafeEnabled          prometheus.Gauge
+	passthroughEnabled       prometheus.Gauge
+	failsafeReason           *prometheus.GaugeVec
+	chainHead                *prometheus.GaugeVec
+	checkAccessTotal         *prometheus.CounterVec
+	checkAccessListDuration  prometheus.Histogram
+	checkAccessListRejectVec *prometheus.CounterVec
+
+	// Chain-specific metrics
+	chainTip            *prometheus.GaugeVec
+	tipLagBlocks        *prometheus.GaugeVec
+	ingestionLagSeconds *prometheus.GaugeVec
+
+	backfillProgress              *prometheus.GaugeVec
+	reorgDetectedTotal            *prometheus.CounterVec
+	logsAddedTotal                *prometheus.CounterVec
+	blocksSealedTotal             *prometheus.CounterVec
+	crossUnsafeValidatedTimestamp prometheus.Gauge
 }
 
 var _ Metricer = (*Metrics)(nil)
@@ -65,6 +92,18 @@ func NewMetrics(procName string) *Metrics {
 			Help:      "1 if failsafe is enabled",
 		}),
 
+		passthroughEnabled: factory.NewGauge(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "passthrough_enabled",
+			Help:      "1 if passthrough mode is enabled",
+		}),
+
+		failsafeReason: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "failsafe_reason_active",
+			Help:      "1 if the given reason is currently forcing failsafe on; multiple reasons may be active at once",
+		}, []string{"reason"}),
+
 		chainHead: factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns,
 			Name:      "chain_head",
@@ -76,6 +115,67 @@ func NewMetrics(procName string) *Metrics {
 			Name:      "check_access_list_total",
 			Help:      "Total checkAccessList requests",
 		}, []string{"success"}),
+
+		checkAccessListDuration: factory.NewHistogram(prometheus.HistogramOpts{
+			Namespace: ns,
+			Name:      "check_access_list_duration_seconds",
+			Help:      "Duration of CheckAccessList calls in seconds",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+		}),
+
+		checkAccessListRejectVec: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns,
+			Name:      "check_access_list_rejections_total",
+			Help:      "Access list rejections by reason",
+		}, []string{"reason"}),
+
+		chainTip: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "chain_tip",
+			Help:      "Latest known chain tip block number from RPC",
+		}, []string{"chain_id"}),
+
+		tipLagBlocks: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "tip_lag_blocks",
+			Help:      "Number of blocks the ingester is behind the chain tip",
+		}, []string{"chain_id"}),
+
+		ingestionLagSeconds: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "ingestion_lag_seconds",
+			Help:      "Seconds between now and the timestamp of the latest ingested block",
+		}, []string{"chain_id"}),
+
+		backfillProgress: factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "backfill_progress",
+			Help:      "Backfill progress (0-1) per chain",
+		}, []string{"chain_id"}),
+
+		reorgDetectedTotal: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns,
+			Name:      "reorg_detected_total",
+			Help:      "Total reorgs detected per chain",
+		}, []string{"chain_id"}),
+
+		logsAddedTotal: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns,
+			Name:      "logs_added_total",
+			Help:      "Total logs added to DB per chain",
+		}, []string{"chain_id"}),
+
+		blocksSealedTotal: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns,
+			Name:      "blocks_sealed_total",
+			Help:      "Total blocks sealed per chain",
+		}, []string{"chain_id"}),
+
+		crossUnsafeValidatedTimestamp: factory.NewGauge(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "cross_unsafe_validated_timestamp",
+			Help:      "Latest cross-unsafe validated timestamp",
+		}),
 	}
 }
 
@@ -103,8 +203,36 @@ func (m *Metrics) RecordFailsafeEnabled(enabled bool) {
 	}
 }
 
+func (m *Metrics) RecordPassthroughEnabled(enabled bool) {
+	if enabled {
+		m.passthroughEnabled.Set(1)
+	} else {
+		m.passthroughEnabled.Set(0)
+	}
+}
+
+func (m *Metrics) RecordFailsafeReason(reason string, active bool) {
+	v := 0.0
+	if active {
+		v = 1.0
+	}
+	m.failsafeReason.WithLabelValues(reason).Set(v)
+}
+
 func (m *Metrics) RecordChainHead(chainID uint64, blockNum uint64) {
 	m.chainHead.WithLabelValues(strconv.FormatUint(chainID, 10)).Set(float64(blockNum))
+}
+
+func (m *Metrics) RecordChainTip(chainID uint64, blockNum uint64) {
+	m.chainTip.WithLabelValues(strconv.FormatUint(chainID, 10)).Set(float64(blockNum))
+}
+
+func (m *Metrics) RecordTipLagBlocks(chainID uint64, lag uint64) {
+	m.tipLagBlocks.WithLabelValues(strconv.FormatUint(chainID, 10)).Set(float64(lag))
+}
+
+func (m *Metrics) RecordIngestionLagSeconds(chainID uint64, lagSeconds float64) {
+	m.ingestionLagSeconds.WithLabelValues(strconv.FormatUint(chainID, 10)).Set(lagSeconds)
 }
 
 func (m *Metrics) RecordCheckAccessList(success bool) {
@@ -115,13 +243,53 @@ func (m *Metrics) RecordCheckAccessList(success bool) {
 	m.checkAccessTotal.WithLabelValues(label).Inc()
 }
 
+func (m *Metrics) RecordCheckAccessListDuration(duration float64) {
+	m.checkAccessListDuration.Observe(duration)
+}
+
+func (m *Metrics) RecordCheckAccessListRejection(reason string) {
+	m.checkAccessListRejectVec.WithLabelValues(reason).Inc()
+}
+
+func (m *Metrics) RecordBackfillProgress(chainID uint64, progress float64) {
+	m.backfillProgress.WithLabelValues(strconv.FormatUint(chainID, 10)).Set(progress)
+}
+
+func (m *Metrics) RecordReorgDetected(chainID uint64) {
+	m.reorgDetectedTotal.WithLabelValues(strconv.FormatUint(chainID, 10)).Inc()
+}
+
+func (m *Metrics) RecordLogsAdded(chainID uint64, count int64) {
+	m.logsAddedTotal.WithLabelValues(strconv.FormatUint(chainID, 10)).Add(float64(count))
+}
+
+func (m *Metrics) RecordBlocksSealed(chainID uint64, count int64) {
+	m.blocksSealedTotal.WithLabelValues(strconv.FormatUint(chainID, 10)).Add(float64(count))
+}
+
+func (m *Metrics) RecordCrossUnsafeValidatedTimestamp(timestamp uint64) {
+	m.crossUnsafeValidatedTimestamp.Set(float64(timestamp))
+}
+
 // NoopMetrics is a no-op implementation for testing
 var NoopMetrics Metricer = &noopMetrics{}
 
 type noopMetrics struct{}
 
-func (n *noopMetrics) RecordInfo(version string)                       {}
-func (n *noopMetrics) RecordUp()                                       {}
-func (n *noopMetrics) RecordFailsafeEnabled(enabled bool)              {}
-func (n *noopMetrics) RecordChainHead(chainID uint64, blockNum uint64) {}
-func (n *noopMetrics) RecordCheckAccessList(success bool)              {}
+func (n *noopMetrics) RecordInfo(version string)                               {}
+func (n *noopMetrics) RecordUp()                                               {}
+func (n *noopMetrics) RecordFailsafeEnabled(enabled bool)                      {}
+func (n *noopMetrics) RecordPassthroughEnabled(enabled bool)                   {}
+func (n *noopMetrics) RecordFailsafeReason(reason string, active bool)         {}
+func (n *noopMetrics) RecordChainHead(chainID uint64, blockNum uint64)         {}
+func (n *noopMetrics) RecordChainTip(chainID uint64, blockNum uint64)          {}
+func (n *noopMetrics) RecordTipLagBlocks(chainID uint64, lag uint64)           {}
+func (n *noopMetrics) RecordIngestionLagSeconds(chainID uint64, lag float64)   {}
+func (n *noopMetrics) RecordCheckAccessList(success bool)                      {}
+func (n *noopMetrics) RecordCheckAccessListDuration(duration float64)          {}
+func (n *noopMetrics) RecordCheckAccessListRejection(reason string)            {}
+func (n *noopMetrics) RecordBackfillProgress(chainID uint64, progress float64) {}
+func (n *noopMetrics) RecordReorgDetected(chainID uint64)                      {}
+func (n *noopMetrics) RecordLogsAdded(chainID uint64, count int64)             {}
+func (n *noopMetrics) RecordBlocksSealed(chainID uint64, count int64)          {}
+func (n *noopMetrics) RecordCrossUnsafeValidatedTimestamp(timestamp uint64)    {}

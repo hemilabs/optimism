@@ -17,7 +17,8 @@ import (
 )
 
 var (
-	mockTxMgrSendError = errors.New("mock tx mgr send error")
+	mockTxMgrSendError  = errors.New("mock tx mgr send error")
+	mockCloseCheckError = errors.New("mock close check error")
 )
 
 func TestClaimer_ClaimBonds(t *testing.T) {
@@ -89,14 +90,124 @@ func TestClaimer_ClaimBonds(t *testing.T) {
 		require.Equal(t, 0, m.RecordBondClaimedCalls)
 	})
 
-	t.Run("ZeroCreditReturnsNil", func(t *testing.T) {
+	t.Run("ZeroCreditClosesGameWhenOpen", func(t *testing.T) {
 		gameAddr := common.HexToAddress("0x1234")
 		c, m, contract, txSender := newTestClaimer(t)
 		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{false}
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+		require.NoError(t, err)
+		require.Equal(t, 1, txSender.sends)
+		require.Equal(t, 0, m.RecordBondClaimedCalls)
+	})
+
+	t.Run("ZeroCreditSkipsCloseWhenAlreadyClosed", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, m, contract, txSender := newTestClaimer(t)
+		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{true}
 		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
 		require.NoError(t, err)
 		require.Equal(t, 0, txSender.sends)
 		require.Equal(t, 0, m.RecordBondClaimedCalls)
+	})
+
+	t.Run("ZeroCreditSkipsCloseWhenCloseNotSupported", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, m, contract, txSender := newTestClaimer(t)
+		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{false}
+		contract.closeGameNotSupported = true
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+		require.NoError(t, err)
+		require.Equal(t, 0, txSender.sends)
+		require.Equal(t, 0, m.RecordBondClaimedCalls)
+	})
+
+	t.Run("ZeroCreditSkipsCloseWhenSimulationFails", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, m, contract, txSender := newTestClaimer(t)
+		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{false}
+		contract.closeGameSimulationFails = true
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+		require.NoError(t, err)
+		require.Equal(t, 0, txSender.sends)
+		require.Equal(t, 0, m.RecordBondClaimedCalls)
+	})
+
+	t.Run("ZeroCreditSkipsCloseWhenSelectiveMode", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, m, contract, txSender := newTestClaimerWithSelective(t, true)
+		contract.credit[txSender.From()] = 0
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+		require.NoError(t, err)
+		require.Equal(t, 0, txSender.sends)
+		require.Equal(t, 0, contract.isClosedCalls)
+		require.Equal(t, 0, m.RecordBondClaimedCalls)
+	})
+
+	t.Run("SelectiveBondCapableModeOnlyClaimsPositiveCredit", func(t *testing.T) {
+		claimantWithCredit := common.Address{0xaa}
+		claimantWithoutCredit := common.Address{0xbb}
+		gameAddr := common.HexToAddress("0x1234")
+		c, m, contract, txSender := newTestClaimerWithSelective(t, true, claimantWithCredit, claimantWithoutCredit)
+		contract.credit[claimantWithCredit] = 1
+		contract.credit[claimantWithoutCredit] = 0
+
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+
+		require.NoError(t, err)
+		require.Equal(t, 1, txSender.sends)
+		require.Equal(t, 2, contract.getCreditCalls)
+		require.Equal(t, 1, contract.claimCreditTxCalls)
+		require.Equal(t, 0, contract.isClosedCalls)
+		require.Equal(t, 0, contract.closeGameTxCalls)
+		require.Equal(t, 1, m.RecordBondClaimedCalls)
+	})
+
+	t.Run("FailedCloseSendIsBenignWhenGameClosedConcurrently", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, _, contract, txSender := newTestClaimer(t)
+		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{false, true}
+		txSender.sendFails = true
+
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+
+		require.NoError(t, err)
+		require.Equal(t, 1, txSender.sends)
+		require.Equal(t, 2, contract.isClosedCalls)
+	})
+
+	t.Run("FailedCloseSendIsReturnedWhenGameRemainsOpen", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, _, contract, txSender := newTestClaimer(t)
+		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{false, false}
+		txSender.sendFails = true
+
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+
+		require.ErrorIs(t, err, mockTxMgrSendError)
+		require.Equal(t, 1, txSender.sends)
+		require.Equal(t, 2, contract.isClosedCalls)
+	})
+
+	t.Run("FailedCloseCheckJoinsSendAndCheckErrors", func(t *testing.T) {
+		gameAddr := common.HexToAddress("0x1234")
+		c, _, contract, txSender := newTestClaimer(t)
+		contract.credit[txSender.From()] = 0
+		contract.isClosedResults = []bool{false}
+		contract.isClosedErrors = []error{nil, mockCloseCheckError}
+		txSender.sendFails = true
+
+		err := c.ClaimBonds(context.Background(), []types.GameMetadata{{Proxy: gameAddr}})
+
+		require.ErrorIs(t, err, mockTxMgrSendError)
+		require.ErrorIs(t, err, mockCloseCheckError)
+		require.Equal(t, 1, txSender.sends)
+		require.Equal(t, 2, contract.isClosedCalls)
 	})
 
 	t.Run("MultipleBondClaimFails", func(t *testing.T) {
@@ -115,7 +226,10 @@ func newTestClaimer(t *testing.T, claimants ...common.Address) (*Claimer, *mockC
 	logger := testlog.Logger(t, log.LvlDebug)
 	m := &mockClaimMetrics{}
 	txSender := &mockTxSender{}
-	bondContract := &stubBondContract{status: types.GameStatusChallengerWon, credit: make(map[common.Address]int64)}
+	bondContract := &stubBondContract{
+		status: types.GameStatusChallengerWon,
+		credit: make(map[common.Address]int64),
+	}
 	contractCreator := func(game types.GameMetadata) (BondContract, error) {
 		return bondContract, nil
 	}
@@ -156,17 +270,52 @@ func (s *mockTxSender) SendAndWaitSimple(_ string, _ ...txmgr.TxCandidate) error
 }
 
 type stubBondContract struct {
-	credit               map[common.Address]int64
-	status               types.GameStatus
-	claimSimulationFails bool
+	credit                   map[common.Address]int64
+	status                   types.GameStatus
+	isClosedResults          []bool
+	isClosedErrors           []error
+	claimSimulationFails     bool
+	closeGameSimulationFails bool
+	closeGameNotSupported    bool
+	getCreditCalls           int
+	claimCreditTxCalls       int
+	isClosedCalls            int
+	closeGameTxCalls         int
+}
+
+func (s *stubBondContract) IsClosed(_ context.Context) (bool, error) {
+	call := s.isClosedCalls
+	s.isClosedCalls++
+	var closed bool
+	if call < len(s.isClosedResults) {
+		closed = s.isClosedResults[call]
+	}
+	var err error
+	if call < len(s.isClosedErrors) {
+		err = s.isClosedErrors[call]
+	}
+	return closed, err
 }
 
 func (s *stubBondContract) GetCredit(_ context.Context, addr common.Address) (*big.Int, types.GameStatus, error) {
+	s.getCreditCalls++
 	return big.NewInt(s.credit[addr]), s.status, nil
 }
 
 func (s *stubBondContract) ClaimCreditTx(_ context.Context, _ common.Address) (txmgr.TxCandidate, error) {
+	s.claimCreditTxCalls++
 	if s.claimSimulationFails {
+		return txmgr.TxCandidate{}, fmt.Errorf("failed: %w", contracts.ErrSimulationFailed)
+	}
+	return txmgr.TxCandidate{}, nil
+}
+
+func (s *stubBondContract) CloseGameTx(_ context.Context) (txmgr.TxCandidate, error) {
+	s.closeGameTxCalls++
+	if s.closeGameNotSupported {
+		return txmgr.TxCandidate{}, contracts.ErrCloseGameNotSupported
+	}
+	if s.closeGameSimulationFails {
 		return txmgr.TxCandidate{}, fmt.Errorf("failed: %w", contracts.ErrSimulationFailed)
 	}
 	return txmgr.TxCandidate{}, nil

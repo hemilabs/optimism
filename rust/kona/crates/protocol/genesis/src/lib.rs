@@ -9,6 +9,9 @@
 
 extern crate alloc;
 
+mod predeploys;
+pub use predeploys::Predeploys;
+
 mod params;
 pub use params::{
     BASE_MAINNET_BASE_FEE_CONFIG, BASE_MAINNET_EIP1559_BASE_FEE_MAX_CHANGE_DENOMINATOR_CANYON,
@@ -31,7 +34,7 @@ pub use params::{
 
 mod superchain;
 pub use superchain::{
-    Chain, ChainList, FaultProofs, Superchain, SuperchainConfig, SuperchainL1Info, SuperchainLevel,
+    Chain, ChainList, FaultProofs, Superchain, SuperchainConfig, SuperchainL1Info,
     SuperchainParent, Superchains,
 };
 
@@ -56,11 +59,17 @@ pub use chain::{
     HardForkConfig, L1ChainConfig, OP_MAINNET_CHAIN_ID, OP_SEPOLIA_CHAIN_ID, Roles,
 };
 
+pub mod interop;
+pub use interop::{
+    ChainDependency, ClusterError, DependencySet, InteropConfig, MESSAGE_EXPIRY_WINDOW,
+    aggregate_clusters, with_single_chain_defaults,
+};
+
 mod genesis;
 pub use genesis::ChainGenesis;
 
 mod rollup;
 pub use rollup::{
-    DEFAULT_INTEROP_MESSAGE_EXPIRY_WINDOW, FJORD_MAX_SEQUENCER_DRIFT, GRANITE_CHANNEL_TIMEOUT,
-    MAX_RLP_BYTES_PER_CHANNEL_BEDROCK, MAX_RLP_BYTES_PER_CHANNEL_FJORD, RollupConfig,
+    FJORD_MAX_SEQUENCER_DRIFT, GRANITE_CHANNEL_TIMEOUT, MAX_RLP_BYTES_PER_CHANNEL_BEDROCK,
+    MAX_RLP_BYTES_PER_CHANNEL_FJORD, RollupConfig,
 };

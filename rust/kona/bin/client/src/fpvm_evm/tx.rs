@@ -8,7 +8,7 @@ use alloy_evm::{FromRecoveredTx, FromTxWithEncoded, IntoTxEnv};
 use alloy_op_evm::block::OpTxEnv;
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use core::ops::{Deref, DerefMut};
-use op_alloy_consensus::{OpTxEnvelope, TxDeposit};
+use op_alloy_consensus::{OpTxEnvelope, TxDeposit, TxPostExec};
 use op_revm::{OpTransaction, transaction::deposit::DepositTransactionParts};
 use revm::context::TxEnv;
 
@@ -136,6 +136,7 @@ impl FromTxWithEncoded<OpTxEnvelope> for FpvmOpTx {
             OpTxEnvelope::Eip2930(tx) => Self::from_encoded_tx(tx, caller, encoded),
             OpTxEnvelope::Eip7702(tx) => Self::from_encoded_tx(tx, caller, encoded),
             OpTxEnvelope::Deposit(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
+            OpTxEnvelope::PostExec(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
         }
     }
 }
@@ -213,5 +214,60 @@ impl FromTxWithEncoded<TxDeposit> for FpvmOpTx {
             is_system_transaction: tx.is_system_transaction,
         };
         Self(OpTransaction { base, enveloped_tx: Some(encoded), deposit })
+    }
+}
+
+impl FromRecoveredTx<TxPostExec> for FpvmOpTx {
+    fn from_recovered_tx(tx: &TxPostExec, _sender: Address) -> Self {
+        let encoded = tx.encoded_2718();
+        Self::from_encoded_tx(tx, Address::ZERO, encoded.into())
+    }
+}
+
+impl FromTxWithEncoded<TxPostExec> for FpvmOpTx {
+    fn from_encoded_tx(tx: &TxPostExec, caller: Address, encoded: Bytes) -> Self {
+        let base = alloy_op_evm::tx::post_exec_tx_env(tx, caller);
+        Self(OpTransaction { base, enveloped_tx: Some(encoded), deposit: Default::default() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use alloy_consensus::Transaction;
+    use op_alloy_consensus::{SDMGasEntry, build_post_exec_tx};
+
+    /// The post-exec [`TxEnv`] must reflect the transaction rather than [`TxEnv::default`], whose
+    /// mainnet `chain_id: Some(1)`, 2^24 gas limit, and empty calldata leak into any consumer that
+    /// inspects the env (and fail revm's chain-id validation outright on non-mainnet chains).
+    #[test]
+    fn post_exec_tx_env_reflects_transaction_fields() {
+        let tx = build_post_exec_tx(7, vec![]);
+
+        let FpvmOpTx(op_tx) = FpvmOpTx::from_recovered_tx(&tx, Address::ZERO);
+
+        assert_eq!(op_tx.base.chain_id, None, "post-exec txs carry no chain id");
+        assert_eq!(op_tx.base.gas_limit, tx.gas_limit());
+        assert_eq!(op_tx.base.data, *tx.input());
+        assert_eq!(op_tx.base.kind, tx.kind());
+        assert_eq!(op_tx.base.tx_type, tx.ty());
+    }
+
+    #[test]
+    fn post_exec_tx_env_mirrors_transaction() {
+        let tx = build_post_exec_tx(7, vec![SDMGasEntry { index: 0, gas_refund: 42 }]);
+        let env = FpvmOpTx::from_encoded_tx(&tx, Address::ZERO, tx.encoded_2718().into());
+
+        let expected = TxEnv {
+            tx_type: tx.ty(),
+            caller: Address::ZERO,
+            kind: tx.kind(),
+            gas_limit: tx.gas_limit(),
+            chain_id: tx.chain_id(),
+            data: tx.input().clone(),
+            ..Default::default()
+        };
+        assert_eq!(env.0.base, expected);
     }
 }

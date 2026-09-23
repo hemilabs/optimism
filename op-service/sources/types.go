@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
 
@@ -64,6 +65,12 @@ type RPCHeader struct {
 
 	// RequestsHash was added by EIP-7685 and is ignored in legacy headers.
 	RequestsHash *common.Hash `json:"requestsHash,omitempty" rlp:"optional"`
+
+	// BlockAccessListHash was added by EIP-7928 and is ignored in legacy headers.
+	BlockAccessListHash *common.Hash `json:"blockAccessListHash,omitempty" rlp:"optional"`
+
+	// SlotNumber was added by EIP-7843 and is ignored in legacy headers.
+	SlotNumber *hexutil.Uint64 `json:"slotNumber,omitempty" rlp:"optional"`
 
 	// untrusted info included by RPC, may have to be checked
 	Hash common.Hash `json:"hash"`
@@ -122,10 +129,14 @@ func (hdr *RPCHeader) CreateGethHeader() *types.Header {
 		ParentBeaconRoot: hdr.ParentBeaconRoot,
 		// Prague
 		RequestsHash: hdr.RequestsHash,
+		// Amsterdam: BlockAccessListHash and SlotNumber are not supported by the pinned
+		// hemilabs/op-geth types.Header, so Amsterdam headers cannot be represented (hemi).
 	}
 }
 
-func (hdr *RPCHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo, error) {
+// Header runs trust/post-merge verification on the RPC-provided header and
+// returns the underlying *types.Header.
+func (hdr *RPCHeader) Header(trustCache bool, mustBePostMerge bool) (*types.Header, error) {
 	if mustBePostMerge {
 		if err := hdr.checkPostMerge(); err != nil {
 			return nil, err
@@ -137,7 +148,15 @@ func (hdr *RPCHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo
 			return nil, fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, hdr.Hash)
 		}
 	}
-	return eth.HeaderBlockInfoTrusted(hdr.Hash, hdr.CreateGethHeader()), nil
+	return hdr.CreateGethHeader(), nil
+}
+
+func (hdr *RPCHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo, error) {
+	header, err := hdr.Header(trustCache, mustBePostMerge)
+	if err != nil {
+		return nil, err
+	}
+	return eth.HeaderBlockInfoTrusted(hdr.Hash, header), nil
 }
 
 func (hdr *RPCHeader) BlockID() eth.BlockID {
@@ -149,8 +168,8 @@ func (hdr *RPCHeader) BlockID() eth.BlockID {
 
 type RPCBlock struct {
 	RPCHeader
-	Transactions []*types.Transaction `json:"transactions"`
-	Withdrawals  *types.Withdrawals   `json:"withdrawals,omitempty"`
+	Transactions RawTransactions    `json:"transactions"`
+	Withdrawals  *types.Withdrawals `json:"withdrawals,omitempty"`
 }
 
 func (block *RPCBlock) Verify() error {
@@ -158,18 +177,18 @@ func (block *RPCBlock) Verify() error {
 		return fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, block.Hash)
 	}
 	for i, tx := range block.Transactions {
-		if tx == nil {
-			return fmt.Errorf("block tx %d is nil", i)
+		if len(tx) == 0 {
+			return fmt.Errorf("block tx %d is nil or empty", i)
 		}
 	}
-	if computed := types.DeriveSha(types.Transactions(block.Transactions), trie.NewStackTrie(nil)); block.TxHash != computed {
+	if computed := types.DeriveSha(block.Transactions, trie.NewStackTrie(nil)); block.TxHash != computed {
 		return fmt.Errorf("failed to verify transactions list: computed %s but RPC said %s", computed, block.TxHash)
 	}
 
 	// Withdrawals validation is different between L1 and L2.
 	// It is possible to determine that it is an L2 block if the first transaction is a deposit.
 	// The genesis block does not have transactions, but does have a known fee-recipient predeploy address.
-	isL2 := (len(block.Transactions) > 0 && block.Transactions[0].IsDepositTx()) ||
+	isL2 := (len(block.Transactions) > 0 && block.Transactions[0].Type() == optypes.DepositTxType) ||
 		(block.Number == 0 && block.Coinbase == predeploys.SequencerFeeVaultAddr)
 	if isL2 {
 		if err := block.validateL2Withdrawals(block.Withdrawals, block.WithdrawalsRoot); err != nil {
@@ -213,7 +232,7 @@ func (block *RPCBlock) validateL2Withdrawals(withdrawals *types.Withdrawals, wit
 	return nil
 }
 
-func (block *RPCBlock) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo, types.Transactions, error) {
+func (block *RPCBlock) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo, RawTransactions, error) {
 	if mustBePostMerge {
 		if err := block.checkPostMerge(); err != nil {
 			return nil, nil, err
@@ -246,15 +265,11 @@ func (block *RPCBlock) ExecutionPayloadEnvelope(trustCache bool) (*eth.Execution
 	var baseFee uint256.Int
 	baseFee.SetFromBig((*big.Int)(block.BaseFee))
 
-	// Unfortunately eth_getBlockByNumber either returns full transactions, or only tx-hashes.
-	// There is no option for encoded transactions.
+	// Transactions are already held in their canonical binary encoding;
+	// the payload's opaque form is a straight copy.
 	opaqueTxs := make([]hexutil.Bytes, len(block.Transactions))
 	for i, tx := range block.Transactions {
-		data, err := tx.MarshalBinary()
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode tx %d from RPC: %w", i, err)
-		}
-		opaqueTxs[i] = data
+		opaqueTxs[i] = hexutil.Bytes(tx)
 	}
 
 	payload := &eth.ExecutionPayload{

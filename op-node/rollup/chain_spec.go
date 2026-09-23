@@ -145,8 +145,11 @@ func (s *ChainSpec) CheckForkActivation(log log.Logger, block eth.L2BlockRef) {
 		if s.config.IsJovian(block.Time) {
 			s.currentFork = forks.Jovian
 		}
+		if s.config.IsKarst(block.Time) {
+			s.currentFork = forks.Karst
+		}
 		if s.config.IsInterop(block.Time) {
-			s.currentFork = forks.Interop
+			s.currentFork = forks.Lagoon
 		}
 		log.Info("Current hardfork version detected", "forkName", s.currentFork)
 		return
@@ -173,7 +176,9 @@ func (s *ChainSpec) CheckForkActivation(log log.Logger, block eth.L2BlockRef) {
 		foundActivationBlock = s.config.IsIsthmusActivationBlock(block.Time)
 	case forks.Jovian:
 		foundActivationBlock = s.config.IsJovianActivationBlock(block.Time)
-	case forks.Interop:
+	case forks.Karst:
+		foundActivationBlock = s.config.IsKarstActivationBlock(block.Time)
+	case forks.Lagoon:
 		foundActivationBlock = s.config.IsInteropActivationBlock(block.Time)
 	}
 

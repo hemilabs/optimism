@@ -2,12 +2,13 @@
 
 use crate::{
     L2ChainProvider, NextBatchProvider, OriginAdvancer, OriginProvider, PipelineError,
-    PipelineResult, Signal, SignalReceiver,
+    PipelineResult, Stage,
 };
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
+use alloy_eips::BlockNumHash;
 use async_trait::async_trait;
 use core::fmt::Debug;
-use kona_genesis::RollupConfig;
+use kona_genesis::{RollupConfig, SystemConfig};
 use kona_protocol::{
     Batch, BatchValidity, BatchWithInclusionBlock, BlockInfo, L2BlockInfo, SingleBatch, SpanBatch,
     SpanBatchError,
@@ -35,7 +36,7 @@ pub trait BatchStreamProvider {
 #[derive(Debug)]
 pub struct BatchStream<P, BF>
 where
-    P: BatchStreamProvider + OriginAdvancer + OriginProvider + SignalReceiver + Debug,
+    P: BatchStreamProvider + OriginAdvancer + OriginProvider + Stage + Debug,
     BF: L2ChainProvider + Debug,
 {
     /// The previous stage in the derivation pipeline.
@@ -53,7 +54,7 @@ where
 
 impl<P, BF> BatchStream<P, BF>
 where
-    P: BatchStreamProvider + OriginAdvancer + OriginProvider + SignalReceiver + Debug,
+    P: BatchStreamProvider + OriginAdvancer + OriginProvider + Stage + Debug,
     BF: L2ChainProvider + Debug,
 {
     /// Create a new [`BatchStream`] stage.
@@ -104,7 +105,7 @@ where
 #[async_trait]
 impl<P, BF> NextBatchProvider for BatchStream<P, BF>
 where
-    P: BatchStreamProvider + OriginAdvancer + OriginProvider + SignalReceiver + Send + Debug,
+    P: BatchStreamProvider + OriginAdvancer + OriginProvider + Stage + Send + Debug,
     BF: L2ChainProvider + Send + Debug,
 {
     fn flush(&mut self) {
@@ -147,8 +148,8 @@ where
                 Batch::Span(b) => {
                     #[cfg(feature = "metrics")]
                     let start = std::time::Instant::now();
-                    let (validity, _) = b
-                        .check_batch_prefix(
+                    let validity = b
+                        .check_batch_holocene(
                             self.config.as_ref(),
                             l1_origins,
                             parent,
@@ -185,6 +186,8 @@ where
                             return Err(PipelineError::NotEnoughData.temp());
                         }
                         BatchValidity::Undecided | BatchValidity::Future => {
+                            // Undecided: the span was already consumed and is skipped, not
+                            // retried.
                             return Err(PipelineError::NotEnoughData.temp());
                         }
                     }
@@ -198,8 +201,8 @@ where
             Ok(None) => Err(PipelineError::NotEnoughData.temp()),
             Err(e) => {
                 warn!(target: "batch_span", "Extracting singular batches from span batch failed: {}", e);
-                // If singular batch extraction fails, it should be handled the same as a
-                // dropped batch during span batch prefix checks.
+                // If singular batch extraction fails, handle it like a batch dropped during the
+                // Holocene span batch checks.
                 self.flush();
                 Err(PipelineError::NotEnoughData.temp())
             }
@@ -210,7 +213,7 @@ where
 #[async_trait]
 impl<P, BF> OriginAdvancer for BatchStream<P, BF>
 where
-    P: BatchStreamProvider + OriginAdvancer + OriginProvider + SignalReceiver + Send + Debug,
+    P: BatchStreamProvider + OriginAdvancer + OriginProvider + Stage + Send + Debug,
     BF: L2ChainProvider + Send + Debug,
 {
     async fn advance_origin(&mut self) -> PipelineResult<()> {
@@ -220,7 +223,7 @@ where
 
 impl<P, BF> OriginProvider for BatchStream<P, BF>
 where
-    P: BatchStreamProvider + OriginAdvancer + OriginProvider + SignalReceiver + Debug,
+    P: BatchStreamProvider + OriginAdvancer + OriginProvider + Stage + Debug,
     BF: L2ChainProvider + Debug,
 {
     fn origin(&self) -> Option<BlockInfo> {
@@ -229,13 +232,31 @@ where
 }
 
 #[async_trait]
-impl<P, BF> SignalReceiver for BatchStream<P, BF>
+impl<P, BF> Stage for BatchStream<P, BF>
 where
-    P: BatchStreamProvider + OriginAdvancer + OriginProvider + SignalReceiver + Debug + Send,
+    P: BatchStreamProvider + OriginAdvancer + OriginProvider + Stage + Debug + Send,
     BF: L2ChainProvider + Send + Debug,
 {
-    async fn signal(&mut self, signal: Signal) -> PipelineResult<()> {
-        self.prev.signal(signal).await?;
+    async fn reset(
+        &mut self,
+        l1_origin: BlockNumHash,
+        system_config: SystemConfig,
+    ) -> PipelineResult<()> {
+        self.prev.reset(l1_origin, system_config).await?;
+        self.buffer.clear();
+        self.span.take();
+        Ok(())
+    }
+
+    async fn activate(&mut self) -> PipelineResult<()> {
+        self.prev.activate().await?;
+        self.buffer.clear();
+        self.span.take();
+        Ok(())
+    }
+
+    async fn flush_channel(&mut self) -> PipelineResult<()> {
+        self.prev.flush_channel().await?;
         self.buffer.clear();
         self.span.take();
         Ok(())
@@ -245,9 +266,8 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{
-        test_utils::{CollectingLayer, TestBatchStreamProvider, TestL2ChainProvider, TraceStorage},
-        types::ResetSignal,
+    use crate::test_utils::{
+        CollectingLayer, TestBatchStreamProvider, TestL2ChainProvider, TraceStorage,
     };
     use alloc::vec;
     use alloy_consensus::{BlockBody, Header};
@@ -256,7 +276,7 @@ mod test {
     use kona_genesis::{ChainGenesis, HardForkConfig};
     use kona_protocol::{SingleBatch, SpanBatchElement};
     use op_alloy_consensus::OpBlock;
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing_subscriber::layer::SubscriberExt;
 
     #[tokio::test]
     async fn test_batch_stream_flush() {
@@ -286,7 +306,7 @@ mod test {
         stream.buffer.push_back(SingleBatch::default());
         stream.span = Some(SpanBatch::default());
         assert!(!stream.prev.reset);
-        stream.signal(ResetSignal::default().signal()).await.unwrap();
+        stream.reset(BlockNumHash::default(), SystemConfig::default()).await.unwrap();
         assert!(stream.prev.reset);
         assert!(stream.buffer.is_empty());
         assert!(stream.span.is_none());
@@ -303,7 +323,7 @@ mod test {
         stream.buffer.push_back(SingleBatch::default());
         stream.span = Some(SpanBatch::default());
         assert!(!stream.prev.flushed);
-        stream.signal(Signal::FlushChannel).await.unwrap();
+        stream.flush_channel().await.unwrap();
         assert!(stream.prev.flushed);
         assert!(stream.buffer.is_empty());
         assert!(stream.span.is_none());
@@ -313,7 +333,8 @@ mod test {
     async fn test_batch_stream_inactive() {
         let trace_store: TraceStorage = Default::default();
         let layer = CollectingLayer::new(trace_store.clone());
-        tracing_subscriber::Registry::default().with(layer).init();
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
 
         let data = vec![Ok(Batch::Single(SingleBatch::default()))];
         let config = Arc::new(RollupConfig {
@@ -415,7 +436,8 @@ mod test {
     async fn test_span_batch_extraction_error_flushes_stage() {
         let trace_store: TraceStorage = Default::default();
         let layer = CollectingLayer::new(trace_store.clone());
-        tracing_subscriber::Registry::default().with(layer).init();
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
 
         let parent_hash = b256!("1111111111111111111111111111111111111111000000000000000000000000");
         let l1_block_hash =
@@ -453,9 +475,27 @@ mod test {
             l1_origin: BlockNumHash { number: 9, ..Default::default() },
             ..Default::default()
         };
+        // A valid overlapped canonical block (L1 info deposit only, origin 9), so the overlap
+        // content checks pass and singular batch extraction is reached.
+        let l1_info = kona_protocol::L1BlockInfoBedrock::new(
+            9,
+            0,
+            0,
+            alloy_primitives::B256::ZERO,
+            0,
+            alloy_primitives::Address::ZERO,
+            alloy_primitives::U256::ZERO,
+            alloy_primitives::U256::ZERO,
+        );
+        let info_tx = op_alloy_consensus::OpTxEnvelope::Deposit(alloy_primitives::Sealed::new(
+            op_alloy_consensus::TxDeposit {
+                input: l1_info.encode_calldata(),
+                ..Default::default()
+            },
+        ));
         let op_block = OpBlock {
             header: Header { number: 41, ..Default::default() },
-            body: BlockBody { transactions: vec![], ommers: vec![], withdrawals: None },
+            body: BlockBody { transactions: vec![info_tx], ommers: vec![], withdrawals: None },
         };
 
         let span_batch = SpanBatch {
@@ -486,6 +526,125 @@ mod test {
         let logs = trace_store.get_by_level(tracing::Level::WARN);
         assert_eq!(logs.len(), 1);
         assert!(logs[0].contains("Extracting singular batches from span batch failed: Future batch L1 origin before safe head"));
+    }
+
+    #[tokio::test]
+    async fn test_overlap_mismatch_drops_span_and_flushes_unread_batches() {
+        let trace_store: TraceStorage = Default::default();
+        let layer = CollectingLayer::new(trace_store.clone());
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let parent_hash = b256!("1111111111111111111111111111111111111111000000000000000000000000");
+        let l1_block_hash =
+            b256!("3333333333333333333333333333333333333333000000000000000000000000");
+        let config = Arc::new(RollupConfig {
+            seq_window_size: 100,
+            block_time: 10,
+            hardforks: HardForkConfig {
+                delta_time: Some(0),
+                holocene_time: Some(0),
+                ..Default::default()
+            },
+            genesis: ChainGenesis {
+                l2: BlockNumHash { number: 40, hash: parent_hash },
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let l1_block =
+            BlockInfo { number: 10, timestamp: 5, hash: l1_block_hash, ..Default::default() };
+        let l1_blocks = vec![l1_block];
+        // A two-block overlap: blocks 41 and 42 are already safe.
+        let l2_safe_head = L2BlockInfo {
+            block_info: BlockInfo { number: 42, timestamp: 20, ..Default::default() },
+            l1_origin: l1_block.id(),
+            ..Default::default()
+        };
+        let l2_parent = L2BlockInfo {
+            block_info: BlockInfo {
+                number: 40,
+                hash: parent_hash,
+                timestamp: 0,
+                ..Default::default()
+            },
+            l1_origin: BlockNumHash { number: 9, ..Default::default() },
+            ..Default::default()
+        };
+        // The canonical overlapped blocks carry only their L1 info deposit (origin 9).
+        let l1_info = kona_protocol::L1BlockInfoBedrock::new(
+            9,
+            0,
+            0,
+            alloy_primitives::B256::ZERO,
+            0,
+            alloy_primitives::Address::ZERO,
+            alloy_primitives::U256::ZERO,
+            alloy_primitives::U256::ZERO,
+        );
+        let info_tx = op_alloy_consensus::OpTxEnvelope::Deposit(alloy_primitives::Sealed::new(
+            op_alloy_consensus::TxDeposit {
+                input: l1_info.encode_calldata(),
+                ..Default::default()
+            },
+        ));
+        let op_block_41 = OpBlock {
+            header: Header { number: 41, ..Default::default() },
+            body: BlockBody {
+                transactions: vec![info_tx.clone()],
+                ommers: vec![],
+                withdrawals: None,
+            },
+        };
+        let op_block_42 = OpBlock {
+            header: Header { number: 42, ..Default::default() },
+            body: BlockBody { transactions: vec![info_tx], ommers: vec![], withdrawals: None },
+        };
+
+        // The span's first overlapped element matches the safe chain; only the second
+        // diverges (it carries a transaction the canonical block does not), exercising the
+        // overlap comparison loop beyond its first iteration.
+        let span_batch = SpanBatch {
+            batches: vec![
+                SpanBatchElement { epoch_num: 9, timestamp: 10, ..Default::default() },
+                SpanBatchElement {
+                    epoch_num: 9,
+                    timestamp: 20,
+                    transactions: vec![alloy_primitives::Bytes::from_static(&[0x02, 0x01])],
+                },
+                SpanBatchElement { epoch_num: 10, timestamp: 30, ..Default::default() },
+            ],
+            parent_check: FixedBytes::<20>::from_slice(&parent_hash[..20]),
+            l1_origin_check: FixedBytes::<20>::from_slice(&l1_block_hash[..20]),
+            ..Default::default()
+        };
+
+        // An unread sentinel sits behind the conflicting span in the channel (batches are
+        // served back-to-front): it only surviving the drop would prove the flush was
+        // signaled but not performed.
+        let sentinel = Batch::Single(SingleBatch::default());
+        let mut prev =
+            TestBatchStreamProvider::new(vec![Ok(sentinel), Ok(Batch::Span(span_batch))]);
+        prev.origin = Some(l1_block);
+
+        let mut provider = TestL2ChainProvider::default();
+        provider.blocks.push(l2_parent);
+        provider.op_blocks.push(op_block_41);
+        provider.op_blocks.push(op_block_42);
+
+        let mut stream = BatchStream::new(prev, config, provider);
+        let err = stream.next_batch(l2_safe_head, &l1_blocks).await.unwrap_err();
+
+        assert_eq!(err, PipelineError::NotEnoughData.temp());
+        assert!(stream.span.is_none());
+        assert_eq!(stream.span_buffer_size(), 0);
+        // The flush must have discarded the unread sentinel along with the rest of the channel.
+        assert!(stream.prev.batches.is_empty());
+
+        let logs = trace_store.get_by_level(tracing::Level::WARN);
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].contains("overlapped block's tx count does not match"));
     }
 
     #[tokio::test]

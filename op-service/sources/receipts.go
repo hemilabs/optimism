@@ -3,7 +3,10 @@ package sources
 import (
 	"context"
 	"fmt"
+	"math/big"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -14,13 +17,13 @@ type ReceiptsProvider interface {
 	// FetchReceipts returns a block info and all of the receipts associated with transactions in the block.
 	// It verifies the receipt hash in the block header against the receipt hash of the fetched receipts
 	// to ensure that the execution engine did not fail to return any receipts.
-	FetchReceipts(ctx context.Context, blockInfo eth.BlockInfo, txHashes []common.Hash) (types.Receipts, error)
+	FetchReceipts(ctx context.Context, blockInfo eth.BlockInfo, txHashes []common.Hash) (optypes.Receipts, error)
 }
 
 // validateReceipts validates that the receipt contents are valid.
 // Warning: contractAddress is not verified, since it is a more expensive operation for data we do not use.
 // See go-ethereum/crypto.CreateAddress to verify contract deployment address data based on sender and tx nonce.
-func validateReceipts(block eth.BlockID, receiptHash common.Hash, txHashes []common.Hash, receipts []*types.Receipt) error {
+func validateReceipts(block eth.BlockID, receiptHash common.Hash, txHashes []common.Hash, receipts optypes.Receipts) error {
 	if len(receipts) != len(txHashes) {
 		return fmt.Errorf("got %d receipts but expected %d", len(receipts), len(txHashes))
 	}
@@ -43,7 +46,7 @@ func validateReceipts(block eth.BlockID, receiptHash common.Hash, txHashes []com
 		if r.BlockNumber == nil {
 			return fmt.Errorf("receipt %d has unexpected nil block number, expected %d", i, block.Number)
 		}
-		if r.BlockNumber.Uint64() != block.Number {
+		if !bigs.Equal(r.BlockNumber, new(big.Int).SetUint64(block.Number)) {
 			return fmt.Errorf("receipt %d has unexpected block number %d, expected %d", i, r.BlockNumber, block.Number)
 		}
 		if r.BlockHash != block.Hash {
@@ -82,8 +85,9 @@ func validateReceipts(block eth.BlockID, receiptHash common.Hash, txHashes []com
 
 	// Sanity-check: external L1-RPC sources are notorious for not returning all receipts,
 	// or returning them out-of-order. Verify the receipts against the expected receipt-hash.
+	// The optypes.Receipts derivation is deposit-receipt-aware (Canyon nonce+version hashing).
 	hasher := trie.NewStackTrie(nil)
-	computed := types.DeriveSha(types.Receipts(receipts), hasher)
+	computed := types.DeriveSha(receipts, hasher)
 	if receiptHash != computed {
 		return fmt.Errorf("failed to fetch list of receipts: expected receipt root %s but computed %s from retrieved receipts", receiptHash, computed)
 	}

@@ -2,6 +2,7 @@ package attributes
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"math/rand" // nosemgrep
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -172,7 +174,7 @@ func TestAttributesHandler(t *testing.T) {
 		l2 := &testutils.MockL2Client{}
 		emitter := &testutils.MockEmitter{}
 		engDeriver := &MockEngineController{}
-		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 		ah.AttachEmitter(emitter)
 
 		emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
@@ -197,7 +199,7 @@ func TestAttributesHandler(t *testing.T) {
 		l2 := &testutils.MockL2Client{}
 		emitter := &testutils.MockEmitter{}
 		engDeriver := &MockEngineController{}
-		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 		ah.AttachEmitter(emitter)
 
 		emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
@@ -224,7 +226,7 @@ func TestAttributesHandler(t *testing.T) {
 		l2 := &testutils.MockL2Client{}
 		emitter := &testutils.MockEmitter{}
 		engDeriver := &MockEngineController{}
-		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 		ah.AttachEmitter(emitter)
 
 		emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
@@ -252,7 +254,7 @@ func TestAttributesHandler(t *testing.T) {
 			l2 := &testutils.MockL2Client{}
 			emitter := &testutils.MockEmitter{}
 			engDeriver := &MockEngineController{}
-			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 			ah.AttachEmitter(emitter)
 
 			// attrA1Alt does not match block A1, so will cause force-reorg.
@@ -291,7 +293,7 @@ func TestAttributesHandler(t *testing.T) {
 				l2 := &testutils.MockL2Client{}
 				emitter := &testutils.MockEmitter{}
 				engDeriver := &MockEngineController{}
-				ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+				ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 				ah.AttachEmitter(emitter)
 
 				attr := &derive.AttributesWithParent{
@@ -309,6 +311,8 @@ func TestAttributesHandler(t *testing.T) {
 
 				// Call during consolidation.
 				l2.ExpectPayloadByNumber(refA1.Number, payloadA1, nil)
+				// Not denied, so consolidation may promote it.
+				engDeriver.On("IsDenied", uint64(payloadA1.ExecutionPayload.BlockNumber), payloadA1.ExecutionPayload.BlockHash).Return(false, nil).Once()
 
 				// AttributesHandler will call EngDeriver methods for updating pending safe and local safe
 				engDeriver.On("TryUpdatePendingSafe", ah.ctx, refA1, concluding, refB).Return()
@@ -339,6 +343,138 @@ func TestAttributesHandler(t *testing.T) {
 				fn(t, false)
 			})
 		})
+		t.Run("consolidation passes but block denied", func(t *testing.T) {
+			// Matching attributes but the block is denied: must force the build
+			// path, not promote.
+			logger := testlog.Logger(t, log.LevelInfo)
+			l2 := &testutils.MockL2Client{}
+			emitter := &testutils.MockEmitter{}
+			engDeriver := &MockEngineController{}
+			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
+			ah.AttachEmitter(emitter)
+
+			attr := &derive.AttributesWithParent{
+				Attributes:  attrA1.Attributes, // attributes match block A1
+				Parent:      attrA1.Parent,
+				Concluding:  true,
+				DerivedFrom: refB,
+			}
+			emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
+			engDeriver.On("RequestPendingSafeUpdate", context.Background()).Once()
+			ah.OnEvent(context.Background(), derive.DerivedAttributesEvent{Attributes: attr})
+			engDeriver.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+			require.NotNil(t, ah.attributes, "queued up derived attributes")
+
+			// Call during consolidation: attributes match, but the block is denied.
+			l2.ExpectPayloadByNumber(refA1.Number, payloadA1, nil)
+			engDeriver.On("IsDenied", uint64(payloadA1.ExecutionPayload.BlockNumber), payloadA1.ExecutionPayload.BlockHash).Return(true, nil).Once()
+			// Denied block forces a reorg via the build path rather than promotion.
+			emitter.ExpectOnce(engine.BuildStartEvent{Attributes: attr})
+			ah.OnEvent(context.Background(), engine.PendingSafeUpdateEvent{
+				PendingSafe: refA0,
+				Unsafe:      refA1,
+			})
+			engDeriver.AssertExpectations(t)
+			l2.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+			require.True(t, ah.sentAttributes, "attributes were sent to the build path")
+			require.NotNil(t, ah.attributes, "attributes stay queued until the replacement is processed")
+		})
+		t.Run("deny-list check error stalls without promoting", func(t *testing.T) {
+			// Fail closed: if the deny-list can't be checked we must neither promote
+			// nor reorg; stall and retry.
+			logger := testlog.Logger(t, log.LevelInfo)
+			l2 := &testutils.MockL2Client{}
+			emitter := &testutils.MockEmitter{}
+			engDeriver := &MockEngineController{}
+			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
+			ah.AttachEmitter(emitter)
+
+			attr := &derive.AttributesWithParent{
+				Attributes:  attrA1.Attributes, // attributes match block A1
+				Parent:      attrA1.Parent,
+				Concluding:  true,
+				DerivedFrom: refB,
+			}
+			emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
+			engDeriver.On("RequestPendingSafeUpdate", context.Background()).Once()
+			ah.OnEvent(context.Background(), derive.DerivedAttributesEvent{Attributes: attr})
+			engDeriver.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+			require.NotNil(t, ah.attributes, "queued up derived attributes")
+
+			// Attributes match, but the deny-list check fails.
+			l2.ExpectPayloadByNumber(refA1.Number, payloadA1, nil)
+			engDeriver.On("IsDenied", uint64(payloadA1.ExecutionPayload.BlockNumber), payloadA1.ExecutionPayload.BlockHash).Return(false, errors.New("authority unavailable")).Once()
+			// No TryUpdate* and no BuildStartEvent: just a temporary error to retry.
+			emitter.ExpectOnceType("EngineTemporaryErrorEvent")
+			ah.OnEvent(context.Background(), engine.PendingSafeUpdateEvent{
+				PendingSafe: refA0,
+				Unsafe:      refA1,
+			})
+			engDeriver.AssertExpectations(t)
+			l2.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+			require.NotNil(t, ah.attributes, "attributes stay queued so consolidation retries")
+		})
+		t.Run("not found during EL sync stalls without reset", func(t *testing.T) {
+			logger := testlog.Logger(t, log.LevelInfo)
+			l2 := &testutils.MockL2Client{}
+			emitter := &testutils.MockEmitter{}
+			engDeriver := &MockEngineController{}
+			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
+			ah.AttachEmitter(emitter)
+
+			emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
+			engDeriver.On("RequestPendingSafeUpdate", context.Background()).Once()
+			ah.OnEvent(context.Background(), derive.DerivedAttributesEvent{Attributes: attrA1})
+			engDeriver.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+			require.NotNil(t, ah.attributes, "queued up derived attributes")
+
+			// EL has accepted a future EL-sync target but hasn't filled in
+			// block refA1.Number yet, so the consolidate lookup returns NotFound.
+			l2.ExpectPayloadByNumber(refA1.Number, nil, ethereum.NotFound)
+			engDeriver.On("IsEngineInitialELSyncing").Return(true).Once()
+
+			emitter.ExpectOnceType("EngineTemporaryErrorEvent")
+			ah.OnEvent(context.Background(), engine.PendingSafeUpdateEvent{
+				PendingSafe: refA0,
+				Unsafe:      refA1,
+			})
+			engDeriver.AssertExpectations(t)
+			l2.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+			require.NotNil(t, ah.attributes,
+				"attributes stay queued so consolidation retries once EL sync fills in the block")
+		})
+		t.Run("not found without EL sync resets", func(t *testing.T) {
+			logger := testlog.Logger(t, log.LevelInfo)
+			l2 := &testutils.MockL2Client{}
+			emitter := &testutils.MockEmitter{}
+			engDeriver := &MockEngineController{}
+			ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
+			ah.AttachEmitter(emitter)
+
+			emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
+			engDeriver.On("RequestPendingSafeUpdate", context.Background()).Once()
+			ah.OnEvent(context.Background(), derive.DerivedAttributesEvent{Attributes: attrA1})
+			engDeriver.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+
+			l2.ExpectPayloadByNumber(refA1.Number, nil, ethereum.NotFound)
+			engDeriver.On("IsEngineInitialELSyncing").Return(false).Once()
+
+			emitter.ExpectOnceType("ResetEvent")
+			ah.OnEvent(context.Background(), engine.PendingSafeUpdateEvent{
+				PendingSafe: refA0,
+				Unsafe:      refA1,
+			})
+			engDeriver.AssertExpectations(t)
+			l2.AssertExpectations(t)
+			emitter.AssertExpectations(t)
+		})
 	})
 
 	t.Run("pending equals unsafe", func(t *testing.T) {
@@ -347,7 +483,7 @@ func TestAttributesHandler(t *testing.T) {
 		l2 := &testutils.MockL2Client{}
 		emitter := &testutils.MockEmitter{}
 		engDeriver := &MockEngineController{}
-		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 		ah.AttachEmitter(emitter)
 
 		emitter.ExpectOnce(derive.ConfirmReceivedAttributesEvent{})
@@ -386,7 +522,7 @@ func TestAttributesHandler(t *testing.T) {
 		l2 := &testutils.MockL2Client{}
 		emitter := &testutils.MockEmitter{}
 		engDeriver := &MockEngineController{}
-		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 		ah.AttachEmitter(emitter)
 
 		emitter.ExpectOnceType("ResetEvent")
@@ -403,7 +539,7 @@ func TestAttributesHandler(t *testing.T) {
 		l2 := &testutils.MockL2Client{}
 		emitter := &testutils.MockEmitter{}
 		engDeriver := &MockEngineController{}
-		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver)
+		ah := NewAttributesHandler(logger, cfg, context.Background(), l2, engDeriver, false)
 		ah.AttachEmitter(emitter)
 
 		// If there are no attributes, we expect the pipeline to be requested to generate attributes.

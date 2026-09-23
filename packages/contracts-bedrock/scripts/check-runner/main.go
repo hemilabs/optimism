@@ -10,7 +10,7 @@
 //   - Automatic artifact preservation and restoration
 //   - Graceful shutdown on Ctrl+C (restores artifacts before exit)
 //   - Dependency-based ordering within phases
-//   - Pretty terminal output with spinners and colors
+//   - Line-oriented terminal output with colors
 //
 // Usage:
 //
@@ -41,8 +41,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chelnak/ysmrr"
-	"github.com/chelnak/ysmrr/pkg/colors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -221,7 +219,65 @@ type CheckResult struct {
 // checkState tracks the execution state of a check during parallel runs.
 type checkState struct {
 	status  string // "pending", "queued", "running", "pass", "fail", "skipped"
-	spinner *ysmrr.Spinner
+	spinner *statusLine
+}
+
+type statusManager struct {
+	mu sync.Mutex
+}
+
+type statusLine struct {
+	manager  *statusManager
+	message  string
+	complete string
+	mu       sync.Mutex
+}
+
+func newStatusManager() *statusManager {
+	return &statusManager{}
+}
+
+func (m *statusManager) AddSpinner(message string) *statusLine {
+	return &statusLine{manager: m, message: message}
+}
+
+func (m *statusManager) Start() {}
+
+func (m *statusManager) Stop() {}
+
+func (s *statusLine) UpdateMessage(message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.message = message
+}
+
+func (s *statusLine) CompleteCharacter(complete string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.complete = complete
+}
+
+func (s *statusLine) Complete() {
+	s.print(fmt.Sprintf("%s✓%s", Green, Reset))
+}
+
+func (s *statusLine) Error() {
+	s.print(fmt.Sprintf("%s✗%s", Red, Reset))
+}
+
+func (s *statusLine) print(defaultComplete string) {
+	s.mu.Lock()
+	message := s.message
+	complete := s.complete
+	s.mu.Unlock()
+
+	if complete == "" {
+		complete = defaultComplete
+	}
+
+	s.manager.mu.Lock()
+	defer s.manager.mu.Unlock()
+	fmt.Printf("%s %s\n", complete, message)
 }
 
 // Runner orchestrates the execution of all checks.
@@ -721,19 +777,23 @@ func (r *Runner) Run(selectedChecks map[string]bool) bool {
 }
 
 // runRetryClean re-runs failed checks that have retry-clean enabled after a clean build.
+// If a retry succeeds, also runs any dependent checks that were skipped.
 func (r *Runner) runRetryClean() {
 	// Group retry checks by their phase's build command
 	checksByBuild := make(map[string][]string)
+	phaseByBuild := make(map[string]*Phase)
 	for _, checkName := range r.retryCleanChecks {
 		check := r.getCheck(checkName)
 		if check == nil {
 			continue
 		}
 		// Find the phase this check belongs to
-		for _, phase := range r.config.Phases {
+		for i := range r.config.Phases {
+			phase := &r.config.Phases[i]
 			for _, c := range phase.Checks {
 				if c.Name == checkName {
 					checksByBuild[phase.Build] = append(checksByBuild[phase.Build], checkName)
+					phaseByBuild[phase.Build] = phase
 					break
 				}
 			}
@@ -771,21 +831,85 @@ func (r *Runner) runRetryClean() {
 			}
 		}
 
-		// Re-run the failed checks
-		for _, checkName := range checkNames {
-			if r.interrupted.Load() {
-				return
+		// Re-run the failed checks and their skipped dependents
+		phase := phaseByBuild[buildCmd]
+		r.runRetryChecksWithDependents(checkNames, phase)
+	}
+}
+
+// runRetryChecksWithDependents runs retry checks and any dependents that were skipped.
+func (r *Runner) runRetryChecksWithDependents(checkNames []string, phase *Phase) {
+	// Track which checks have passed during retry
+	retryPassed := make(map[string]bool)
+
+	// Run the initially failed checks
+	for _, checkName := range checkNames {
+		if r.interrupted.Load() {
+			return
+		}
+		if r.runRetryCheck(checkName) {
+			retryPassed[checkName] = true
+		}
+	}
+
+	// Now run any skipped dependents whose dependencies have now passed
+	if phase == nil {
+		return
+	}
+
+	// Keep running dependents until no more can be unblocked.
+	// Track processed checks to detect circular dependencies or unexpected loops.
+	processed := make(map[string]bool)
+	maxIterations := len(phase.Checks) + 1 // Safety limit
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		if r.interrupted.Load() {
+			return
+		}
+
+		unblockedAny := false
+		for _, check := range phase.Checks {
+			// Skip if already processed in this retry phase
+			if processed[check.Name] {
+				continue
 			}
-			r.runRetryCheck(checkName)
+
+			state := r.states[check.Name]
+			if state == nil || state.status != "skipped" {
+				continue
+			}
+
+			// Check if all dependencies have now passed
+			allDepsPassed := true
+			for _, dep := range check.Depends {
+				depState := r.states[dep]
+				if depState == nil {
+					continue
+				}
+				if depState.status != "pass" {
+					allDepsPassed = false
+					break
+				}
+			}
+
+			if allDepsPassed && len(check.Depends) > 0 {
+				// This check was skipped but its deps now pass - run it
+				processed[check.Name] = true
+				if r.runRetryCheck(check.Name) {
+					retryPassed[check.Name] = true
+				}
+				unblockedAny = true
+			}
+		}
+
+		if !unblockedAny {
+			break
 		}
 	}
 }
 
 // doBuildClean runs a build without using cache (for retry-clean).
 func (r *Runner) doBuildClean(phaseName, buildCmd string) error {
-	sm := ysmrr.NewSpinnerManager(
-		ysmrr.WithSpinnerColor(colors.FgHiBlue),
-	)
+	sm := newStatusManager()
 	spinner := sm.AddSpinner(fmt.Sprintf("Clean building (%s)", buildCmd))
 	sm.Start()
 
@@ -824,16 +948,23 @@ func (r *Runner) doBuildClean(phaseName, buildCmd string) error {
 }
 
 // runRetryCheck re-runs a single check and updates the results.
-func (r *Runner) runRetryCheck(name string) {
+// Returns true if the retry succeeded.
+func (r *Runner) runRetryCheck(name string) bool {
 	check := r.getCheck(name)
 	if check == nil {
-		return
+		return false
 	}
 
-	sm := ysmrr.NewSpinnerManager(
-		ysmrr.WithSpinnerColor(colors.FgHiBlue),
-	)
-	spinner := sm.AddSpinner(fmt.Sprintf("%s (retry)", name))
+	// Check if this was a skipped check (not a retry-clean check)
+	state := r.states[name]
+	wasSkipped := state != nil && state.status == "skipped"
+
+	sm := newStatusManager()
+	label := "(retry)"
+	if wasSkipped {
+		label = "(unblocked)"
+	}
+	spinner := sm.AddSpinner(fmt.Sprintf("%s %s", name, label))
 	sm.Start()
 
 	startTime := time.Now()
@@ -856,43 +987,64 @@ func (r *Runner) runRetryCheck(name string) {
 
 	if err == nil {
 		// Retry succeeded - update results
-		spinner.UpdateMessage(fmt.Sprintf("%s (retry) %s", name, timeStr))
+		spinner.UpdateMessage(fmt.Sprintf("%s %s %s", name, label, timeStr))
 		spinner.Complete()
 		sm.Stop()
 
-		// Update totals: was failed, now passed
-		r.totalFailed--
-		r.totalPassed++
+		if wasSkipped {
+			// Was skipped, now passed
+			r.totalSkipped--
+			r.totalPassed++
+		} else {
+			// Was failed, now passed
+			r.totalFailed--
+			r.totalPassed++
 
-		// Remove from failed checks list
-		newFailed := []string{}
-		for _, n := range r.failedChecks {
-			if n != name {
-				newFailed = append(newFailed, n)
+			// Remove from failed checks list
+			newFailed := []string{}
+			for _, n := range r.failedChecks {
+				if n != name {
+					newFailed = append(newFailed, n)
+				}
 			}
+			r.failedChecks = newFailed
 		}
-		r.failedChecks = newFailed
 
-		// Update result
+		// Update state and result
+		if state != nil {
+			state.status = "pass"
+		}
 		r.results[name] = &CheckResult{
 			Name:     name,
 			Success:  true,
 			Output:   output,
 			Duration: duration,
 		}
+		return true
 	} else {
 		// Retry also failed
-		spinner.UpdateMessage(fmt.Sprintf("%s (retry) %s", name, timeStr))
+		spinner.UpdateMessage(fmt.Sprintf("%s %s %s", name, label, timeStr))
 		spinner.Error()
 		sm.Stop()
 
-		// Update result with new output
+		if wasSkipped {
+			// Was skipped, now failed
+			r.totalSkipped--
+			r.totalFailed++
+			r.failedChecks = append(r.failedChecks, name)
+		}
+
+		// Update state and result
+		if state != nil {
+			state.status = "fail"
+		}
 		r.results[name] = &CheckResult{
 			Name:     name,
 			Success:  false,
 			Output:   output,
 			Duration: duration,
 		}
+		return false
 	}
 }
 
@@ -1026,9 +1178,7 @@ func (r *Runner) doBuildWithCache(phaseName, buildCmd string) error {
 	}
 
 	// Run the build with a spinner
-	sm := ysmrr.NewSpinnerManager(
-		ysmrr.WithSpinnerColor(colors.FgHiBlue),
-	)
+	sm := newStatusManager()
 	spinner := sm.AddSpinner(fmt.Sprintf("Building (%s)", buildCmd))
 	sm.Start()
 
@@ -1191,11 +1341,9 @@ func (r *Runner) runChecksSequential(checks []Check) {
 // runChecksParallel runs checks concurrently with dependency ordering.
 // Uses a worker pool and respects check dependencies.
 func (r *Runner) runChecksParallel(checks []Check) {
-	sm := ysmrr.NewSpinnerManager(
-		ysmrr.WithSpinnerColor(colors.FgHiBlue),
-	)
+	sm := newStatusManager()
 
-	// Initialize state for each check with a spinner
+	// Initialize state for each check with a status line
 	checkNames := make([]string, len(checks))
 	for i, c := range checks {
 		checkNames[i] = c.Name
@@ -1356,7 +1504,7 @@ func (r *Runner) depsFailed(name string, checkNames []string) bool {
 	return false
 }
 
-// runCheckParallel executes a single check and updates its spinner.
+// runCheckParallel executes a single check and updates its status line.
 func (r *Runner) runCheckParallel(name string) {
 	check := r.getCheck(name)
 	if check == nil {
@@ -1401,8 +1549,7 @@ func (r *Runner) runCheckParallel(name string) {
 	}
 	r.mu.Unlock()
 
-	// Update spinner with result
-	// Note: spinner.Complete() and spinner.Error() add ✓/✗ prefix automatically
+	// Update status line with result.
 	timeStr := fmt.Sprintf("%s%.1fs%s", Dim, duration.Seconds(), Reset)
 	if result.Success {
 		spinner.UpdateMessage(fmt.Sprintf("%s %s", name, timeStr))

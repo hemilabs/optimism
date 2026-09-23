@@ -17,7 +17,7 @@ reth-cli-commands.workspace = true
 reth-consensus.workspace = true
 reth-rpc-server-types.workspace = true
 reth-primitives-traits.workspace = true
-reth-db = { workspace = true, features = ["mdbx", "op"] }
+reth-db = { workspace = true, features = ["mdbx"] }
 reth-db-api.workspace = true
 reth-db-common.workspace = true
 reth-downloaders.workspace = true
@@ -32,6 +32,7 @@ reth-fs-util.workspace = true
 
 # so jemalloc metrics can be included
 reth-node-metrics.workspace = true
+metrics.workspace = true
 
 ## optimism
 reth-optimism-primitives.workspace = true
@@ -43,12 +44,14 @@ reth-chainspec.workspace = true
 reth-node-events.workspace = true
 reth-optimism-evm.workspace = true
 reth-cli-runner.workspace = true
-reth-node-builder = { workspace = true, features = ["op"] }
+reth-tasks.workspace = true
+reth-node-builder.workspace = true
 reth-tracing.workspace = true
 
 # eth
 alloy-eips.workspace = true
 alloy-consensus.workspace = true
+alloy-genesis.workspace = true
 alloy-primitives.workspace = true
 alloy-rlp.workspace = true
 
@@ -56,6 +59,7 @@ alloy-rlp.workspace = true
 futures-util.workspace = true
 derive_more.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt-multi-thread"] }
@@ -68,8 +72,10 @@ proptest = { workspace = true, optional = true }
 op-alloy-consensus.workspace = true
 
 [dev-dependencies]
+dirs-next.workspace = true
 tempfile.workspace = true
 reth-stages = { workspace = true, features = ["test-utils"] }
+metrics-exporter-prometheus.workspace = true
 
 [build-dependencies]
 reth-optimism-chainspec = { workspace = true, features = ["std", "superchain-configs"] }
@@ -93,10 +99,10 @@ keccak-cache-global = [
     "reth-optimism-node/keccak-cache-global",
 ]
 
-# Jemalloc feature for vergen to generate correct env vars
 jemalloc = [
     "reth-node-core/jemalloc",
     "reth-node-metrics/jemalloc",
+    "reth-provider/jemalloc",
 ]
 jemalloc-prof = [
     "jemalloc",
@@ -109,7 +115,7 @@ jemalloc-symbols = [
 
 tracy = ["reth-tracing/tracy", "reth-node-core/tracy"]
 
-dev = ["dep:proptest", "reth-cli-commands/arbitrary"]
+dev = ["dep:proptest", "reth-cli-commands/arbitrary", "op-alloy-consensus/arbitrary"]
 
 serde = [
     "alloy-consensus/serde",
@@ -121,5 +127,3 @@ serde = [
     "reth-primitives-traits/serde",
     "reth-optimism-chainspec/serde",
 ]
-
-edge = ["reth-cli-commands/edge", "reth-node-core/edge"]

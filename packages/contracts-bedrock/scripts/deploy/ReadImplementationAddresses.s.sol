@@ -4,7 +4,8 @@ pragma solidity 0.8.15;
 import { IProxy } from "interfaces/universal/IProxy.sol";
 import { Script } from "forge-std/Script.sol";
 import { IMIPS64 } from "interfaces/cannon/IMIPS64.sol";
-import { IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
+import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
+import { IOPContractsManagerContainer } from "interfaces/L1/opcm/IOPContractsManagerContainer.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IStaticL1ChugSplashProxy } from "interfaces/legacy/IL1ChugSplashProxy.sol";
 
@@ -24,7 +25,6 @@ contract ReadImplementationAddresses is Script {
     struct Output {
         address delayedWETH;
         address optimismPortal;
-        address optimismPortalInterop;
         address ethLockbox;
         address systemConfig;
         address anchorStateRegistry;
@@ -39,11 +39,10 @@ contract ReadImplementationAddresses is Script {
         address permissionedDisputeGameV2;
         address superFaultDisputeGame;
         address superPermissionedDisputeGame;
-        address opcmDeployer;
-        address opcmUpgrader;
-        address opcmGameTypeAdder;
+        address zkDisputeGame;
         address opcmStandardValidator;
         address opcmInteropMigrator;
+        address sp1PlonkAdapter;
     }
 
     function run(Input memory _input) public returns (Output memory output_) {
@@ -59,24 +58,23 @@ contract ReadImplementationAddresses is Script {
         vm.prank(address(0));
         output_.l1StandardBridge = IStaticL1ChugSplashProxy(_input.l1StandardBridgeProxy).getImplementation();
 
-        // Get implementations from OPCM
-        IOPContractsManager opcm = IOPContractsManager(_input.opcm);
-        output_.opcmGameTypeAdder = address(opcm.opcmGameTypeAdder());
-        output_.opcmDeployer = address(opcm.opcmDeployer());
-        output_.opcmUpgrader = address(opcm.opcmUpgrader());
-        output_.opcmInteropMigrator = address(opcm.opcmInteropMigrator());
-        output_.opcmStandardValidator = address(opcm.opcmStandardValidator());
+        require(address(_input.opcm).code.length > 0, "ReadImplementationAddresses: OPCM address has no code");
+        IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
 
-        IOPContractsManager.Implementations memory impls = opcm.implementations();
+        output_.opcmInteropMigrator = address(opcmV2.opcmMigrator());
+        output_.opcmStandardValidator = address(opcmV2.opcmStandardValidator());
+
+        IOPContractsManagerContainer.Implementations memory impls = opcmV2.implementations();
         output_.mipsSingleton = impls.mipsImpl;
         output_.delayedWETH = impls.delayedWETHImpl;
         output_.ethLockbox = impls.ethLockboxImpl;
         output_.anchorStateRegistry = impls.anchorStateRegistryImpl;
-        output_.optimismPortalInterop = impls.optimismPortalInteropImpl;
-        output_.faultDisputeGameV2 = impls.faultDisputeGameV2Impl;
-        output_.permissionedDisputeGameV2 = impls.permissionedDisputeGameV2Impl;
+        output_.faultDisputeGame = impls.faultDisputeGameImpl;
+        output_.permissionedDisputeGame = impls.permissionedDisputeGameImpl;
         output_.superFaultDisputeGame = impls.superFaultDisputeGameImpl;
         output_.superPermissionedDisputeGame = impls.superPermissionedDisputeGameImpl;
+        output_.zkDisputeGame = impls.zkDisputeGameImpl;
+        output_.sp1PlonkAdapter = impls.sp1PlonkAdapterImpl;
 
         // Get L1CrossDomainMessenger from AddressManager
         IAddressManager am = IAddressManager(_input.addressManager);

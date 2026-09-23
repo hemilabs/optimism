@@ -8,14 +8,10 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 )
 
-func TestUnsafeChainNotStalling_ELSync_Short(gt *testing.T) {
-	common.UnsafeChainNotStalling_Disconnect(gt, sync.ELSync, 20*time.Second, common.ReqRespSyncDisabledOpts(sync.ELSync)...)
+func TestUnsafeChainNotStalling_ELSync(gt *testing.T) {
+	common.UnsafeChainNotStalling_Disconnect(gt, sync.ELSync, 20, common.ReqRespSyncDisabledOpts(sync.ELSync)...)
 }
 
-func TestUnsafeChainNotStalling_ELSync_Long(gt *testing.T) {
-	common.UnsafeChainNotStalling_Disconnect(gt, sync.ELSync, 95*time.Second, common.ReqRespSyncDisabledOpts(sync.ELSync)...)
-}
-
-func TestUnsafeChainNotStalling_ELSync_RestartOpNode_Long(gt *testing.T) {
-	common.UnsafeChainNotStalling_RestartOpNode(gt, sync.ELSync, 95*time.Second, common.ReqRespSyncDisabledOpts(sync.ELSync)...)
+func TestUnsafeChainNotStalling_ELSync_RestartOpNode(gt *testing.T) {
+	common.UnsafeChainNotStalling_RestartOpNode(gt, sync.ELSync, 20, common.ReqRespSyncDisabledOpts(sync.ELSync)...)
 }

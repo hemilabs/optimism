@@ -2,13 +2,16 @@ package standard
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
+	"sync"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-core/forks"
+	opparams "github.com/ethereum-optimism/optimism/op-core/params"
+	"github.com/ethereum-optimism/optimism/op-core/superchain"
 
 	"github.com/ethereum-optimism/superchain-registry/validation"
-
-	"github.com/ethereum/go-ethereum/superchain"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -24,16 +27,24 @@ const (
 	ProofMaturityDelaySeconds       uint64 = 604800
 	DisputeGameFinalityDelaySeconds uint64 = 302400
 	MIPSVersion                     uint64 = 8
-	DisputeGameType                 uint32 = 1 // PERMISSIONED game type
-	DisputeMaxGameDepth             uint64 = 73
-	DisputeSplitDepth               uint64 = 30
-	DisputeClockExtension           uint64 = 10800
-	DisputeMaxClockDuration         uint64 = 302400
-	Eip1559DenominatorCanyon        uint64 = 250
-	Eip1559Denominator              uint64 = 50
-	Eip1559Elasticity               uint64 = 6
+	// DisputeGameType is the SUPER_PERMISSIONED game type. DeployOPChain requires the initial game
+	// type to match the OPCM's family, and SUPER_ROOT_GAMES_MIGRATION is enabled by default, so the
+	// permissioned selector for a standard deploy is the super root one.
+	// TODO(#21662): revisit with the broader SuperRootGamesMigration cleanup.
+	DisputeGameType          uint32 = 5
+	DisputeMaxGameDepth      uint64 = 73
+	DisputeSplitDepth        uint64 = 30
+	DisputeClockExtension    uint64 = 10800
+	DisputeMaxClockDuration  uint64 = 302400
+	Eip1559DenominatorCanyon uint64 = 250
+	Eip1559Denominator       uint64 = 50
+	Eip1559Elasticity        uint64 = 6
 
-	UseRevenueShare = true
+	// DefaultGenesisTimeOffsetSeconds is the default offset added to the L1 anchor block's
+	// timestamp to produce the committed L2 genesis timestamp.
+	DefaultGenesisTimeOffsetSeconds uint64 = 10800 // 3 hours
+	// MinGenesisTimeOffsetSeconds is the smallest offset prepare accepts.
+	MinGenesisTimeOffsetSeconds uint64 = 3600 // 1 hour
 
 	ContractsV160Tag        = "op-contracts/v1.6.0"
 	ContractsV180Tag        = "op-contracts/v1.8.0-rc.4"
@@ -43,16 +54,20 @@ const (
 	ContractsV400Tag        = "op-contracts/v4.0.0-rc.7"
 	ContractsV410Tag        = "op-contracts/v4.1.0"
 	ContractsV500Tag        = "op-contracts/v5.0.0"
-	CurrentTag              = ContractsV500Tag
+	ContractsV600Tag        = "op-contracts/v6.0.0-rc.2"
+	ContractsV700Tag        = "op-contracts/v7.0.0-rc.4"
+	CurrentTag              = ContractsV700Tag
 )
-
-var L1FeesDepositor = common.HexToAddress("0xed9B99a703BaD32AC96FDdc313c0652e379251Fd")
 
 var DisputeAbsolutePrestate = common.HexToHash("0x038512e02c4c3f7bdaec27d00edf55b7155e0905301e1a88083e4e0a6764d54c")
 
 var VaultMinWithdrawalAmount = mustHexBigFromHex("0x8ac7230489e80000")
 
 var GovernanceTokenOwner = common.HexToAddress("0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAdDEad")
+
+// PlaceholderAddress is a non-zero sentinel address. It's used  as the default deployer when no private key is provided.
+// The same-sender check keys off this value to skip when no real deployer is set.
+var PlaceholderAddress = common.Address{0x01}
 
 func L1VersionsFor(chainID uint64) (validation.Versions, error) {
 	switch chainID {
@@ -82,6 +97,31 @@ func ChallengerAddressFor(chainID uint64) (common.Address, error) {
 		return common.Address(validation.StandardConfigRolesMainnet.Challenger), nil
 	case 11155111:
 		return common.Address(validation.StandardConfigRolesSepolia.Challenger), nil
+	default:
+		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
+	}
+}
+
+const (
+	// Source: succinctlabs/sp1-contracts@2ac5ecbbe473421a963d67e55f182e9a36576f7c,
+	// contracts/deployments/1.json, V6_1_0_SP1_VERIFIER_PLONK.
+	mainnetSP1VerifierV610 = "0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A"
+	// Succinct deploys the same verifier bytecode and address deterministically on both networks.
+	// Source: succinctlabs/sp1-contracts@2ac5ecbbe473421a963d67e55f182e9a36576f7c,
+	// contracts/deployments/11155111.json, V6_1_0_SP1_VERIFIER_PLONK.
+	sepoliaSP1VerifierV610 = "0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A"
+)
+
+// SP1VerifierFor returns the raw SP1 verifier approved for the current OPCM release on the given L1
+// chain ID. Both `bootstrap implementations` and `apply` default to it when ZK dispute games are
+// enabled and the operator did not pin a verifier explicitly.
+// DO NOT MODIFY THIS METHOD WITHOUT CLEARING IT WITH THE EVM SAFETY TEAM.
+func SP1VerifierFor(chainID uint64) (common.Address, error) {
+	switch chainID {
+	case 1:
+		return common.HexToAddress(mainnetSP1VerifierV610), nil
+	case 11155111:
+		return common.HexToAddress(sepoliaSP1VerifierV610), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
@@ -154,23 +194,53 @@ func L2ProxyAdminOwner(chainID uint64) (common.Address, error) {
 	}
 }
 
-func ProtocolVersionsOwner(chainID uint64) (common.Address, error) {
-	switch chainID {
-	case 1:
-		return common.Address(validation.StandardConfigRolesMainnet.ProtocolVersionsOwner), nil
-	case 11155111:
-		return common.Address(validation.StandardConfigRolesSepolia.ProtocolVersionsOwner), nil
-	default:
-		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
-	}
-}
-
 // DefaultHardforkSchedule is used to determine which hardforks should be activated by default.
+// It activates, at genesis, the most recent fork that has an activation timestamp scheduled on
+// OP Mainnet.
 func DefaultHardforkSchedule() *genesis.UpgradeScheduleDeployConfig {
 	sched := &genesis.UpgradeScheduleDeployConfig{}
-	sched.ActivateForkAtGenesis(forks.Jovian)
+	sched.ActivateForkAtGenesis(defaultHardfork())
 
 	return sched
+}
+
+var defaultHardfork = sync.OnceValue(func() forks.Name {
+	chain, err := superchain.GetChain(opparams.OPMainnetChainID)
+	if err != nil {
+		panic(fmt.Errorf("get op mainnet chain: %w", err))
+	}
+	chainConfig, err := chain.Config()
+	if err != nil {
+		panic(fmt.Errorf("load op mainnet chain config: %w", err))
+	}
+	return latestScheduledMainlineFork(chainConfig.Hardforks)
+})
+
+func latestScheduledMainlineFork(config superchain.HardforkConfig) forks.Name {
+	configValue := reflect.ValueOf(config)
+	mainlineForks := forks.From(forks.Canyon)
+	for i := len(mainlineForks) - 1; i >= 0; i-- {
+		fork := mainlineForks[i]
+		// HardforkConfig fields follow the <ForkName>Time convention. Looking them up
+		// from forks.All keeps this selection current when a new mainline fork is added.
+		field := configValue.FieldByNameFunc(func(name string) bool {
+			return strings.EqualFold(strings.TrimSuffix(name, "Time"), string(fork))
+		})
+		if !field.IsValid() {
+			panic(fmt.Sprintf("mainline fork %q is missing from superchain.HardforkConfig", fork))
+		}
+		activationTime, ok := field.Interface().(*uint64)
+		if !ok {
+			panic(fmt.Sprintf("superchain.HardforkConfig field for %q must be *uint64", fork))
+		}
+		if activationTime != nil {
+			return fork
+		}
+	}
+
+	// Regolith is active at genesis for every registry-backed rollup config, but its
+	// activation is implicit and is therefore not represented in HardforkConfig.
+	return forks.Regolith
 }
 
 func mustHexBigFromHex(hex string) *hexutil.Big {

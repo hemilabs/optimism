@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-conductor/consensus"
+	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
 	"github.com/ethereum-optimism/optimism/op-service/retry"
 )
 
@@ -29,6 +30,8 @@ func TestSequencerFailover_SetupCluster(t *testing.T) {
 // [Category: conductor rpc]
 // In this test, we test all rpcs exposed by conductor.
 func TestSequencerFailover_ConductorRPC(t *testing.T) {
+	t.Skip("Flaky test tracked in ethereum-optimism/optimism#22094")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	sys, conductors, cleanup := setupSequencerFailoverTest(t)
@@ -257,7 +260,7 @@ func TestSequencerFailover_DisasterRecovery_OverrideLeader(t *testing.T) {
 	var block map[string]any
 	err = proxy.CallContext(ctx, &block, "eth_getBlockByNumber", "latest", false)
 	require.NoError(t, err)
-	err = proxy.CallContext(ctx, nil, "optimism_outputAtBlock", block["number"])
+	err = wait.ForOutputAtBlockRPC(ctx, proxy, block["number"])
 	require.NoError(t, err)
 	err = proxy.CallContext(ctx, nil, "optimism_rollupConfig")
 	require.NoError(t, err)

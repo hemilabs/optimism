@@ -5,12 +5,14 @@ import (
 	"errors"
 	"math/big"
 	"regexp"
+	"sort"
 	"testing"
 	"time"
 
 	opnodecfg "github.com/ethereum-optimism/optimism/op-node/config"
 	opmetrics "github.com/ethereum-optimism/optimism/op-node/metrics"
 	rollupNode "github.com/ethereum-optimism/optimism/op-node/node"
+	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	gethlog "github.com/ethereum/go-ethereum/log"
@@ -64,6 +66,113 @@ func (m *mockInnerNode) SafeL2Timestamp() (uint64, bool) {
 func (m *mockInnerNode) SafeDB() rollupNode.SafeDBReader { return m.db }
 
 func (m *mockInnerNode) SyncStatus() *eth.SyncStatus { return &eth.SyncStatus{} }
+
+// mockSafeDBReader is a mock implementation of SafeDBReader for testing L1AtSafeHead
+type mockSafeDBReader struct {
+	// entries maps L1 block number to (L1 BlockID, L2 BlockID)
+	entries map[uint64]struct {
+		l1 eth.BlockID
+		l2 eth.BlockID
+	}
+}
+
+func newMockSafeDBReader() *mockSafeDBReader {
+	return &mockSafeDBReader{
+		entries: make(map[uint64]struct {
+			l1 eth.BlockID
+			l2 eth.BlockID
+		}),
+	}
+}
+
+func (m *mockSafeDBReader) addEntry(l1Num uint64, l1Hash, l2Hash [32]byte, l2Num uint64) {
+	m.entries[l1Num] = struct {
+		l1 eth.BlockID
+		l2 eth.BlockID
+	}{
+		l1: eth.BlockID{Number: l1Num, Hash: l1Hash},
+		l2: eth.BlockID{Number: l2Num, Hash: l2Hash},
+	}
+}
+
+func (m *mockSafeDBReader) SafeHeadAtL1(ctx context.Context, l1BlockNum uint64) (eth.BlockID, eth.BlockID, error) {
+	// Find the entry at or before l1BlockNum
+	var best uint64
+	found := false
+	for num := range m.entries {
+		if num <= l1BlockNum && (!found || num > best) {
+			best = num
+			found = true
+		}
+	}
+	if !found {
+		return eth.BlockID{}, eth.BlockID{}, safedb.ErrNotFound
+	}
+	entry := m.entries[best]
+	return entry.l1, entry.l2, nil
+}
+
+func (m *mockSafeDBReader) L1AtSafeHead(ctx context.Context, targetL2Num uint64) (eth.BlockID, eth.BlockID, error) {
+	if len(m.entries) == 0 {
+		return eth.BlockID{}, eth.BlockID{}, safedb.ErrL1AtSafeHeadNotFound
+	}
+	type rec struct {
+		l1Num uint64
+		l1    eth.BlockID
+		l2    eth.BlockID
+	}
+	var sorted []rec
+	for num, e := range m.entries {
+		sorted = append(sorted, rec{l1Num: num, l1: e.l1, l2: e.l2})
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].l1Num < sorted[j].l1Num })
+	first := sorted[0]
+	last := sorted[len(sorted)-1]
+	if targetL2Num > last.l2.Number {
+		return eth.BlockID{}, eth.BlockID{}, safedb.ErrL1AtSafeHeadNotFound
+	}
+	if targetL2Num < first.l2.Number {
+		return eth.BlockID{}, eth.BlockID{}, safedb.ErrL1AtSafeHeadUnavailable
+	}
+	for _, r := range sorted {
+		if r.l2.Number >= targetL2Num {
+			return r.l1, r.l2, nil
+		}
+	}
+	return eth.BlockID{}, eth.BlockID{}, safedb.ErrL1AtSafeHeadNotFound
+}
+
+func (m *mockSafeDBReader) FirstEntry(ctx context.Context) (eth.BlockID, eth.BlockID, error) {
+	if len(m.entries) == 0 {
+		return eth.BlockID{}, eth.BlockID{}, safedb.ErrNotFound
+	}
+	var lowest uint64
+	first := true
+	for num := range m.entries {
+		if first || num < lowest {
+			lowest = num
+			first = false
+		}
+	}
+	entry := m.entries[lowest]
+	return entry.l1, entry.l2, nil
+}
+
+func (m *mockSafeDBReader) LastEntry(ctx context.Context) (eth.BlockID, eth.BlockID, error) {
+	if len(m.entries) == 0 {
+		return eth.BlockID{}, eth.BlockID{}, safedb.ErrNotFound
+	}
+	var highest uint64
+	first := true
+	for num := range m.entries {
+		if first || num > highest {
+			highest = num
+			first = false
+		}
+	}
+	entry := m.entries[highest]
+	return entry.l1, entry.l2, nil
+}
 
 // Test helpers
 func createTestConfig() *opnodecfg.Config {
@@ -233,6 +342,7 @@ func TestVirtualNode_Lifecycle(t *testing.T) {
 		// Stop it
 		err := vn.Stop(ctx)
 		require.NoError(t, err)
+		require.Equal(t, VNStateStopped, vn.State())
 
 		// Start should exit
 		select {
@@ -370,4 +480,317 @@ func TestVirtualNode_InnerNodeIntegration(t *testing.T) {
 		}, 1*time.Second, 10*time.Millisecond)
 		cancel()
 	})
+}
+
+// TestVirtualNode_L1AtSafeHead tests the L1AtSafeHead function
+func TestVirtualNode_L1AtSafeHead(t *testing.T) {
+	t.Parallel()
+
+	genesisL1 := eth.BlockID{Number: 100, Hash: [32]byte{0x01}}
+	genesisL2 := eth.BlockID{Number: 0, Hash: [32]byte{0x02}}
+
+	createConfigWithGenesis := func() *opnodecfg.Config {
+		return &opnodecfg.Config{
+			Rollup: rollup.Config{
+				L2ChainID: big.NewInt(420),
+				Genesis: rollup.Genesis{
+					L1: genesisL1,
+					L2: genesisL2,
+				},
+			},
+		}
+	}
+
+	t.Run("returns error when inner node is nil", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		_, err := vn.L1AtSafeHead(context.Background(), eth.BlockID{Number: 10})
+		require.ErrorIs(t, err, ErrVirtualNodeNotRunning)
+	})
+
+	t.Run("returns error when SafeDB is nil", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mock := newMockInnerNode()
+		mock.db = nil
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		_, err := vn.L1AtSafeHead(context.Background(), eth.BlockID{Number: 10})
+		require.ErrorIs(t, err, ErrVirtualNodeNotRunning)
+	})
+
+	t.Run("genesis L2 target returns genesis L1 directly", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		// Set up mock with SafeDB - but it shouldn't be called for genesis
+		mockDB := newMockSafeDBReader()
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		// Query for genesis L2 block
+		result, err := vn.L1AtSafeHead(context.Background(), genesisL2)
+		require.NoError(t, err)
+		require.Equal(t, eth.BlockID{}, result) // Genesis L2 target returns genesis L1 directly, but without the hash
+	})
+
+	t.Run("genesis L2 number with different hash is not treated as genesis", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		// Query with same number as genesis but different hash
+		// Should NOT match genesis since both number AND hash must match
+		target := eth.BlockID{Number: genesisL2.Number, Hash: [32]byte{0xff}}
+		_, err := vn.L1AtSafeHead(context.Background(), target)
+		require.ErrorIs(t, err, ErrL1AtSafeHeadNotFound)
+	})
+
+	t.Run("non-genesis target uses walkback to find earliest L1", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		// Set up entries: L1 block -> L2 safe head
+		// L1=100 (genesis) -> L2=0
+		// L1=101 -> L2=5
+		// L1=102 -> L2=10
+		// L1=103 -> L2=15
+		// L1=104 -> L2=20
+		mockDB.addEntry(100, [32]byte{0x01}, [32]byte{0x02}, 0)
+		mockDB.addEntry(101, [32]byte{0x03}, [32]byte{0x04}, 5)
+		mockDB.addEntry(102, [32]byte{0x05}, [32]byte{0x06}, 10)
+		mockDB.addEntry(103, [32]byte{0x07}, [32]byte{0x08}, 15)
+		mockDB.addEntry(104, [32]byte{0x09}, [32]byte{0x0a}, 20)
+
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		// Query for L2 block 10 - should return L1=102 (earliest L1 where L2 safe head >= 10)
+		target := eth.BlockID{Number: 10, Hash: [32]byte{0x06}}
+		result, err := vn.L1AtSafeHead(context.Background(), target)
+		require.NoError(t, err)
+		require.Equal(t, uint64(102), result.Number)
+	})
+
+	t.Run("target beyond latest returns error", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		mockDB.addEntry(100, [32]byte{0x01}, [32]byte{0x02}, 0)
+		mockDB.addEntry(101, [32]byte{0x03}, [32]byte{0x04}, 5)
+
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		// Query for L2 block 100 - beyond latest L2 safe head (5)
+		target := eth.BlockID{Number: 100, Hash: [32]byte{}}
+		_, err := vn.L1AtSafeHead(context.Background(), target)
+		require.ErrorIs(t, err, ErrL1AtSafeHeadNotFound)
+	})
+
+	t.Run("walkback to exact earliest SafeDB entry succeeds", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		mockDB.addEntry(500, [32]byte{0x10}, [32]byte{0x11}, 100)
+		mockDB.addEntry(501, [32]byte{0x12}, [32]byte{0x13}, 110)
+		mockDB.addEntry(502, [32]byte{0x14}, [32]byte{0x15}, 120)
+
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		// The first recorded SafeDB entry is still usable for that exact L2.
+		target := eth.BlockID{Number: 100, Hash: [32]byte{0x11}}
+		l1, err := vn.L1AtSafeHead(context.Background(), target)
+		require.NoError(t, err)
+		require.Equal(t, uint64(500), l1.Number)
+	})
+
+	// CL/snap-sync bootstrap: SafeDB starts above genesisL1, so the walkback
+	// runs off the end of recorded history. That is permanent on this node.
+	t.Run("walkback past earliest SafeDB entry returns Unavailable", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		mockDB.addEntry(500, [32]byte{0x10}, [32]byte{0x11}, 100)
+		mockDB.addEntry(501, [32]byte{0x12}, [32]byte{0x13}, 110)
+		mockDB.addEntry(502, [32]byte{0x14}, [32]byte{0x15}, 120)
+
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		// target within latest L2 (90 <= 120) so we enter walkback; prev=499
+		// is below the earliest entry (500) but above genesisL1 (100), so the
+		// safedb.ErrNotFound from that probe is what triggers the sentinel.
+		target := eth.BlockID{Number: 90, Hash: [32]byte{0x09}}
+		_, err := vn.L1AtSafeHead(context.Background(), target)
+		require.ErrorIs(t, err, ErrL1AtSafeHeadUnavailable)
+	})
+
+	// Walkback reaches the genesis bound without ever dropping below target:
+	// also permanent (SafeDB near genesis is not considered stable).
+	t.Run("walkback reaches genesis bound returns Unavailable", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		// genesisL1=100; both entries have L2 >= target=10, so walkback from
+		// L1=150 descends to cursor=100 which trips the genesis guard.
+		mockDB.addEntry(100, [32]byte{0x01}, [32]byte{0x02}, 50)
+		mockDB.addEntry(150, [32]byte{0x03}, [32]byte{0x04}, 60)
+
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		target := eth.BlockID{Number: 10, Hash: [32]byte{0x02}}
+		_, err := vn.L1AtSafeHead(context.Background(), target)
+		require.ErrorIs(t, err, ErrL1AtSafeHeadUnavailable)
+	})
+
+	// Empty SafeDB on startup: transient NotFound, not the permanent sentinel.
+	t.Run("empty SafeDB returns NotFound on latest lookup", func(t *testing.T) {
+		cfg := createConfigWithGenesis()
+		log := createTestLogger()
+		vn := NewVirtualNode(cfg, log, nil, "test")
+
+		mockDB := newMockSafeDBReader()
+		mock := newMockInnerNode()
+		mock.db = mockDB
+		vn.inner = mock
+		vn.setState(VNStateRunning)
+
+		target := eth.BlockID{Number: 50, Hash: [32]byte{0xaa}}
+		_, err := vn.L1AtSafeHead(context.Background(), target)
+		require.ErrorIs(t, err, ErrL1AtSafeHeadNotFound)
+	})
+}
+
+// blockingStopMock wraps mockInnerNode but blocks Stop() until explicitly released.
+// This simulates an OpNode whose shutdown (event drain) takes a long time.
+type blockingStopMock struct {
+	*mockInnerNode
+	stopStarted chan struct{}
+	stopRelease chan struct{}
+}
+
+func (m *blockingStopMock) Stop(ctx context.Context) error {
+	close(m.stopStarted)
+	select {
+	case <-m.stopRelease:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return m.stopErr
+}
+
+// TestVirtualNode_SyncStatusDuringShutdown proves that SyncStatus does not deadlock
+// when called while Start() is shutting down the inner node. Before the fix,
+// Start() held v.mu during inner.Stop(), so any concurrent SyncStatus() call
+// would block on v.mu forever — creating a deadlock if the inner node's shutdown
+// path called back into SyncStatus (e.g. via the event system).
+func TestVirtualNode_SyncStatusDuringShutdown(t *testing.T) {
+	t.Parallel()
+	log := createTestLogger()
+	cfg := createTestConfig()
+	initOverload := &rollupNode.InitializationOverrides{}
+
+	mock := newMockInnerNode()
+	mock.startFunc = func(ctx context.Context) {
+		<-ctx.Done()
+	}
+	mock.stopCh = nil // prevent close in default Stop — we use blockingStopMock
+
+	stopStarted := make(chan struct{})
+	stopRelease := make(chan struct{})
+	blocking := &blockingStopMock{
+		mockInnerNode: mock,
+		stopStarted:   stopStarted,
+		stopRelease:   stopRelease,
+	}
+
+	vn := NewVirtualNode(cfg, log, initOverload, "test")
+	vn.innerNodeFactory = func(ctx context.Context, cfg *opnodecfg.Config,
+		log gethlog.Logger, appVersion string, m *opmetrics.Metrics,
+		initOverload *rollupNode.InitializationOverrides) (innerNode, error) {
+		return blocking, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- vn.Start(ctx)
+	}()
+
+	// Wait for running
+	require.Eventually(t, func() bool {
+		return vn.State() == VNStateRunning
+	}, time.Second, 10*time.Millisecond)
+
+	// Cancel to trigger shutdown — Start() will call inner.Stop() which blocks
+	cancel()
+
+	// Wait for inner.Stop() to be entered
+	select {
+	case <-stopStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("inner.Stop() was never called")
+	}
+
+	// Now try to call SyncStatus — this MUST NOT deadlock.
+	// Before the fix, this would block forever on v.mu.
+	syncDone := make(chan struct{})
+	go func() {
+		_, _ = vn.SyncStatus(context.Background())
+		close(syncDone)
+	}()
+
+	select {
+	case <-syncDone:
+		// Success — SyncStatus completed without deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("SyncStatus deadlocked during shutdown — v.mu held during inner.Stop()")
+	}
+
+	// Release inner.Stop() so Start() can return
+	close(stopRelease)
+
+	select {
+	case <-startDone:
+		require.Equal(t, VNStateStopped, vn.State())
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start() did not return after inner.Stop() completed")
+	}
 }

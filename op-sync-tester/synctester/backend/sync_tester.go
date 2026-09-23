@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/beacon/engine"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
@@ -24,6 +23,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	"github.com/ethereum-optimism/optimism/op-core/eip1559"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-sync-tester/synctester/backend/config"
 	"github.com/ethereum-optimism/optimism/op-sync-tester/synctester/backend/session"
 	sttypes "github.com/ethereum-optimism/optimism/op-sync-tester/synctester/backend/types"
@@ -128,9 +129,8 @@ func (s *SyncTester) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.Blo
 			}
 		}
 		if len(receipts) == 0 {
-			// Should never happen since every block except genesis has at least one deposit tx
-			logger.Warn("L2 Block has zero receipts", "blockNrHash", blockNrOrHash)
-			return nil, errors.New("no receipts")
+			// Genesis legitimately has no receipts.
+			return receipts, nil
 		}
 		target := receipts[0].BlockNumber.Uint64()
 		if target > session.CurrentState.Latest {
@@ -220,6 +220,28 @@ func (s *SyncTester) ChainId(ctx context.Context) (hexutil.Big, error) {
 	})
 }
 
+func (s *SyncTester) ExchangeCapabilities(ctx context.Context, _ []string) []string {
+	return []string{
+		// getPayload
+		"engine_getPayloadV1",
+		"engine_getPayloadV2",
+		"engine_getPayloadV3",
+		"engine_getPayloadV4",
+		"engine_getPayloadV5",
+
+		// forkchoiceUpdated
+		"engine_forkchoiceUpdatedV1",
+		"engine_forkchoiceUpdatedV2",
+		"engine_forkchoiceUpdatedV3",
+
+		// newPayload
+		"engine_newPayloadV1",
+		"engine_newPayloadV2",
+		"engine_newPayloadV3",
+		"engine_newPayloadV4",
+	}
+}
+
 // GetPayloadV1 only supports V1 payloads.
 func (s *SyncTester) GetPayloadV1(ctx context.Context, payloadID eth.PayloadID) (*eth.ExecutionPayloadEnvelope, error) {
 	return session.WithSession(s.sessMgr, ctx, s.log, func(session *eth.SyncTesterSession, logger log.Logger) (*eth.ExecutionPayloadEnvelope, error) {
@@ -257,6 +279,19 @@ func (s *SyncTester) GetPayloadV3(ctx context.Context, payloadID eth.PayloadID) 
 func (s *SyncTester) GetPayloadV4(ctx context.Context, payloadID eth.PayloadID) (*eth.ExecutionPayloadEnvelope, error) {
 	return session.WithSession(s.sessMgr, ctx, s.log, func(session *eth.SyncTesterSession, logger log.Logger) (*eth.ExecutionPayloadEnvelope, error) {
 		logger.Debug("GetPayloadV4", "payloadID", payloadID)
+		if !payloadID.Is(engine.PayloadV3) {
+			return nil, engine.UnsupportedFork
+		}
+		return s.getPayload(session, logger, payloadID)
+	})
+}
+
+// GetPayloadV5 must be only called when Osaka (Karst) activated. The payload is built via
+// forkchoiceUpdatedV3 (which stays V3 through Osaka), so the payloadID carries the V3 marker;
+// only the getPayload method version bumps to V5 (the envelope is the V4-shaped one).
+func (s *SyncTester) GetPayloadV5(ctx context.Context, payloadID eth.PayloadID) (*eth.ExecutionPayloadEnvelope, error) {
+	return session.WithSession(s.sessMgr, ctx, s.log, func(session *eth.SyncTesterSession, logger log.Logger) (*eth.ExecutionPayloadEnvelope, error) {
+		logger.Debug("GetPayloadV5", "payloadID", payloadID)
 		if !payloadID.Is(engine.PayloadV3) {
 			return nil, engine.UnsupportedFork
 		}

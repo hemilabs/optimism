@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/interopsmoke"
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/presets"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
@@ -92,7 +94,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	app.Action = func(cliCtx *cli.Context) error {
-		return runOpUp(cliCtx.Context, cliCtx.App.ErrWriter, cliCtx.String(dirFlag.Name))
+		return runOpUp(cliCtx.Context, cliCtx.App.ErrWriter, cliCtx.String(dirFlag.Name), cliCtx.Bool(interopFlag.Name))
+	}
+	app.Commands = []*cli.Command{
+		interopsmoke.Command(envPrefix),
 	}
 	return app.RunContext(ctx, args)
 }
@@ -145,7 +150,28 @@ func newMinimalSystem(t *testingT) (sys *presets.Minimal, err error) {
 			panic(recovered)
 		}
 	}()
-	return presets.NewMinimal(t), nil
+	// op-up exposes a lightweight devnet; it does not need dispute-game helpers,
+	// and go-tests-short does not build kona-host for the challenger.
+	return presets.NewMinimalNoFaultProofs(t), nil
+}
+
+func newSupernodeInteropSystem(t *testingT) (sys *presets.TwoL2SupernodeInterop, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			var failure testingFailure
+			if errors.As(asError(recovered), &failure) {
+				err = failure.err
+				return
+			}
+			panic(recovered)
+		}
+	}()
+	// Use a small activation delay so that interop bridge contracts
+	// (SuperchainETHBridge, ETHLiquidity) get properly initialized.
+	const interopDelay = uint64(2)
+	return presets.NewTwoL2SupernodeInterop(t, interopDelay,
+		presets.WithSuggestedLagoonActivationOffset(interopDelay),
+	), nil
 }
 
 func runSystem(ctx context.Context, stderr io.Writer, sys *presets.Minimal) error {
@@ -167,9 +193,48 @@ func runSystem(ctx context.Context, stderr io.Writer, sys *presets.Minimal) erro
 
 	fmt.Fprintf(stderr, "Test Account Address: %s\n", funderAddress)
 	fmt.Fprintf(stderr, "Test Account Private Key: %s\n", "0x"+common.Bytes2Hex(crypto.FromECDSA(funderPrivKey)))
-	fmt.Fprintf(stderr, "EL Node URL: %s\n", "http://localhost:8545")
+	return nil
+}
 
-	elNode := sys.L2EL
+func logInterop(ctx context.Context, stderr io.Writer, sys *presets.TwoL2SupernodeInterop) {
+	const pollInterval = 2 * time.Second
+	queryAPI := sys.Supernode.QueryAPI()
+
+	var lastSafeTS, lastLocalSafeTS uint64
+	lastSafe := make(map[string]uint64)
+	lastLocalSafe := make(map[string]uint64)
+	lastUnsafe := make(map[string]uint64)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+			status, err := queryAPI.SyncStatus(ctx)
+			if err != nil {
+				continue
+			}
+
+			// Global safe timestamp
+			if status.SafeTimestamp != lastSafeTS && status.SafeTimestamp > 0 {
+				fmt.Fprintf(stderr, "[interop] Cross-safe timestamp: %d\n", status.SafeTimestamp)
+				lastSafeTS = status.SafeTimestamp
+			}
+
+			// Global local-safe timestamp
+			if status.LocalSafeTimestamp != lastLocalSafeTS && status.LocalSafeTimestamp > 0 {
+				fmt.Fprintf(stderr, "[interop] Local-safe timestamp: %d\n", status.LocalSafeTimestamp)
+				lastLocalSafeTS = status.LocalSafeTimestamp
+			}
+
+			// Per-chain details
+			for chainID, cs := range status.Chains {
+				id := chainID.String()
+
+				if cs.UnsafeL2.Number != lastUnsafe[id] && cs.UnsafeL2.Number > 0 {
+					fmt.Fprintf(stderr, "[interop] Chain %s unsafe: #%d\n", id, cs.UnsafeL2.Number)
+					lastUnsafe[id] = cs.UnsafeL2.Number
+				}
 
 	// Log on new blocks.
 	go func() {
@@ -503,7 +568,17 @@ func (t *testingT) Skipped() bool {
 
 // TempDir implements devtest.T.
 func (t *testingT) TempDir() string {
-	dir, err := os.MkdirTemp(t.state.tempRoot, "op-up-*")
+	return t.TempDirWithPrefix("op-up")
+}
+
+// TempDirWithPrefix implements devtest.T.
+func (t *testingT) TempDirWithPrefix(prefix string) string {
+	prefix = strings.NewReplacer("/", "-", "\\", "-", " ", "-", "_", "-").Replace(strings.TrimSpace(prefix))
+	prefix = strings.Trim(prefix, "-")
+	if prefix == "" {
+		prefix = "op-up"
+	}
+	dir, err := os.MkdirTemp(t.state.tempRoot, prefix+"-*")
 	if err != nil {
 		t.failf("failed to create temp dir: %v", err)
 	}

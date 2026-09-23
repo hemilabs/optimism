@@ -1,37 +1,57 @@
 //! Block executor for Optimism.
 
-use crate::OpEvmFactory;
-use alloc::{borrow::Cow, boxed::Box, vec::Vec};
+use crate::{OpEvmFactory, spec_by_timestamp_after_bedrock};
+use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
 use alloy_consensus::{Eip658Value, Header, Transaction, TransactionEnvelope, TxReceipt};
-use alloy_eips::{Encodable2718, Typed2718};
+use alloy_eips::{Encodable2718, Typed2718, eip7685::Requests};
 use alloy_evm::{
-    Database, Evm, EvmFactory, FromRecoveredTx, FromTxWithEncoded, RecoveredTx,
+    Database, Evm, EvmFactory, FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, RecoveredTx,
     block::{
         BlockExecutionError, BlockExecutionResult, BlockExecutor, BlockExecutorFactory,
-        BlockExecutorFor, BlockValidationError, ExecutableTx, OnStateHook,
-        StateChangePostBlockSource, StateChangeSource, StateDB, SystemCaller, TxResult,
-        state_changes::{balance_increment_state, post_block_balance_increments},
+        BlockValidationError, CommitChanges, ExecutableTx, GasOutput, StateDB, SystemCaller,
+        TxResult, state_changes::post_block_balance_increments,
     },
     eth::{EthTxResult, receipt_builder::ReceiptBuilderCtx},
 };
 use alloy_op_hardforks::{OpChainHardforks, OpHardforks};
-use alloy_primitives::{Address, B256, Bytes};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use canyon::ensure_create2_deployer;
-use op_alloy::consensus::OpDepositReceipt;
+use op_alloy::consensus::{
+    OpDepositReceipt, OpTransaction as OpConsensusTransaction, POST_EXEC_TX_TYPE_ID,
+    PostExecPayload, SDMGasEntry,
+};
 use op_revm::{
-    L1BlockInfo, OpTransaction, constants::L1_BLOCK_CONTRACT, estimate_tx_compressed_size,
+    L1BlockInfo, OpTransaction,
+    constants::{BASE_FEE_RECIPIENT, L1_BLOCK_CONTRACT, OPERATOR_FEE_RECIPIENT},
+    encoded_tx_da_footprint,
     transaction::deposit::DEPOSIT_TRANSACTION_TYPE,
+    tx_da_footprint,
 };
 pub use receipt_builder::OpAlloyReceiptBuilder;
 use receipt_builder::OpReceiptBuilder;
 use revm::{
     Database as _, DatabaseCommit, Inspector,
-    context::{Block, result::ResultAndState},
-    database::{DatabaseCommitExt, State},
+    context::{
+        Block, TxEnv,
+        result::{ExecutionResult, ResultAndState},
+    },
+    database::DatabaseCommitExt,
+    state::{Account, AccountStatus, EvmState},
+};
+
+use crate::post_exec::{
+    PostExecEvm, PostExecEvmFactoryAdapter, PostExecEvmFactoryHooks, PostExecExecutedTx,
+    PostExecRefundEvent, PostExecRefundInspector, PostExecTxContext, PostExecTxKind,
+    noop_post_exec_result,
 };
 
 mod canyon;
 pub mod receipt_builder;
+
+/// Wraps an [`OpBlockExecutionError`] as a block-execution validation error.
+fn validation_error(err: OpBlockExecutionError) -> BlockExecutionError {
+    BlockExecutionError::Validation(BlockValidationError::Other(Box::new(err)))
+}
 
 /// Trait for OP transaction environments. Allows to recover the transaction encoded bytes if
 /// they're available.
@@ -46,15 +66,224 @@ impl<T: revm::context::Transaction> OpTxEnv for OpTransaction<T> {
     }
 }
 
+/// Canonical post-exec execution mode for an OP block.
+#[derive(Debug, Default, Clone)]
+pub enum PostExecMode {
+    /// Execute with legacy gas accounting.
+    #[default]
+    Disabled,
+    /// Produce canonical post-exec refunds locally and append them to the block later.
+    Produce,
+    /// Verify canonical gas accounting using an post-exec payload embedded in the block.
+    Verify(PostExecPayload),
+}
+
+impl From<bool> for PostExecMode {
+    /// `true` opts into local post-exec production; `false` disables it.
+    fn from(produce: bool) -> Self {
+        if produce { Self::Produce } else { Self::Disabled }
+    }
+}
+
+/// Per-block post-exec state carried by [`OpBlockExecutor`].
+#[derive(Debug)]
+pub enum PostExecState {
+    /// Execute with legacy gas accounting.
+    Disabled,
+    /// Produce canonical post-exec refunds locally and append them to the block later.
+    Producing {
+        /// Accumulated per-tx refunds for post-exec tx assembly.
+        entries: Vec<SDMGasEntry>,
+    },
+    /// Verify canonical gas accounting using a post-exec payload embedded in the block.
+    ///
+    /// `payload` and `remaining` are not redundant: `payload` is the immutable verifier input
+    /// (kept for byte-equality comparison against the actual `0x7D` tx and for the block-number
+    /// re-check), while `remaining` is the mutable working set drained as txs are matched.
+    Verifying {
+        /// Decoded post-exec payload being verified.
+        payload: PostExecPayload,
+        /// Verifier payload entries not yet consumed, indexed by original tx index.
+        remaining: BTreeMap<u64, u64>,
+        /// Invalid verifier payload reason, if any.
+        invalid_reason: Option<String>,
+        /// Whether the block's synthetic post-exec transaction has been seen during execution.
+        saw_post_exec_tx: bool,
+    },
+}
+
+impl PostExecState {
+    fn new(mode: PostExecMode) -> Self {
+        match mode {
+            PostExecMode::Disabled => Self::Disabled,
+            PostExecMode::Produce => Self::Producing { entries: Vec::new() },
+            PostExecMode::Verify(payload) => {
+                let mut remaining = BTreeMap::new();
+                let mut invalid_reason = None;
+
+                for entry in &payload.gas_refund_entries {
+                    if entry.gas_refund == 0 {
+                        invalid_reason = Some(format!(
+                            "zero post-exec payload refund for tx index {}",
+                            entry.index
+                        ));
+                        break;
+                    }
+                    if remaining.insert(entry.index, entry.gas_refund).is_some() {
+                        invalid_reason = Some(format!(
+                            "duplicate post-exec payload entry for tx index {}",
+                            entry.index
+                        ));
+                        break;
+                    }
+                }
+
+                Self::Verifying { payload, remaining, invalid_reason, saw_post_exec_tx: false }
+            }
+        }
+    }
+
+    const fn is_producing(&self) -> bool {
+        matches!(self, Self::Producing { .. })
+    }
+
+    const fn is_verifying(&self) -> bool {
+        matches!(self, Self::Verifying { .. })
+    }
+
+    const fn invalid_reason(&self) -> Option<&str> {
+        match self {
+            Self::Verifying { invalid_reason: Some(reason), .. } => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    fn verify_block_number(&self, block_number: u64) -> Option<String> {
+        match self {
+            Self::Verifying { payload, .. } if payload.block_number != block_number => {
+                Some(format!(
+                    "payload block number {} does not match block number {}",
+                    payload.block_number, block_number,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    const fn produced_entries(&self) -> &[SDMGasEntry] {
+        match self {
+            Self::Producing { entries } => entries.as_slice(),
+            _ => &[],
+        }
+    }
+
+    const fn produced_entries_mut(&mut self) -> Option<&mut Vec<SDMGasEntry>> {
+        match self {
+            Self::Producing { entries } => Some(entries),
+            _ => None,
+        }
+    }
+
+    fn take_entries(&mut self) -> Vec<SDMGasEntry> {
+        match self {
+            Self::Producing { entries } => core::mem::take(entries),
+            _ => Vec::new(),
+        }
+    }
+
+    fn verifier_refund(&self, tx_index: u64) -> Option<u64> {
+        match self {
+            Self::Verifying { remaining, .. } => remaining.get(&tx_index).copied(),
+            _ => None,
+        }
+    }
+
+    fn consume_verifier_entry(&mut self, tx_index: u64) {
+        if let Self::Verifying { remaining, .. } = self {
+            remaining.remove(&tx_index);
+        }
+    }
+
+    fn verify_post_exec_tx(
+        &mut self,
+        tx_index: u64,
+        payload: &PostExecPayload,
+    ) -> Result<(), String> {
+        match self {
+            Self::Verifying { payload: expected, saw_post_exec_tx, .. } => {
+                if *saw_post_exec_tx {
+                    return Err(format!("duplicate post-exec tx at index {tx_index}"));
+                }
+                if payload != expected {
+                    return Err(format!("post-exec tx payload mismatch at index {tx_index}"));
+                }
+                *saw_post_exec_tx = true;
+                Ok(())
+            }
+            Self::Producing { .. } => Ok(()),
+            Self::Disabled => Err(format!(
+                "unexpected post-exec tx at index {tx_index}: SDM not active for this block"
+            )),
+        }
+    }
+
+    fn remaining_verifier_indexes(&self) -> Vec<u64> {
+        match self {
+            Self::Verifying { remaining, .. } => remaining.keys().copied().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether a `Verify` block claims a post-exec payload yet never carried the trailing `0x7D`.
+    ///
+    /// Per-tx settlement drains the verifier entries as the refunded txs commit, so an absent
+    /// `0x7D` is invisible to the unconsumed-entries check — only this flag proves the producer
+    /// actually committed the claimed refunds on-chain.
+    const fn missing_post_exec_tx(&self) -> bool {
+        matches!(self, Self::Verifying { saw_post_exec_tx: false, .. })
+    }
+}
+
 /// Context for OP block execution.
 #[derive(Debug, Default, Clone)]
 pub struct OpBlockExecutionCtx {
     /// Parent block hash.
     pub parent_hash: B256,
+    /// Whether this block is the activation block of some fork at or after Jovian, which must
+    /// contain only deposit transactions.
+    ///
+    /// Compute via [`OpHardforks::is_no_user_tx_activation_block`] where the parent timestamp is
+    /// available; `false` skips the executor's check.
+    pub no_user_tx_activation_block: bool,
     /// Parent beacon block root.
     pub parent_beacon_block_root: Option<B256>,
     /// The block's extra data.
     pub extra_data: Bytes,
+    /// Canonical post-exec execution mode for this block.
+    pub post_exec_mode: PostExecMode,
+}
+
+/// Balance patch that reconciles fee distribution with the post-refund gas used.
+///
+/// The EVM has already paid fees out based on `evm_gas_used`, so just lowering `gas_used` in the
+/// receipt isn't enough — the sender, beneficiary, base-fee recipient, and operator-fee recipient
+/// all need their balances rolled back to match the canonical gas. This struct carries the
+/// per-recipient debits, plus the matching credit to the sender (which equals their sum).
+#[derive(Debug, Default, Clone)]
+pub struct PostExecAdjustment {
+    /// Refund amount subtracted from `evm_gas_used` to produce `canonical_gas_used`.
+    pub refund: u64,
+    /// Wei to credit back to the sender (sum of the three recipient deltas below).
+    pub sender_balance_delta: U256,
+    /// Wei to debit from the block beneficiary — priority-fee share of the refund.
+    pub beneficiary_balance_delta: U256,
+    /// Wei to debit from the base-fee recipient — base-fee share of the refund.
+    pub base_fee_balance_delta: U256,
+    /// Wei to debit from the operator-fee recipient — operator-fee share of the refund
+    /// (post-Isthmus).
+    pub operator_fee_balance_delta: U256,
+    /// Exact policy-provided attribution events that produced the refund.
+    pub refund_events: Vec<PostExecRefundEvent>,
 }
 
 /// The result of executing an OP transaction.
@@ -64,15 +293,50 @@ pub struct OpTxResult<H, T> {
     pub inner: EthTxResult<H, T>,
     /// Whether the transaction is a deposit transaction.
     pub is_deposit: bool,
-    /// The sender of the transaction.
-    pub sender: Address,
+    /// Whether the transaction is a post-exec transaction.
+    pub is_post_exec: bool,
+    /// Gas used by EVM execution before any post-exec (SDM) refund — the "real compute" performed.
+    ///
+    /// Accumulated and bounded against the block gas limit by both block builders and the executor
+    /// (see [`PreRefundGasUsed`]).
+    pub evm_gas_used: u64,
+    /// Canonical gas used after any post-exec adjustment.
+    pub canonical_gas_used: u64,
+    /// Canonical post-exec adjustment, if any.
+    pub post_exec: Option<PostExecAdjustment>,
+    /// Cached depositor nonce — looked up during execute so commit can be infallible.
+    /// `Some` only for regolith deposit transactions.
+    pub depositor_nonce: Option<u64>,
 }
 
-impl<H, T> TxResult for OpTxResult<H, T> {
+/// Read access to a transaction's pre-refund EVM gas usage.
+///
+/// Lets block builders read `evm_gas_used` through the generic [`BlockExecutor::Result`] type
+/// (otherwise only bounded by `TxResult`) to self-limit a block against the block gas limit.
+pub trait PreRefundGasUsed {
+    /// Gas used by EVM execution, before any post-exec (SDM) refund.
+    fn evm_gas_used(&self) -> u64;
+}
+
+impl<H, T> PreRefundGasUsed for OpTxResult<H, T> {
+    fn evm_gas_used(&self) -> u64 {
+        self.evm_gas_used
+    }
+}
+
+impl<H, T> TxResult for OpTxResult<H, T>
+where
+    H: Send + 'static,
+    T: Send + 'static,
+{
     type HaltReason = H;
 
     fn result(&self) -> &ResultAndState<Self::HaltReason> {
         &self.inner.result
+    }
+
+    fn into_result(self) -> ResultAndState<Self::HaltReason> {
+        self.inner.result
     }
 }
 
@@ -91,6 +355,10 @@ pub struct OpBlockExecutor<Evm, R: OpReceiptBuilder, Spec> {
     pub receipts: Vec<R::Receipt>,
     /// Total gas used by executed transactions.
     pub gas_used: u64,
+    /// Total pre-refund EVM gas (real compute) across executed txs, before any post-exec (SDM)
+    /// refund. Bounded by the block gas limit; equals [`Self::gas_used`] with SDM off, greater
+    /// otherwise.
+    pub evm_gas_used: u64,
     /// Da footprint.
     ///
     /// This is only set for blocks post-Jovian activation.
@@ -100,6 +368,12 @@ pub struct OpBlockExecutor<Evm, R: OpReceiptBuilder, Spec> {
     pub is_regolith: bool,
     /// Utility to call system smart contracts.
     pub system_caller: SystemCaller<Spec>,
+    /// Cached L1 block info for the current block.
+    pub l1_block_info: Option<L1BlockInfo>,
+    /// Post-exec execution state (mode and producer/verifier working state).
+    pub post_exec: PostExecState,
+    /// Per-transaction exact policy-provided refund attribution events aligned with receipts.
+    pub refund_events_by_tx: Vec<Vec<PostExecRefundEvent>>,
 }
 
 impl<E, R, Spec> OpBlockExecutor<E, R, Spec>
@@ -110,6 +384,7 @@ where
 {
     /// Creates a new [`OpBlockExecutor`].
     pub fn new(evm: E, ctx: OpBlockExecutionCtx, spec: Spec, receipt_builder: R) -> Self {
+        let post_exec = PostExecState::new(ctx.post_exec_mode.clone());
         Self {
             is_regolith: spec
                 .is_regolith_active_at_timestamp(evm.block().timestamp().saturating_to()),
@@ -119,9 +394,60 @@ where
             receipt_builder,
             receipts: Vec::new(),
             gas_used: 0,
+            evm_gas_used: 0,
             da_footprint_used: 0,
             ctx,
+            l1_block_info: None,
+            post_exec,
+            refund_events_by_tx: Vec::new(),
         }
+    }
+
+    /// Set the post-exec execution mode for the executor.
+    #[must_use]
+    pub fn with_post_exec_mode(mut self, post_exec_mode: PostExecMode) -> Self {
+        self.set_post_exec_mode(post_exec_mode);
+        self
+    }
+
+    /// Set the post-exec execution mode for the executor.
+    ///
+    /// This is primarily intended for tests and replay tooling that need to override the
+    /// block-context default after construction.
+    pub fn set_post_exec_mode(&mut self, post_exec_mode: PostExecMode) {
+        self.post_exec = PostExecState::new(post_exec_mode);
+    }
+
+    /// Returns the accumulated post-exec entries (sequencer mode) without clearing them.
+    pub const fn post_exec_entries(&self) -> &[SDMGasEntry] {
+        self.post_exec.produced_entries()
+    }
+
+    /// Take the accumulated post-exec entries (sequencer mode).
+    /// Returns the entries and clears the internal state.
+    pub fn take_post_exec_entries(&mut self) -> Vec<SDMGasEntry> {
+        self.post_exec.take_entries()
+    }
+
+    /// Take the exact per-transaction policy-provided refund events aligned with receipts.
+    pub fn take_refund_events_by_tx(&mut self) -> Vec<Vec<PostExecRefundEvent>> {
+        core::mem::take(&mut self.refund_events_by_tx)
+    }
+}
+
+impl<E, R, Spec> OpBlockExecutor<E, R, Spec>
+where
+    E: PostExecEvm,
+    R: OpReceiptBuilder,
+{
+    /// Snapshot refund state to carry across subblock executors.
+    pub fn refund_snapshot(&self) -> E::Snapshot {
+        self.evm.refund_snapshot()
+    }
+
+    /// Seed refund state captured from a prior subblock.
+    pub fn seed_refund_snapshot(&mut self, state: E::Snapshot) {
+        self.evm.seed_refund_snapshot(state);
     }
 }
 
@@ -146,6 +472,24 @@ pub enum OpBlockExecutionError {
         /// The available block DA footprint.
         available_block_da_footprint: u64,
     },
+
+    /// A fork-activation block at or after Jovian, which must contain only deposit transactions,
+    /// contained a non-deposit (user) transaction.
+    #[error("unexpected non-deposit transactions in fork activation block")]
+    UnexpectedNonDepositTxInForkActivationBlock,
+
+    /// The block contained an invalid post-exec payload.
+    #[error("invalid post-exec payload: {0}")]
+    InvalidPostExecPayload(String),
+
+    /// Canonical post-exec settlement would underflow an account balance.
+    #[error("canonical post-exec settlement underflow for {address}: delta {delta}")]
+    PostExecSettlementUnderflow {
+        /// Account whose balance would underflow.
+        address: Address,
+        /// Delta that could not be removed from the account.
+        delta: U256,
+    },
 }
 
 impl<E, R, Spec> OpBlockExecutor<E, R, Spec>
@@ -154,7 +498,10 @@ where
             DB: Database + DatabaseCommit + StateDB,
             Tx: FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction> + OpTxEnv,
         >,
-    R: OpReceiptBuilder<Transaction: Transaction + Encodable2718, Receipt: TxReceipt>,
+    R: OpReceiptBuilder<
+            Transaction: Transaction + Encodable2718 + OpConsensusTransaction,
+            Receipt: TxReceipt,
+        >,
     Spec: OpHardforks,
 {
     fn jovian_da_footprint_estimation(
@@ -162,15 +509,6 @@ where
         tx_env: &E::Tx,
         tx: impl RecoveredTx<R::Transaction>,
     ) -> Result<u64, BlockExecutionError> {
-        // Try to use the enveloped tx if it exists, otherwise use the encoded 2718 bytes
-        let encoded = tx_env
-            .encoded_bytes()
-            .map_or_else(
-                || estimate_tx_compressed_size(tx.tx().encoded_2718().as_ref()),
-                |encoded| estimate_tx_compressed_size(encoded),
-            )
-            .saturating_div(1_000_000);
-
         // Load the L1 block contract into the cache. If the L1 block contract is not pre-loaded the
         // database will panic when trying to fetch the DA footprint gas scalar.
         self.evm.db_mut().basic(L1_BLOCK_CONTRACT).map_err(BlockExecutionError::other)?;
@@ -179,17 +517,279 @@ where
             .map_err(BlockExecutionError::other)?
             .into();
 
-        Ok(encoded.saturating_mul(da_footprint_gas_scalar))
+        // Use the cached enveloped tx bytes if available, otherwise encode the transaction.
+        Ok(tx_env.encoded_bytes().map_or_else(
+            || tx_da_footprint(tx.tx(), da_footprint_gas_scalar),
+            |encoded| encoded_tx_da_footprint(encoded, da_footprint_gas_scalar),
+        ))
     }
+
+    fn invalid_post_exec_payload(reason: impl Into<String>) -> BlockExecutionError {
+        validation_error(OpBlockExecutionError::InvalidPostExecPayload(reason.into()))
+    }
+
+    fn verifier_post_exec_refund_for_tx(
+        &self,
+        tx_index: u64,
+        is_deposit: bool,
+        is_post_exec: bool,
+        evm_gas_used: u64,
+    ) -> Result<u64, BlockExecutionError> {
+        // Entry-existence first: deposit and post-exec txs are called with this helper
+        // unconditionally to validate their tx index against the payload, so we can only
+        // raise the deposit/post-exec error when the payload actually targets them.
+        let Some(refund) = self.post_exec.verifier_refund(tx_index) else {
+            return Ok(0);
+        };
+
+        if is_deposit {
+            return Err(Self::invalid_post_exec_payload(format!(
+                "payload entry targets deposit tx index {tx_index}"
+            )));
+        }
+
+        if is_post_exec {
+            return Err(Self::invalid_post_exec_payload(format!(
+                "payload entry targets post-exec tx index {tx_index}"
+            )));
+        }
+
+        if refund > evm_gas_used {
+            return Err(Self::invalid_post_exec_payload(format!(
+                "payload refund {refund} exceeds evm_gas_used {evm_gas_used} for tx index {tx_index}"
+            )));
+        }
+
+        Ok(refund)
+    }
+
+    /// Applies the post-exec refund to `total_gas_spent` so `tx_gas_used()` reports canonical gas.
+    ///
+    /// The EVM refund counter stays unchanged to avoid subtracting the refund twice. If the
+    /// EIP-7623 floor binds, `tx_gas_used()` remains clamped and may exceed canonical gas; whether
+    /// SDM rebates can reduce gas below that floor remains an open spec question.
+    const fn canonicalize_result_gas(
+        result: &mut ExecutionResult<E::HaltReason>,
+        post_exec_refund: u64,
+    ) {
+        if post_exec_refund == 0 {
+            return;
+        }
+
+        match result {
+            ExecutionResult::Success { gas, .. } |
+            ExecutionResult::Revert { gas, .. } |
+            ExecutionResult::Halt { gas, .. } => {
+                *gas = gas
+                    .with_total_gas_spent(gas.total_gas_spent().saturating_sub(post_exec_refund));
+            }
+        }
+    }
+
+    fn state_account_mut<'a>(
+        db: &mut E::DB,
+        state: &'a mut EvmState,
+        address: Address,
+    ) -> Result<&'a mut Account, BlockExecutionError> {
+        use revm::primitives::hash_map::Entry;
+
+        match state.entry(address) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                let info =
+                    db.basic(address).map_err(BlockExecutionError::other)?.unwrap_or_default();
+                // Account::from sets original_info equal to the current info, which is
+                // safe: it is not used by State::commit — the CacheAccount tracks its
+                // own previous state for building transitions.
+                let mut account = Account::from(info);
+                account.status = AccountStatus::Touched;
+                Ok(entry.insert(account))
+            }
+        }
+    }
+
+    fn add_state_balance(
+        db: &mut E::DB,
+        state: &mut EvmState,
+        address: Address,
+        delta: U256,
+    ) -> Result<(), BlockExecutionError> {
+        if delta.is_zero() {
+            return Ok(());
+        }
+
+        let account = Self::state_account_mut(db, state, address)?;
+        account.mark_touch();
+        account.info.balance = account.info.balance.saturating_add(delta);
+        Ok(())
+    }
+
+    fn sub_state_balance(
+        db: &mut E::DB,
+        state: &mut EvmState,
+        address: Address,
+        delta: U256,
+    ) -> Result<(), BlockExecutionError> {
+        if delta.is_zero() {
+            return Ok(());
+        }
+
+        let account = Self::state_account_mut(db, state, address)?;
+        account.mark_touch();
+        account.info.balance = account.info.balance.checked_sub(delta).ok_or_else(|| {
+            BlockExecutionError::Validation(BlockValidationError::Other(Box::new(
+                OpBlockExecutionError::PostExecSettlementUnderflow { address, delta },
+            )))
+        })?;
+        Ok(())
+    }
+
+    fn l1_block_info(
+        &mut self,
+        spec_id: op_revm::OpSpecId,
+    ) -> Result<L1BlockInfo, BlockExecutionError> {
+        if let Some(l1_block_info) = &self.l1_block_info {
+            return Ok(l1_block_info.clone());
+        }
+
+        let block_number = self.evm.block().number();
+        let l1_block_info = L1BlockInfo::try_fetch(self.evm.db_mut(), block_number, spec_id)
+            .map_err(BlockExecutionError::other)?;
+        self.l1_block_info = Some(l1_block_info.clone());
+        Ok(l1_block_info)
+    }
+
+    /// Computes the fee-settlement patch required after canonicalizing post-exec gas.
+    ///
+    /// `evm.transact` has already charged the sender and paid fee recipients according to
+    /// `evm_gas_used`. Lowering only the receipt's `gas_used` would leave those balance changes
+    /// in place. This translates the refunded gas back into the exact per-recipient deltas
+    /// `execute_transaction_without_commit` then applies before state is committed.
+    fn post_exec_settlement_deltas(
+        &mut self,
+        tx: impl RecoveredTx<R::Transaction>,
+        evm_gas_used: u64,
+        post_exec_refund: u64,
+        is_deposit: bool,
+        is_post_exec: bool,
+    ) -> Result<PostExecAdjustment, BlockExecutionError> {
+        if is_deposit || is_post_exec || post_exec_refund == 0 {
+            return Ok(PostExecAdjustment::default());
+        }
+
+        let gas_delta_u256 = U256::from(post_exec_refund);
+        let basefee = u128::from(self.evm.block().basefee());
+        let spec_id = spec_by_timestamp_after_bedrock(
+            &self.spec,
+            self.evm.block().timestamp().saturating_to(),
+        );
+        let effective_gas_price = tx.tx().effective_gas_price(Some(self.evm.block().basefee()));
+        // SDM/PostExec is only enabled on forks after Karst, which is already post-London.
+        // A saturating_sub landing at zero is intentional and consensus-valid: a legacy tx
+        // with a gas price equal to the basefee pays zero priority fee, so the beneficiary
+        // delta below must be zero as well — we credit back only what the beneficiary
+        // actually received for the refunded gas, which is the (effective_price - basefee)
+        // component.
+        let beneficiary_gas_price = effective_gas_price.saturating_sub(basefee);
+
+        let base_fee_balance_delta = gas_delta_u256.saturating_mul(U256::from(basefee));
+        let beneficiary_balance_delta =
+            gas_delta_u256.saturating_mul(U256::from(beneficiary_gas_price));
+
+        let canonical_gas_used = evm_gas_used.saturating_sub(post_exec_refund);
+        let l1_block_info = self.l1_block_info(spec_id)?;
+        let encoded = tx.tx().encoded_2718();
+        let raw_fee =
+            l1_block_info.operator_fee_charge(encoded.as_ref(), U256::from(evm_gas_used), spec_id);
+        let canonical_fee = l1_block_info.operator_fee_charge(
+            encoded.as_ref(),
+            U256::from(canonical_gas_used),
+            spec_id,
+        );
+        let operator_fee_balance_delta = raw_fee.saturating_sub(canonical_fee);
+
+        let sender_balance_delta = gas_delta_u256
+            .saturating_mul(U256::from(effective_gas_price))
+            .saturating_add(operator_fee_balance_delta);
+
+        Ok(PostExecAdjustment {
+            refund: post_exec_refund,
+            sender_balance_delta,
+            beneficiary_balance_delta,
+            base_fee_balance_delta,
+            operator_fee_balance_delta,
+            refund_events: Vec::new(),
+        })
+    }
+
+    fn apply_post_exec_refund_to_state(
+        &mut self,
+        state: &mut EvmState,
+        sender: Address,
+        deltas: &PostExecAdjustment,
+    ) -> Result<(), BlockExecutionError> {
+        let beneficiary = self.evm.block().beneficiary();
+        Self::add_state_balance(self.evm.db_mut(), state, sender, deltas.sender_balance_delta)?;
+        Self::sub_state_balance(
+            self.evm.db_mut(),
+            state,
+            beneficiary,
+            deltas.beneficiary_balance_delta,
+        )?;
+        Self::sub_state_balance(
+            self.evm.db_mut(),
+            state,
+            BASE_FEE_RECIPIENT,
+            deltas.base_fee_balance_delta,
+        )?;
+        Self::sub_state_balance(
+            self.evm.db_mut(),
+            state,
+            OPERATOR_FEE_RECIPIENT,
+            deltas.operator_fee_balance_delta,
+        )?;
+
+        Ok(())
+    }
+}
+
+/// Ensures a transaction's gas limit fits within the gas still available in the block.
+///
+/// Checks one condition at a time: pre-Regolith deposits are exempt from this check, and any
+/// other transaction must not declare more gas than remains in the block.
+fn validate_block_gas(
+    transaction_gas_limit: u64,
+    block_available_gas: u64,
+    is_regolith: bool,
+    is_deposit: bool,
+) -> Result<(), BlockExecutionError> {
+    // Pre-Regolith deposits are exempt from the available-block-gas check.
+    if is_deposit && !is_regolith {
+        return Ok(());
+    }
+
+    if transaction_gas_limit > block_available_gas {
+        return Err(BlockValidationError::TransactionGasLimitMoreThanAvailableBlockGas {
+            transaction_gas_limit,
+            block_available_gas,
+        }
+        .into());
+    }
+
+    Ok(())
 }
 
 impl<E, R, Spec> BlockExecutor for OpBlockExecutor<E, R, Spec>
 where
-    E: Evm<
+    E: PostExecEvm<
             DB: Database + DatabaseCommit + StateDB,
             Tx: FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction> + OpTxEnv,
+            HaltReason: Send + 'static,
         >,
-    R: OpReceiptBuilder<Transaction: Transaction + Encodable2718, Receipt: TxReceipt>,
+    R: OpReceiptBuilder<
+            Transaction: Transaction + Encodable2718 + OpConsensusTransaction,
+            Receipt: TxReceipt,
+        >,
     Spec: OpHardforks,
 {
     type Transaction = R::Transaction;
@@ -198,10 +798,13 @@ where
     type Result = OpTxResult<E::HaltReason, <R::Transaction as TransactionEnvelope>::TxType>;
 
     fn apply_pre_execution_changes(&mut self) -> Result<(), BlockExecutionError> {
-        // Set state clear flag if the block is after the Spurious Dragon hardfork.
-        let state_clear_flag =
-            self.spec.is_spurious_dragon_active_at_block(self.evm.block().number().saturating_to());
-        self.evm.db_mut().set_state_clear_flag(state_clear_flag);
+        if let Some(reason) = self.post_exec.invalid_reason() {
+            return Err(Self::invalid_post_exec_payload(String::from(reason)));
+        }
+        let block_number = self.evm.block().number().saturating_to::<u64>();
+        if let Some(reason) = self.post_exec.verify_block_number(block_number) {
+            return Err(Self::invalid_post_exec_payload(reason));
+        }
 
         self.system_caller.apply_blockhashes_contract_call(self.ctx.parent_hash, &mut self.evm)?;
         self.system_caller
@@ -221,22 +824,96 @@ where
         Ok(())
     }
 
+    fn execute_transaction_with_commit_condition(
+        &mut self,
+        tx: impl ExecutableTx<Self>,
+        f: impl FnOnce(&Self::Result) -> CommitChanges,
+    ) -> Result<Option<GasOutput>, BlockExecutionError> {
+        // Producer policy state is updated during EVM execution (before the commit decision) and
+        // is not journaled with EVM state. A declined candidate must not affect a later committed
+        // transaction, or the producer's payload can diverge from commit-only derivation paths.
+        // Snapshot only in Produce mode and restore on decline or execution error.
+        let refund_snapshot = self.post_exec.is_producing().then(|| self.refund_snapshot());
+
+        let output = match self.execute_transaction_without_commit(tx) {
+            Ok(output) => output,
+            Err(err) => {
+                if let Some(snapshot) = refund_snapshot {
+                    self.seed_refund_snapshot(snapshot);
+                }
+                return Err(err);
+            }
+        };
+
+        if !f(&output).should_commit() {
+            if let Some(snapshot) = refund_snapshot {
+                self.seed_refund_snapshot(snapshot);
+            }
+            return Ok(None);
+        }
+
+        Ok(Some(self.commit_transaction(output)))
+    }
+
+    /// In Produce mode, this method does not snapshot or restore producer-policy state. A failing
+    /// transaction still records its fee-vault touches on the `transact_raw` error path, and a
+    /// successfully executed transaction does the same even if its commit is later declined.
+    /// Callers that may discard a candidate must snapshot and restore the policy themselves or use
+    /// [`execute_transaction_with_commit_condition`](Self::execute_transaction_with_commit_condition),
+    /// which restores the per-candidate snapshot on execution error and declined commit.
     fn execute_transaction_without_commit(
         &mut self,
         tx: impl ExecutableTx<Self>,
     ) -> Result<Self::Result, BlockExecutionError> {
         let (tx_env, tx) = tx.into_parts();
         let is_deposit = tx.tx().ty() == DEPOSIT_TRANSACTION_TYPE;
+        let is_post_exec = tx.tx().ty() == POST_EXEC_TX_TYPE_ID;
+        let tx_index = self.receipts.len() as u64;
 
-        // The sum of the transaction's gas limit, Tg, and the gas utilized in this block prior,
-        // must be no greater than the block's gasLimit.
-        let block_available_gas = self.evm.block().gas_limit() - self.gas_used;
-        if tx.tx().gas_limit() > block_available_gas && (self.is_regolith || !is_deposit) {
-            return Err(BlockValidationError::TransactionGasLimitMoreThanAvailableBlockGas {
-                transaction_gas_limit: tx.tx().gas_limit(),
-                block_available_gas,
+        // Since Jovian, fork-activation blocks must contain only deposit transactions — before,
+        // the sequencer skipped user txs there by policy, but it wasn't a consensus rule. The
+        // synthetic post-exec SDM tx is not a user tx, so it is allowed.
+        if self.ctx.no_user_tx_activation_block && !is_deposit && !is_post_exec {
+            return Err(validation_error(
+                OpBlockExecutionError::UnexpectedNonDepositTxInForkActivationBlock,
+            ));
+        }
+
+        let transaction_gas_limit = tx.tx().gas_limit();
+
+        // Bound the block's *pre-refund* `evm_gas_used` (real compute) rather than canonical
+        // `gas_used`, so SDM refunds can't admit more compute than the block gas limit allows.
+        // Inducting off the declared gas limit (an upper bound on actual `evm_gas_used`) keeps the
+        // pre-refund sum within the limit. Since `evm_gas_used >= gas_used`, this subsumes the
+        // canonical block-gas-limit check; with SDM off the two are identical.
+        let evm_gas_available = self.evm.block().gas_limit().saturating_sub(self.evm_gas_used);
+        validate_block_gas(transaction_gas_limit, evm_gas_available, self.is_regolith, is_deposit)?;
+
+        if is_post_exec {
+            let payload =
+                tx.tx().as_post_exec().map(|tx| &tx.inner().payload).ok_or_else(|| {
+                    Self::invalid_post_exec_payload(format!(
+                    "transaction at index {tx_index} has post-exec type but no post-exec payload",
+                ))
+                })?;
+            if let Err(reason) = self.post_exec.verify_post_exec_tx(tx_index, payload) {
+                return Err(Self::invalid_post_exec_payload(reason));
             }
-            .into());
+            // Validates that no Verify payload entry targets this tx index; refund is always 0.
+            self.verifier_post_exec_refund_for_tx(tx_index, false, true, 0)?;
+            return Ok(OpTxResult {
+                inner: EthTxResult {
+                    result: noop_post_exec_result(),
+                    blob_gas_used: 0,
+                    tx_type: tx.tx().tx_type(),
+                },
+                is_deposit: false,
+                is_post_exec: true,
+                evm_gas_used: 0,
+                canonical_gas_used: 0,
+                post_exec: None,
+                depositor_nonce: None,
+            });
         }
 
         let da_footprint_used = if self
@@ -244,17 +921,18 @@ where
             .is_jovian_active_at_timestamp(self.evm.block().timestamp().saturating_to()) &&
             !is_deposit
         {
-            let da_footprint_available = self.evm.block().gas_limit() - self.da_footprint_used;
+            let da_footprint_available =
+                self.evm.block().gas_limit().saturating_sub(self.da_footprint_used);
 
             let tx_da_footprint = self.jovian_da_footprint_estimation(&tx_env, &tx)?;
 
             if tx_da_footprint > da_footprint_available {
-                return Err(BlockExecutionError::Validation(BlockValidationError::Other(
-                    Box::new(OpBlockExecutionError::TransactionDaFootprintAboveGasLimit {
+                return Err(validation_error(
+                    OpBlockExecutionError::TransactionDaFootprintAboveGasLimit {
                         transaction_da_footprint: tx_da_footprint,
                         available_block_da_footprint: da_footprint_available,
-                    }),
-                )));
+                    },
+                ));
             }
 
             tx_da_footprint
@@ -262,11 +940,73 @@ where
             0
         };
 
+        if self.post_exec.is_producing() {
+            self.evm.begin_post_exec_tx(PostExecTxContext {
+                tx_index,
+                kind: if is_deposit { PostExecTxKind::Deposit } else { PostExecTxKind::Normal },
+            });
+        }
+
         // Execute transaction and return the result
-        let result = self.evm.transact(tx_env).map_err(|err| {
+        let mut result = self.evm.transact(tx_env).map_err(|err| {
             let hash = tx.tx().trie_hash();
             BlockExecutionError::evm(err, hash)
         })?;
+
+        let evm_gas_used = result.result.tx_gas_used();
+        let (post_exec_refund, refund_events) = if self.post_exec.is_producing() {
+            let PostExecExecutedTx { refund_total: refund, refund_events } =
+                self.evm.take_last_post_exec_tx_result();
+            // The inspector's accumulated refund must never exceed the tx's evm_gas_used. If
+            // it does, we'd emit an `SDMGasEntry` that any honest verifier would reject
+            // at pre-execution ("payload refund exceeds evm_gas_used"), so the sequencer
+            // would ship a block it can't verify itself. Fail here with a loud error
+            // instead of letting `saturating_sub` mask the discrepancy.
+            if refund > evm_gas_used {
+                return Err(Self::invalid_post_exec_payload(format!(
+                    "produced refund {refund} exceeds evm_gas_used {evm_gas_used} for tx index {tx_index}",
+                )));
+            }
+            (refund, refund_events)
+        } else {
+            (
+                self.verifier_post_exec_refund_for_tx(tx_index, is_deposit, false, evm_gas_used)?,
+                Vec::new(),
+            )
+        };
+        let canonical_gas_used = evm_gas_used.saturating_sub(post_exec_refund);
+        let mut deltas = self.post_exec_settlement_deltas(
+            &tx,
+            evm_gas_used,
+            post_exec_refund,
+            is_deposit,
+            false,
+        )?;
+        deltas.refund_events = refund_events;
+        let post_exec =
+            (post_exec_refund > 0 || !deltas.refund_events.is_empty()).then_some(deltas);
+
+        // Pre-compute depositor nonce here so `commit_transaction` can be infallible.
+        // Only post-regolith deposit transactions need the depositor account from DB.
+        let sender = *tx.signer();
+        let depositor_nonce = if self.is_regolith && is_deposit {
+            let account = self
+                .evm
+                .db_mut()
+                .basic(sender)
+                .map_err(BlockExecutionError::other)?
+                .unwrap_or_default();
+            Some(account.nonce)
+        } else {
+            None
+        };
+
+        // Canonicalize the result gas and apply any post-exec refund to state in-place. Both
+        // operations must run before commit so commit_transaction stays infallible.
+        Self::canonicalize_result_gas(&mut result.result, post_exec_refund);
+        if let Some(deltas) = post_exec.as_ref() {
+            self.apply_post_exec_refund_to_state(&mut result.state, sender, deltas)?;
+        }
 
         Ok(OpTxResult {
             inner: EthTxResult {
@@ -275,36 +1015,53 @@ where
                 tx_type: tx.tx().tx_type(),
             },
             is_deposit,
-            sender: *tx.signer(),
+            is_post_exec: false,
+            evm_gas_used,
+            canonical_gas_used,
+            post_exec,
+            depositor_nonce,
         })
     }
 
-    fn commit_transaction(&mut self, output: Self::Result) -> Result<u64, BlockExecutionError> {
+    fn commit_transaction(&mut self, output: Self::Result) -> GasOutput {
+        let tx_index = self.receipts.len() as u64;
         let OpTxResult {
             inner: EthTxResult { result: ResultAndState { result, state }, blob_gas_used, tx_type },
             is_deposit,
-            sender,
+            is_post_exec,
+            evm_gas_used,
+            canonical_gas_used,
+            post_exec,
+            depositor_nonce,
         } = output;
 
-        // Fetch the depositor account from the database for the deposit nonce.
-        // Note that this *only* needs to be done post-regolith hardfork, as deposit nonces
-        // were not introduced in Bedrock. In addition, regular transactions don't have deposit
-        // nonces, so we don't need to touch the DB for those.
-        let depositor = (self.is_regolith && is_deposit)
-            .then(|| self.evm.db_mut().basic(sender).map(|acc| acc.unwrap_or_default()))
-            .transpose()
-            .map_err(BlockExecutionError::other)?;
+        let (post_exec_refund, refund_events) = match post_exec {
+            Some(deltas) => (deltas.refund, deltas.refund_events),
+            None => (0, Vec::new()),
+        };
 
-        self.system_caller.on_state(StateChangeSource::Transaction(self.receipts.len()), &state);
+        if !is_deposit && !is_post_exec && post_exec_refund > 0 {
+            if let Some(entries) = self.post_exec.produced_entries_mut() {
+                entries.push(SDMGasEntry { index: tx_index, gas_refund: post_exec_refund });
+            }
+        }
+        if self.post_exec.is_verifying() && post_exec_refund > 0 {
+            self.post_exec.consume_verifier_entry(tx_index);
+        }
+        if !is_post_exec {
+            self.refund_events_by_tx.push(refund_events);
+        }
 
-        let gas_used = result.gas_used();
-
-        // append gas used
-        self.gas_used += gas_used;
+        // add canonical gas used
+        self.gas_used += canonical_gas_used;
+        // Accumulate pre-refund EVM gas (real compute); bounded against the block gas limit by the
+        // admission check in `execute_transaction_without_commit`.
+        self.evm_gas_used += evm_gas_used;
 
         // Update DA footprint if Jovian is active
         if self.spec.is_jovian_active_at_timestamp(self.evm.block().timestamp().saturating_to()) &&
-            !is_deposit
+            !is_deposit &&
+            !is_post_exec
         {
             // Add to DA footprint used
             self.da_footprint_used = self.da_footprint_used.saturating_add(blob_gas_used);
@@ -330,7 +1087,7 @@ where
 
                     self.receipt_builder.build_deposit_receipt(OpDepositReceipt {
                         inner: receipt,
-                        deposit_nonce: depositor.map(|account| account.nonce),
+                        deposit_nonce: depositor_nonce,
                         // The deposit receipt version was introduced in Canyon to indicate an
                         // update to how receipt hashes should be computed
                         // when set. The state transition process ensures
@@ -348,45 +1105,44 @@ where
 
         self.evm.db_mut().commit(state);
 
-        Ok(gas_used)
+        GasOutput::new(canonical_gas_used)
     }
 
     fn finish(
         mut self,
     ) -> Result<(Self::Evm, BlockExecutionResult<R::Receipt>), BlockExecutionError> {
+        let indexes = self.post_exec.remaining_verifier_indexes();
+        if !indexes.is_empty() {
+            return Err(Self::invalid_post_exec_payload(format!(
+                "{} unconsumed post-exec payload entries for tx indexes {:?}",
+                indexes.len(),
+                indexes,
+            )));
+        }
+
+        if self.post_exec.missing_post_exec_tx() {
+            return Err(Self::invalid_post_exec_payload(
+                "post-exec payload present but block carries no post-exec tx",
+            ));
+        }
+
         let balance_increments =
             post_block_balance_increments::<Header>(&self.spec, self.evm.block(), &[], None);
-        // increment balances
+        // increment balances; the DB-level state hook (if any) fires via the commit inside.
         self.evm
             .db_mut()
-            .increment_balances(balance_increments.clone())
+            .increment_balances(balance_increments)
             .map_err(|_| BlockValidationError::IncrementBalanceFailed)?;
-        // call state hook with changes due to balance increments.
-        self.system_caller.try_on_state_with(|| {
-            balance_increment_state(&balance_increments, self.evm.db_mut()).map(|state| {
-                (
-                    StateChangeSource::PostBlock(StateChangePostBlockSource::BalanceIncrements),
-                    Cow::Owned(state),
-                )
-            })
-        })?;
-
-        let legacy_gas_used =
-            self.receipts.last().map(|r| r.cumulative_gas_used()).unwrap_or_default();
 
         Ok((
             self.evm,
             BlockExecutionResult {
                 receipts: self.receipts,
-                requests: Default::default(),
-                gas_used: legacy_gas_used,
+                requests: Requests::default(),
+                gas_used: self.gas_used,
                 blob_gas_used: self.da_footprint_used,
             },
         ))
-    }
-
-    fn set_state_hook(&mut self, hook: Option<Box<dyn OnStateHook>>) {
-        self.system_caller.with_state_hook(hook);
     }
 
     fn evm_mut(&mut self) -> &mut Self::Evm {
@@ -440,19 +1196,31 @@ impl<R, Spec, EvmFactory> OpBlockExecutorFactory<R, Spec, EvmFactory> {
     }
 }
 
-impl<R, Spec, EvmF> BlockExecutorFactory for OpBlockExecutorFactory<R, Spec, EvmF>
+impl<R, Spec, F> BlockExecutorFactory
+    for OpBlockExecutorFactory<R, Spec, PostExecEvmFactoryAdapter<F>>
 where
-    R: OpReceiptBuilder<Transaction: Transaction + Encodable2718, Receipt: TxReceipt>,
-    Spec: OpHardforks,
-    EvmF: EvmFactory<
-        Tx: FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction> + OpTxEnv,
-    >,
+    R: OpReceiptBuilder<
+            Transaction: Transaction + Encodable2718 + OpConsensusTransaction,
+            Receipt: TxReceipt,
+        > + 'static,
+    Spec: OpHardforks + 'static,
+    F: PostExecEvmFactoryHooks + 'static,
+    F::Tx: FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction> + OpTxEnv,
     Self: 'static,
 {
-    type EvmFactory = EvmF;
+    type EvmFactory = PostExecEvmFactoryAdapter<F>;
     type ExecutionCtx<'a> = OpBlockExecutionCtx;
     type Transaction = R::Transaction;
     type Receipt = R::Receipt;
+    type TxExecutionResult = OpTxResult<
+        <PostExecEvmFactoryAdapter<F> as EvmFactory>::HaltReason,
+        <R::Transaction as TransactionEnvelope>::TxType,
+    >;
+    type Executor<
+        'a,
+        DB: StateDB,
+        I: Inspector<<PostExecEvmFactoryAdapter<F> as EvmFactory>::Context<DB>>,
+    > = OpBlockExecutor<<PostExecEvmFactoryAdapter<F> as EvmFactory>::Evm<DB, I>, &'a R, &'a Spec>;
 
     fn evm_factory(&self) -> &Self::EvmFactory {
         &self.evm_factory
@@ -460,300 +1228,71 @@ where
 
     fn create_executor<'a, DB, I>(
         &'a self,
-        evm: EvmF::Evm<&'a mut State<DB>, I>,
+        evm: <PostExecEvmFactoryAdapter<F> as EvmFactory>::Evm<DB, I>,
         ctx: Self::ExecutionCtx<'a>,
-    ) -> impl BlockExecutorFor<'a, Self, DB, I>
+    ) -> Self::Executor<'a, DB, I>
     where
-        DB: Database + 'a,
-        I: Inspector<EvmF::Context<&'a mut State<DB>>> + 'a,
+        DB: StateDB,
+        I: Inspector<<PostExecEvmFactoryAdapter<F> as EvmFactory>::Context<DB>>,
+    {
+        OpBlockExecutor::new(evm, ctx, &self.spec, &self.receipt_builder)
+    }
+}
+
+impl<ReceiptBuilder, Spec, Tx, RefundPolicy> BlockExecutorFactory
+    for OpBlockExecutorFactory<ReceiptBuilder, Spec, OpEvmFactory<Tx, RefundPolicy>>
+where
+    ReceiptBuilder: OpReceiptBuilder<
+            Transaction: Transaction + Encodable2718 + OpConsensusTransaction,
+            Receipt: TxReceipt,
+        > + 'static,
+    Spec: OpHardforks + 'static,
+    Tx: IntoTxEnv<Tx>
+        + Into<OpTransaction<TxEnv>>
+        + Default
+        + Clone
+        + core::fmt::Debug
+        + FromRecoveredTx<ReceiptBuilder::Transaction>
+        + FromTxWithEncoded<ReceiptBuilder::Transaction>
+        + OpTxEnv
+        + 'static,
+    RefundPolicy: Default + PostExecRefundInspector + 'static,
+    Self: 'static,
+{
+    type EvmFactory = OpEvmFactory<Tx, RefundPolicy>;
+    type ExecutionCtx<'a> = OpBlockExecutionCtx;
+    type Transaction = ReceiptBuilder::Transaction;
+    type Receipt = ReceiptBuilder::Receipt;
+    type TxExecutionResult = OpTxResult<
+        <OpEvmFactory<Tx, RefundPolicy> as EvmFactory>::HaltReason,
+        <ReceiptBuilder::Transaction as TransactionEnvelope>::TxType,
+    >;
+    type Executor<
+        'a,
+        DB: StateDB,
+        I: Inspector<<OpEvmFactory<Tx, RefundPolicy> as EvmFactory>::Context<DB>>,
+    > = OpBlockExecutor<
+        <OpEvmFactory<Tx, RefundPolicy> as EvmFactory>::Evm<DB, I>,
+        &'a ReceiptBuilder,
+        &'a Spec,
+    >;
+
+    fn evm_factory(&self) -> &Self::EvmFactory {
+        &self.evm_factory
+    }
+
+    fn create_executor<'a, DB, I>(
+        &'a self,
+        evm: <OpEvmFactory<Tx, RefundPolicy> as EvmFactory>::Evm<DB, I>,
+        ctx: Self::ExecutionCtx<'a>,
+    ) -> Self::Executor<'a, DB, I>
+    where
+        DB: StateDB,
+        I: Inspector<<OpEvmFactory<Tx, RefundPolicy> as EvmFactory>::Context<DB>>,
     {
         OpBlockExecutor::new(evm, ctx, &self.spec, &self.receipt_builder)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use alloc::{string::ToString, vec};
-    use alloy_consensus::{SignableTransaction, TxLegacy, transaction::Recovered};
-    use alloy_eips::eip2718::WithEncoded;
-    use alloy_evm::{EvmEnv, ToTxEnv};
-    use alloy_hardforks::ForkCondition;
-    use alloy_op_hardforks::OpHardfork;
-    use alloy_primitives::{Address, Signature, U256, uint};
-    use op_alloy::consensus::OpTxEnvelope;
-    use op_revm::{
-        DefaultOp, L1BlockInfo, OpBuilder, OpSpecId,
-        constants::{
-            BASE_FEE_SCALAR_OFFSET, ECOTONE_L1_BLOB_BASE_FEE_SLOT, ECOTONE_L1_FEE_SCALARS_SLOT,
-            L1_BASE_FEE_SLOT, L1_BLOCK_CONTRACT, OPERATOR_FEE_SCALARS_SLOT,
-        },
-    };
-    use revm::{
-        Context,
-        context::BlockEnv,
-        database::{CacheDB, EmptyDB, InMemoryDB},
-        inspector::NoOpInspector,
-        primitives::HashMap,
-        state::AccountInfo,
-    };
-
-    use crate::OpEvm;
-
-    use super::*;
-
-    #[test]
-    fn test_with_encoded() {
-        let executor_factory = OpBlockExecutorFactory::new(
-            OpAlloyReceiptBuilder::default(),
-            OpChainHardforks::op_mainnet(),
-            OpEvmFactory::<OpTransaction<revm::context::TxEnv>>::default(),
-        );
-        let mut db = State::builder().with_database(CacheDB::<EmptyDB>::default()).build();
-        let evm = executor_factory.evm_factory.create_evm(&mut db, EvmEnv::default());
-        let mut executor = executor_factory.create_executor(evm, OpBlockExecutionCtx::default());
-        let tx = Recovered::new_unchecked(
-            OpTxEnvelope::Legacy(TxLegacy::default().into_signed(Signature::new(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            ))),
-            Address::ZERO,
-        );
-        let tx_with_encoded = WithEncoded::new(tx.encoded_2718().into(), tx.clone());
-
-        // make sure we can use both `WithEncoded` and transaction itself as inputs.
-        let _ = executor.execute_transaction(&tx);
-        let _ = executor.execute_transaction(&tx_with_encoded);
-    }
-
-    fn prepare_jovian_db(da_footprint_gas_scalar: u16) -> State<InMemoryDB> {
-        const L1_BASE_FEE: U256 = uint!(1_U256);
-        const L1_BLOB_BASE_FEE: U256 = uint!(2_U256);
-        const L1_BASE_FEE_SCALAR: u64 = 3;
-        const L1_BLOB_BASE_FEE_SCALAR: u64 = 4;
-        const L1_FEE_SCALARS: U256 = U256::from_limbs([
-            0,
-            (L1_BASE_FEE_SCALAR << (64 - BASE_FEE_SCALAR_OFFSET * 2)) | L1_BLOB_BASE_FEE_SCALAR,
-            0,
-            0,
-        ]);
-        const OPERATOR_FEE_SCALAR: u8 = 5;
-        const OPERATOR_FEE_CONST: u8 = 6;
-        let da_footprint_gas_scalar_bytes = da_footprint_gas_scalar.to_be_bytes();
-        let mut operator_fee_and_da_footprint = [0u8; 32];
-        operator_fee_and_da_footprint[31] = OPERATOR_FEE_CONST;
-        operator_fee_and_da_footprint[23] = OPERATOR_FEE_SCALAR;
-        operator_fee_and_da_footprint[19] = da_footprint_gas_scalar_bytes[1];
-        operator_fee_and_da_footprint[18] = da_footprint_gas_scalar_bytes[0];
-        let operator_fee_and_da_footprint_u256 = U256::from_be_bytes(operator_fee_and_da_footprint);
-
-        let mut db = State::builder().with_database(InMemoryDB::default()).build();
-
-        db.insert_account_with_storage(
-            L1_BLOCK_CONTRACT,
-            Default::default(),
-            HashMap::from_iter([
-                (L1_BASE_FEE_SLOT, L1_BASE_FEE),
-                (ECOTONE_L1_FEE_SCALARS_SLOT, L1_FEE_SCALARS),
-                (ECOTONE_L1_BLOB_BASE_FEE_SLOT, L1_BLOB_BASE_FEE),
-                (OPERATOR_FEE_SCALARS_SLOT, operator_fee_and_da_footprint_u256),
-            ]),
-        );
-
-        db.insert_account(
-            Address::ZERO,
-            AccountInfo { balance: U256::from(400_000_000), ..Default::default() },
-        );
-
-        db
-    }
-
-    fn build_executor<'a>(
-        db: &'a mut State<InMemoryDB>,
-        receipt_builder: &'a OpAlloyReceiptBuilder,
-        op_chain_hardforks: &'a OpChainHardforks,
-        gas_limit: u64,
-        jovian_timestamp: u64,
-    ) -> OpBlockExecutor<
-        OpEvm<&'a mut State<InMemoryDB>, NoOpInspector>,
-        &'a OpAlloyReceiptBuilder,
-        &'a OpChainHardforks,
-    > {
-        let ctx = Context::op()
-            .with_db(db)
-            .with_chain(L1BlockInfo {
-                operator_fee_scalar: Some(U256::from(2)),
-                operator_fee_constant: Some(U256::from(50)),
-                ..Default::default()
-            })
-            .with_block(BlockEnv {
-                timestamp: U256::from(jovian_timestamp),
-                gas_limit,
-                ..Default::default()
-            })
-            .modify_cfg_chained(|cfg| cfg.spec = OpSpecId::JOVIAN);
-
-        let evm = OpEvm::new(ctx.build_op_with_inspector(NoOpInspector {}), true);
-
-        OpBlockExecutor::new(
-            evm,
-            OpBlockExecutionCtx::default(),
-            op_chain_hardforks,
-            receipt_builder,
-        )
-    }
-
-    #[test]
-    fn test_jovian_da_footprint_estimation() {
-        const DA_FOOTPRINT_GAS_SCALAR: u16 = 7;
-        const GAS_LIMIT: u64 = 100_000;
-        const JOVIAN_TIMESTAMP: u64 = 1746806402;
-
-        let mut db = prepare_jovian_db(DA_FOOTPRINT_GAS_SCALAR);
-        let op_chain_hardforks = OpChainHardforks::new(
-            OpHardfork::op_mainnet()
-                .into_iter()
-                .chain(vec![(OpHardfork::Jovian, ForkCondition::Timestamp(JOVIAN_TIMESTAMP))]),
-        );
-
-        let receipt_builder = OpAlloyReceiptBuilder::default();
-        let mut executor = build_executor(
-            &mut db,
-            &receipt_builder,
-            &op_chain_hardforks,
-            GAS_LIMIT,
-            JOVIAN_TIMESTAMP,
-        );
-
-        let tx_inner = TxLegacy { gas_limit: GAS_LIMIT, ..Default::default() };
-
-        let tx = Recovered::new_unchecked(
-            OpTxEnvelope::Legacy(tx_inner.into_signed(Signature::new(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            ))),
-            Address::ZERO,
-        );
-        let tx_env = tx.to_tx_env();
-
-        assert!(executor.da_footprint_used == 0);
-
-        let expected_da_footprint = executor.jovian_da_footprint_estimation(&tx_env, &tx).unwrap();
-
-        // make sure we can use both `WithEncoded` and transaction itself as inputs.
-        let res = executor.execute_transaction(&tx);
-        assert!(res.is_ok());
-
-        assert!(executor.da_footprint_used == expected_da_footprint);
-    }
-
-    #[test]
-    fn test_jovian_da_footprint_estimation_out_of_gas() {
-        const DA_FOOTPRINT_GAS_SCALAR: u16 = 7;
-        const JOVIAN_TIMESTAMP: u64 = 1746806402;
-        const GAS_LIMIT: u64 = 100;
-
-        let mut db = prepare_jovian_db(DA_FOOTPRINT_GAS_SCALAR);
-        let op_chain_hardforks = OpChainHardforks::new(
-            OpHardfork::op_mainnet()
-                .into_iter()
-                .chain(vec![(OpHardfork::Jovian, ForkCondition::Timestamp(JOVIAN_TIMESTAMP))]),
-        );
-
-        let receipt_builder = OpAlloyReceiptBuilder::default();
-        let mut executor = build_executor(
-            &mut db,
-            &receipt_builder,
-            &op_chain_hardforks,
-            GAS_LIMIT,
-            JOVIAN_TIMESTAMP,
-        );
-
-        let tx_inner = TxLegacy { gas_limit: GAS_LIMIT, ..Default::default() };
-
-        let tx = Recovered::new_unchecked(
-            OpTxEnvelope::Legacy(tx_inner.into_signed(Signature::new(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            ))),
-            Address::ZERO,
-        );
-        let tx_env = tx.to_tx_env();
-
-        assert!(executor.da_footprint_used == 0);
-
-        let expected_da_footprint = executor.jovian_da_footprint_estimation(&tx_env, &tx).unwrap();
-
-        // make sure we can use both `WithEncoded` and transaction itself as inputs.
-        let res = executor.execute_transaction(&tx);
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        match err {
-            BlockExecutionError::Validation(BlockValidationError::Other(err)) => {
-                assert_eq!(
-                    err.to_string(),
-                    OpBlockExecutionError::TransactionDaFootprintAboveGasLimit {
-                        transaction_da_footprint: expected_da_footprint,
-                        available_block_da_footprint: GAS_LIMIT,
-                    }
-                    .to_string(),
-                );
-            }
-            _ => panic!("expected TransactionDaFootprintAboveGasLimit error"),
-        }
-    }
-
-    #[test]
-    fn test_jovian_da_footprint_estimation_maxed_out_da_footprint() {
-        const DA_FOOTPRINT_GAS_SCALAR: u16 = 2000;
-        const JOVIAN_TIMESTAMP: u64 = 1746806402;
-        const GAS_LIMIT: u64 = 200_000;
-
-        let mut db = prepare_jovian_db(DA_FOOTPRINT_GAS_SCALAR);
-        let op_chain_hardforks = OpChainHardforks::new(
-            OpHardfork::op_mainnet()
-                .into_iter()
-                .chain(vec![(OpHardfork::Jovian, ForkCondition::Timestamp(JOVIAN_TIMESTAMP))]),
-        );
-
-        let receipt_builder = OpAlloyReceiptBuilder::default();
-        let mut executor = build_executor(
-            &mut db,
-            &receipt_builder,
-            &op_chain_hardforks,
-            GAS_LIMIT,
-            JOVIAN_TIMESTAMP,
-        );
-
-        let tx_inner = TxLegacy { gas_limit: GAS_LIMIT, ..Default::default() };
-
-        let tx = Recovered::new_unchecked(
-            OpTxEnvelope::Legacy(tx_inner.into_signed(Signature::new(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            ))),
-            Address::ZERO,
-        );
-        let tx_env = tx.to_tx_env();
-
-        assert!(executor.da_footprint_used == 0);
-
-        let expected_da_footprint = executor.jovian_da_footprint_estimation(&tx_env, &tx).unwrap();
-
-        // make sure we can use both `WithEncoded` and transaction itself as inputs.
-        let gas_used_tx = executor.execute_transaction(&tx).expect("failed to execute transaction");
-
-        // The gas used when executing the transaction should be the legacy value...
-        assert!(gas_used_tx < expected_da_footprint);
-
-        // The gas used when finishing the executor should be the DA footprint since this is higher
-        // than the legacy gas used and jovian is active...
-        let (_, result) = executor.finish().expect("failed to finish executor");
-        assert_eq!(result.blob_gas_used, expected_da_footprint);
-        assert_eq!(result.gas_used, gas_used_tx);
-        assert!(result.blob_gas_used > result.gas_used);
-    }
-}
+mod tests;

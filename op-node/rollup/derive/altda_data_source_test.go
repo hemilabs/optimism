@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
@@ -119,7 +120,7 @@ func TestAltDADataSource(t *testing.T) {
 		l1Refs = append(l1Refs, ref)
 		logger.Info("new l1 block", "ref", ref)
 		// called for each l1 block to sync challenges
-		l1F.ExpectFetchReceipts(ref.Hash, nil, types.Receipts{}, nil)
+		l1F.ExpectFetchReceipts(ref.Hash, nil, optypes.Receipts{}, nil)
 
 		// pick a random number of commitments to include in the l1 block
 		c := rng.Intn(4)
@@ -171,7 +172,7 @@ func TestAltDADataSource(t *testing.T) {
 		}
 
 		// create a new data source for each block
-		src, err := factory.OpenData(ctx, ref, batcherAddr)
+		src, err := factory.OpenData(ctx, ref, batcherAddr, false)
 		require.NoError(t, err)
 
 		// first challenge expires
@@ -207,7 +208,7 @@ func TestAltDADataSource(t *testing.T) {
 			logger.Info("re deriving block", "ref", ref, "i", i)
 
 			if i == len(l1Refs)-1 {
-				l1F.ExpectFetchReceipts(ref.Hash, nil, types.Receipts{}, nil)
+				l1F.ExpectFetchReceipts(ref.Hash, nil, optypes.Receipts{}, nil)
 			}
 			// once past the l1 head, continue generating new l1 refs
 		} else {
@@ -222,7 +223,7 @@ func TestAltDADataSource(t *testing.T) {
 			l1Refs = append(l1Refs, ref)
 			logger.Info("new l1 block", "ref", ref)
 			// called for each l1 block to sync challenges
-			l1F.ExpectFetchReceipts(ref.Hash, nil, types.Receipts{}, nil)
+			l1F.ExpectFetchReceipts(ref.Hash, nil, optypes.Receipts{}, nil)
 
 			// pick a random number of commitments to include in the l1 block
 			c := rng.Intn(4)
@@ -257,7 +258,7 @@ func TestAltDADataSource(t *testing.T) {
 		}
 
 		// create a new data source for each block
-		src, err := factory.OpenData(ctx, ref, batcherAddr)
+		src, err := factory.OpenData(ctx, ref, batcherAddr, false)
 		require.NoError(t, err)
 
 		// next challenge expires
@@ -352,7 +353,7 @@ func TestAltDADataSourceStall(t *testing.T) {
 		ParentHash: parent.Hash,
 		Time:       parent.Time + l1Time,
 	}
-	l1F.ExpectFetchReceipts(ref.Hash, nil, types.Receipts{}, nil)
+	l1F.ExpectFetchReceipts(ref.Hash, nil, optypes.Receipts{}, nil)
 	// mock input commitments in l1 transactions
 	input := testutils.RandomData(rng, 2000)
 	comm, _ := storage.SetInput(ctx, input)
@@ -379,7 +380,7 @@ func TestAltDADataSourceStall(t *testing.T) {
 	// next block is fetched to look ahead challenges but is not yet available
 	l1F.ExpectL1BlockRefByNumber(ref.Number+1, eth.L1BlockRef{}, ethereum.NotFound)
 
-	src, err := factory.OpenData(ctx, ref, batcherAddr)
+	src, err := factory.OpenData(ctx, ref, batcherAddr, false)
 	require.NoError(t, err)
 
 	// data is not found so we return a temporary error
@@ -392,7 +393,7 @@ func TestAltDADataSourceStall(t *testing.T) {
 		Hash:   testutils.RandomHash(rng),
 	}
 	l1F.ExpectL1BlockRefByNumber(nextRef.Number, nextRef, nil)
-	l1F.ExpectFetchReceipts(nextRef.Hash, nil, types.Receipts{}, nil)
+	l1F.ExpectFetchReceipts(nextRef.Hash, nil, optypes.Receipts{}, nil)
 
 	// not enough data
 	_, err = src.Next(ctx)
@@ -446,6 +447,7 @@ func TestAltDADataSourceInvalidData(t *testing.T) {
 	batcherPriv := testutils.RandomKey()
 	batcherAddr := crypto.PubkeyToAddress(batcherPriv.PublicKey)
 	batcherInbox := common.Address{42}
+	maxInputSize := uint64(3_000)
 	cfg := &rollup.Config{
 		L1ChainID: big.NewInt(42), // any, for L1Signer
 		Genesis: rollup.Genesis{
@@ -460,6 +462,7 @@ func TestAltDADataSourceInvalidData(t *testing.T) {
 			DAChallengeWindow: pcfg.ChallengeWindow,
 			DAResolveWindow:   pcfg.ResolveWindow,
 			CommitmentType:    altda.KeccakCommitmentString,
+			MaxInputSize:      &maxInputSize,
 		},
 	}
 
@@ -475,9 +478,9 @@ func TestAltDADataSourceInvalidData(t *testing.T) {
 		ParentHash: parent.Hash,
 		Time:       parent.Time + l1Time,
 	}
-	l1F.ExpectFetchReceipts(ref.Hash, nil, types.Receipts{}, nil)
+	l1F.ExpectFetchReceipts(ref.Hash, nil, optypes.Receipts{}, nil)
 	// mock input commitments in l1 transactions with an oversized input
-	input := testutils.RandomData(rng, altda.MaxInputSize+1)
+	input := testutils.RandomData(rng, int(maxInputSize)+1)
 	comm, _ := storage.SetInput(ctx, input)
 
 	tx1, err := types.SignNewTx(batcherPriv, signer, &types.DynamicFeeTx{
@@ -525,7 +528,7 @@ func TestAltDADataSourceInvalidData(t *testing.T) {
 
 	l1F.ExpectInfoAndTxsByHash(ref.Hash, testutils.RandomBlockInfo(rng), txs, nil)
 
-	src, err := factory.OpenData(ctx, ref, batcherAddr)
+	src, err := factory.OpenData(ctx, ref, batcherAddr, false)
 	require.NoError(t, err)
 
 	// oversized input is skipped and returns input2 directly

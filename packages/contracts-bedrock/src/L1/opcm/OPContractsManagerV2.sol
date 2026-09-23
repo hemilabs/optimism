@@ -23,7 +23,6 @@ import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
 import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 import { IOptimismPortal2 as IOptimismPortal } from "interfaces/L1/IOptimismPortal2.sol";
-import { IOptimismPortalInterop } from "interfaces/L1/IOptimismPortalInterop.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
 import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.sol";
 import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
@@ -145,6 +144,9 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     /// @notice Thrown when an invalid upgrade input is provided.
     error OPContractsManagerV2_InvalidUpgradeInput();
 
+    /// @notice Thrown when ETHLockbox feature state is inconsistent with loaded contracts.
+    error OPContractsManagerV2_InvalidEthLockbox();
+
     /// @notice Thrown when an invalid upgrade instruction is provided.
     error OPContractsManagerV2_InvalidUpgradeInstruction(string _key);
 
@@ -154,8 +156,8 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     /// @notice Thrown when an invalid upgrade sequence is provided.
     error OPContractsManagerV2_InvalidUpgradeSequence(string _lastVersion, string _thisVersion);
 
-    /// @notice Container of blueprint and implementation contract addresses.
-    IOPContractsManagerContainer public immutable contractsContainer;
+    /// @notice Thrown when an enabled game type resolves to a zero implementation in the container.
+    error OPContractsManagerV2_ZeroGameImplementation(GameType _gameType);
 
     /// @notice Address of the Standard Validator for this OPCM release.
     IOPContractsManagerStandardValidator public immutable opcmStandardValidator;
@@ -169,9 +171,9 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     ///         - Major bump: New required sequential upgrade
     ///         - Minor bump: Replacement OPCM for same upgrade
     ///         - Patch bump: Development changes (expected for normal dev work)
-    /// @custom:semver 7.0.1
+    /// @custom:semver 8.0.3
     function version() public pure returns (string memory) {
-        return "7.0.1";
+        return "8.0.3";
     }
 
     /// @param _contractsContainer The container of blueprint and implementation contract addresses.
@@ -236,6 +238,8 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
     }
 
     /// @notice Upgrades a chain based on the upgrade input.
+    /// @dev This function only performs standard contract upgrades. Interop activation is a
+    ///      one-off migration step handled by OPContractsManagerMigrator.migrate().
     /// @param _inp The chain upgrade input.
     /// @return The upgraded chain contracts.
     function upgrade(UpgradeInput memory _inp) external returns (ChainContracts memory) {
@@ -304,17 +308,18 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
         // developers start working on the next release this will automatically become false so
         // even if the code is somehow forgotten it will not actually apply to the deployment. Make
         // sure to REMOVE the allowance once the upgrade is complete.
-        if (SemverComp.lt(_version(), "8.0.0")) {
-            // Unified DelayedWETH is being deployed for the first time.
-            // TODO:(#18382): Remove this allowance after unified DelayedWETH is deployed.
-            if (_isMatchingInstruction(_instruction, Constants.PERMITTED_PROXY_DEPLOYMENT_KEY, "DelayedWETH")) {
-                return true;
+        if (SemverComp.lt(_version(), "9.0.0")) {
+            // Super root games migration requires overriding anchor root.
+            if (isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION)) {
+                if (_isMatchingInstructionByKey(_instruction, "overrides.cfg.startingAnchorRoot")) return true;
             }
-            // Custom Gas Token is being enabled for the first time.
-            // TODO:(#18502): Remove this allowance after U18 ships.
-            if (_isMatchingInstructionByKey(_instruction, "overrides.cfg.useCustomGasToken")) {
-                return true;
-            }
+        }
+
+        // Allow overriding the starting respected game type during upgrades. This is needed when
+        // disabling the currently-respected game type, since the validation requires the starting
+        // respected game type to correspond to an enabled game config.
+        if (_isMatchingInstructionByKey(_instruction, "overrides.cfg.startingRespectedGameType")) {
+            return true;
         }
 
         // Always return false by default.
@@ -645,23 +650,49 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
 
     /// @notice Validates the deployment/upgrade config.
     /// @param _cfg The full config.
-    function _assertValidFullConfig(FullConfig memory _cfg) internal pure {
-        // Start validating the dispute game configs. Put allowed game types here.
-        GameType[] memory validGameTypes = new GameType[](3);
+    /// @param _isInitialDeployment Whether or not this is an initial deployment.
+    function _assertValidFullConfig(FullConfig memory _cfg, bool _isInitialDeployment) internal view {
+        // All valid game types. StandardValidator is responsible for rejecting game types that
+        // should not be used in a given mode (e.g., legacy types in super root mode).
+        GameType[] memory validGameTypes = new GameType[](6);
         validGameTypes[0] = GameTypes.CANNON;
         validGameTypes[1] = GameTypes.PERMISSIONED_CANNON;
         validGameTypes[2] = GameTypes.CANNON_KONA;
+        validGameTypes[3] = GameTypes.SUPER_PERMISSIONED;
+        validGameTypes[4] = GameTypes.SUPER_CANNON_KONA;
+        validGameTypes[5] = GameTypes.ZK_DISPUTE_GAME;
 
         // We must have a config for each valid game type.
         if (_cfg.disputeGameConfigs.length != validGameTypes.length) {
             revert OPContractsManagerV2_InvalidGameConfigs();
         }
 
-        // Simplest possible check, iterate over each provided config and confirm that it matches
-        // the game type array. This places a requirement on the user to order the configs properly
-        // but that's probably a good thing, keeps the config consistent.
+        // An initial anchor must have a nonzero root and leave room for a uint64 successor.
+        if (
+            _isInitialDeployment
+                && (
+                    _cfg.startingAnchorRoot.root.raw() == bytes32(0)
+                        || _cfg.startingAnchorRoot.l2SequenceNumber >= type(uint64).max
+                )
+        ) {
+            revert OPContractsManagerV2_InvalidGameConfigs();
+        }
+
+        bool superRootGamesMigrationEnabled = isDevFeatureEnabled(DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+
+        // Iterate over each provided config and confirm that it matches the game type array.
+        // This places a requirement on the user to order the configs properly but that's
+        // probably a good thing, keeps the config consistent.
         for (uint256 i = 0; i < _cfg.disputeGameConfigs.length; i++) {
-            if (_cfg.disputeGameConfigs[i].gameType.raw() != validGameTypes[i].raw()) {
+            uint32 rawGameType = validGameTypes[i].raw();
+            bool isCannonGame = rawGameType == GameTypes.CANNON.raw();
+            bool isPermissionedCannonGame = rawGameType == GameTypes.PERMISSIONED_CANNON.raw();
+            bool isCannonKonaGame = rawGameType == GameTypes.CANNON_KONA.raw();
+            bool isSuperPermissionedGame = rawGameType == GameTypes.SUPER_PERMISSIONED.raw();
+            bool isSuperCannonKonaGame = rawGameType == GameTypes.SUPER_CANNON_KONA.raw();
+            bool isZkDisputeGame = rawGameType == GameTypes.ZK_DISPUTE_GAME.raw();
+
+            if (_cfg.disputeGameConfigs[i].gameType.raw() != rawGameType) {
                 revert OPContractsManagerV2_InvalidGameConfigs();
             }
 
@@ -669,13 +700,63 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             if (!_cfg.disputeGameConfigs[i].enabled && _cfg.disputeGameConfigs[i].initBond != 0) {
                 revert OPContractsManagerV2_InvalidGameConfigs();
             }
-        }
 
-        // We currently REQUIRE that the PermissionedDisputeGame is enabled. We may be able to
-        // remove this check at some point in the future if we stop making this assumption, but for
-        // now we explicitly assert that it is enabled.
-        if (!_cfg.disputeGameConfigs[1].enabled) {
-            revert OPContractsManagerV2_InvalidGameConfigs();
+            if (isSuperPermissionedGame && _cfg.disputeGameConfigs[i].initBond != 0) {
+                revert OPContractsManagerV2_InvalidGameConfigs();
+            }
+
+            // If game is enabled, we must have a non-zero init bond, except
+            // SUPER_PERMISSIONED which does not use bonds.
+            if (
+                !isSuperPermissionedGame && _cfg.disputeGameConfigs[i].enabled
+                    && _cfg.disputeGameConfigs[i].initBond == 0
+            ) {
+                revert OPContractsManagerV2_InvalidGameConfigs();
+            }
+
+            // Initial deployments must select game types compatible with the active mode.
+            // Upgrade inputs define their game types. Super root migration removes output root support.
+            // DeployOPChain adds the permissioned fallback. StandardValidator checks it. OPCM does not require it.
+            bool validForInitialDeploy = superRootGamesMigrationEnabled
+                ? (isSuperPermissionedGame || isSuperCannonKonaGame)
+                : (isPermissionedCannonGame || isCannonKonaGame);
+            if (_isInitialDeployment && _cfg.disputeGameConfigs[i].enabled && !validForInitialDeploy) {
+                revert OPContractsManagerV2_InvalidGameConfigs();
+            }
+
+            // ZK_DISPUTE_GAME can only be enabled when the dev flag is on (upgrade path).
+            if (
+                isZkDisputeGame && _cfg.disputeGameConfigs[i].enabled
+                    && !isDevFeatureEnabled(DevFeatures.ZK_DISPUTE_GAME)
+            ) {
+                revert OPContractsManagerV2_InvalidGameConfigs();
+            }
+
+            if (_cfg.disputeGameConfigs[i].enabled && (isCannonGame || isCannonKonaGame || isSuperCannonKonaGame)) {
+                if (
+                    _isInitialDeployment
+                        && _cfg.startingAnchorRoot.root.raw() == Constants.PLACEHOLDER_STARTING_ANCHOR_ROOT
+                ) {
+                    revert OPContractsManagerV2_InvalidGameConfigs();
+                }
+
+                // If a permissionless game is being enabled the prestate must be not empty, otherwise revert.
+                IOPContractsManagerUtils.FaultDisputeGameConfig memory faultGameConfig =
+                    abi.decode(_cfg.disputeGameConfigs[i].gameArgs, (IOPContractsManagerUtils.FaultDisputeGameConfig));
+                if (faultGameConfig.absolutePrestate.raw() == bytes32(0)) {
+                    revert OPContractsManagerV2_InvalidGameConfigs();
+                }
+            }
+
+            // The ZK game is permissionless too, and its absolute prestate is the verification key
+            // the proof is checked against, so an empty prestate makes the game unplayable.
+            if (_cfg.disputeGameConfigs[i].enabled && isZkDisputeGame) {
+                IOPContractsManagerUtils.ZKDisputeGameConfig memory zkGameConfig =
+                    abi.decode(_cfg.disputeGameConfigs[i].gameArgs, (IOPContractsManagerUtils.ZKDisputeGameConfig));
+                if (zkGameConfig.absolutePrestate.raw() == bytes32(0)) {
+                    revert OPContractsManagerV2_InvalidGameConfigs();
+                }
+            }
         }
     }
 
@@ -719,24 +800,19 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             _cts.proxyAdmin, address(_cts.systemConfig), impls.systemConfigImpl, _makeSystemConfigInitArgs(_cfg, _cts)
         );
 
-        // Update the OptimismPortal.
-        if (isDevFeatureEnabled(DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
-            _upgrade(
-                _cts.proxyAdmin,
-                address(_cts.optimismPortal),
-                impls.optimismPortalInteropImpl,
-                abi.encodeCall(
-                    IOptimismPortalInterop.initialize, (_cts.systemConfig, _cts.anchorStateRegistry, _cts.ethLockbox)
-                )
-            );
-        } else {
-            _upgrade(
-                _cts.proxyAdmin,
-                address(_cts.optimismPortal),
-                impls.optimismPortalImpl,
-                abi.encodeCall(IOptimismPortal.initialize, (_cts.systemConfig, _cts.anchorStateRegistry))
-            );
+        // Update the OptimismPortal. If a chain already uses ETHLockbox, preserve that lockbox
+        // during standard upgrades. New interop lockbox activation is performed by migrate().
+        bool isEthLockboxEnabled = _cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX);
+        if (isEthLockboxEnabled && address(_cts.ethLockbox) == address(0)) {
+            revert OPContractsManagerV2_InvalidEthLockbox();
         }
+        IETHLockbox portalLockbox = isEthLockboxEnabled ? _cts.ethLockbox : IETHLockbox(address(0));
+        _upgrade(
+            _cts.proxyAdmin,
+            address(_cts.optimismPortal),
+            impls.optimismPortalImpl,
+            abi.encodeCall(IOptimismPortal.initialize, (_cts.systemConfig, _cts.anchorStateRegistry, portalLockbox))
+        );
 
         // NOTE: Same general pattern, we call _upgrade for each contract rather than
         // iterating over some sort of array because it's easier to implement and understand.
@@ -750,20 +826,10 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
                 _cts.proxyAdmin,
                 address(_cts.ethLockbox),
                 impls.ethLockboxImpl,
-                abi.encodeCall(IETHLockbox.initialize, (_cts.systemConfig, portals))
+                abi.encodeCall(
+                    IETHLockbox.initialize, (_systemConfigFor(_cts.systemConfig, address(_cts.ethLockbox)), portals)
+                )
             );
-        }
-
-        // If interop was requested, also set the ETHLockbox feature and migrate liquidity into the
-        // ETHLockbox contract.
-        if (isDevFeatureEnabled(DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
-            // If we haven't already enabled the ETHLockbox, enable it.
-            if (!_cts.systemConfig.isFeatureEnabled(Features.ETH_LOCKBOX)) {
-                _cts.systemConfig.setFeature(Features.ETH_LOCKBOX, true);
-            }
-
-            // Migrate any ETH into the ETHLockbox.
-            IOptimismPortalInterop(payable(_cts.optimismPortal)).migrateLiquidity();
         }
 
         // Update the L1CrossDomainMessenger.
@@ -814,7 +880,7 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             _cts.proxyAdmin,
             address(_cts.delayedWETH),
             impls.delayedWETHImpl,
-            abi.encodeCall(IDelayedWETH.initialize, (_cts.systemConfig))
+            abi.encodeCall(IDelayedWETH.initialize, (_systemConfigFor(_cts.systemConfig, address(_cts.delayedWETH))))
         );
 
         // Update the AnchorStateRegistry.
@@ -824,7 +890,12 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             impls.anchorStateRegistryImpl,
             abi.encodeCall(
                 IAnchorStateRegistry.initialize,
-                (_cts.systemConfig, _cts.disputeGameFactory, _cfg.startingAnchorRoot, _cfg.startingRespectedGameType)
+                (
+                    _systemConfigFor(_cts.systemConfig, address(_cts.anchorStateRegistry)),
+                    _cts.disputeGameFactory,
+                    _cfg.startingAnchorRoot,
+                    _cfg.startingRespectedGameType
+                )
             )
         );
 
@@ -840,7 +911,12 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             // If the game is enabled, grab the implementation and craft the game arguments.
             if (_cfg.disputeGameConfigs[i].enabled) {
                 gameImpl = _getGameImpl(_cfg.disputeGameConfigs[i].gameType);
-                gameArgs = _makeGameArgs(_cfg, _cts, _cfg.disputeGameConfigs[i]);
+                if (address(gameImpl) == address(0) || address(gameImpl).code.length == 0) {
+                    revert OPContractsManagerV2_ZeroGameImplementation(_cfg.disputeGameConfigs[i].gameType);
+                }
+                gameArgs = _makeGameArgs(
+                    _cfg.l2ChainId, _cts.anchorStateRegistry, _cts.delayedWETH, _cfg.disputeGameConfigs[i]
+                );
             }
 
             // Set the game implementation and arguments.
@@ -851,6 +927,15 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
                 _cfg.disputeGameConfigs[i].gameType, _cfg.disputeGameConfigs[i].initBond
             );
         }
+
+        // SUPER_CANNON has been retired from OPCMv2's deploy/upgrade allow-list. Some chains may
+        // still have a non-zero gameImpls(SUPER_CANNON) registered from a prior OPCM. Clear it
+        // unconditionally so the post-upgrade state matches the StandardValidator's expectation
+        // (SCDG-SHAPE / SCDG-NOSHAPE both require gameImpls(SUPER_CANNON) == address(0)). On
+        // initial deployment the DisputeGameFactory was just initialized and the slot is already
+        // zero, so this is a no-op state-wise (only emits a redundant event).
+        _cts.disputeGameFactory.setImplementation(GameTypes.SUPER_CANNON, IDisputeGame(address(0)), hex"");
+        _cts.disputeGameFactory.setInitBond(GameTypes.SUPER_CANNON, 0);
 
         // If the custom gas token feature was requested, enable it in the SystemConfig.
         // If the cgt is enabled, we skip this step.
@@ -865,7 +950,7 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
             _cts.systemConfig.setFeature(Features.CUSTOM_GAS_TOKEN, true);
         }
 
-        // If critical transfer is allowed, tranfer ownership of the DisputeGameFactory and
+        // If critical transfer is allowed, transfer ownership of the DisputeGameFactory and
         // ProxyAdmin to the PAO. During deployments, this means transferring ownership from the
         // OPCM contract to the target PAO. During upgrades, this would theoretically mean
         // transferring ownership from the existing PAO to itself, which would be a no-op. In an
@@ -919,7 +1004,6 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
                 _cfg.gasLimit,
                 _cfg.unsafeBlockSigner,
                 _cfg.resourceConfig,
-                _chainIdToBatchInboxAddress(_cfg.l2ChainId),
                 addrs,
                 _cfg.l2ChainId,
                 _cfg.superchainConfig

@@ -1,0 +1,189 @@
+package derive
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"strings"
+
+	"github.com/ethereum-optimism/optimism/op-core/forks"
+	"github.com/ethereum-optimism/optimism/op-core/nuts"
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+)
+
+// Network Upgrade Transactions (NUTs) are read from a JSON file and
+// converted into deposit transactions.
+
+// nutBundleVersion is the only bundle schema version this reader accepts.
+const nutBundleVersion = "1.0.0"
+
+// nutMetadata contains version information for the NUT bundle format.
+type nutMetadata struct {
+	Version string `json:"version"`
+}
+
+// networkUpgradeTransaction defines a single deposit transaction within a NUT bundle.
+type networkUpgradeTransaction struct {
+	Intent   string          `json:"intent"`
+	From     common.Address  `json:"from"`
+	To       *common.Address `json:"to"`
+	Data     hexutil.Bytes   `json:"data"`
+	GasLimit uint64          `json:"gasLimit"`
+}
+
+// nutBundle is the top-level structure of a NUT file.
+type nutBundle struct {
+	ForkName     forks.Name                  `json:"-"`
+	Metadata     nutMetadata                 `json:"metadata"`
+	Transactions []networkUpgradeTransaction `json:"transactions"`
+}
+
+// capitalizeForkName returns the fork name with its first character upper-cased.
+// Mirrors rust/kona/crates/protocol/hardforks/build_helpers.rs::capitalize so the
+// qualified intent strings (and therefore source hashes) agree across implementations.
+func capitalizeForkName(f forks.Name) string {
+	s := string(f)
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// readNUTBundle reads and parses a NUT bundle from an io.Reader. The fork name
+// is used to namespace each transaction's intent when deriving source hashes.
+func readNUTBundle(fork forks.Name, r io.Reader) (*nutBundle, error) {
+	var bundle nutBundle
+	if err := json.NewDecoder(r).Decode(&bundle); err != nil {
+		return nil, fmt.Errorf("failed to parse NUT bundle: %w", err)
+	}
+	if bundle.Metadata.Version != nutBundleVersion {
+		return nil, fmt.Errorf("unsupported NUT bundle version: got %q, want %q", bundle.Metadata.Version, nutBundleVersion)
+	}
+	bundle.ForkName = fork
+	return &bundle, nil
+}
+
+// totalGas returns the sum of gas limits across all transactions in the bundle.
+func (b *nutBundle) totalGas() uint64 {
+	var total uint64
+	for _, tx := range b.Transactions {
+		total += tx.GasLimit
+	}
+	return total
+}
+
+// toDepositTransactions converts the bundle's transactions into serialized deposit transactions.
+func (b *nutBundle) toDepositTransactions() ([]hexutil.Bytes, error) {
+	txs := make([]hexutil.Bytes, 0, len(b.Transactions))
+	for i, nutTx := range b.Transactions {
+		if nutTx.Intent == "" {
+			return nil, fmt.Errorf("tx %d: missing intent", i)
+		}
+
+		// The fork name is capitalized to match kona's NUT bundle codegen
+		// (rust/kona/crates/protocol/hardforks/build_helpers.rs::capitalize),
+		// so both implementations derive the same UpgradeDepositSource hashes.
+		qualifiedIntent := fmt.Sprintf("%s %d: %s", capitalizeForkName(b.ForkName), i, nutTx.Intent)
+		source := UpgradeDepositSource{Intent: qualifiedIntent}
+		depTx := &optypes.DepositTx{
+			SourceHash:          source.SourceHash(),
+			From:                nutTx.From,
+			To:                  nutTx.To,
+			Mint:                big.NewInt(0),
+			Value:               big.NewInt(0),
+			Gas:                 nutTx.GasLimit,
+			IsSystemTransaction: false,
+			Data:                nutTx.Data,
+		}
+
+		encoded, err := depTx.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("tx %d: failed to marshal deposit tx: %w", i, err)
+		}
+		txs = append(txs, encoded)
+	}
+	return txs, nil
+}
+
+// nutBundleForFork loads and parses the embedded NUT bundle for a fork,
+// returning an error for forks that have no bundle.
+func nutBundleForFork(fork forks.Name) (*nutBundle, error) {
+	var bundleJSON []byte
+	// bundleLabel is the concept-level identifier used to qualify intent
+	// strings (and therefore source hashes). It is decoupled from the fork
+	// name so a hard-fork rename (e.g., Interop → Lagoon) does not break
+	// source-hash determinism with kona's bundle codegen, which embeds
+	// the bundle's concept-level name ("interop" → "Interop"). The bundle
+	// file on disk has been renamed to lagoon_nut_bundle.json, but the
+	// label fed into the qualified intent stays "interop" for compat.
+	var bundleLabel forks.Name
+	switch fork {
+	case forks.Karst:
+		bundleJSON = nuts.KarstNUTBundleJSON
+		bundleLabel = forks.Karst
+	case forks.Lagoon:
+		bundleJSON = nuts.LagoonNUTBundleJSON
+		bundleLabel = "interop"
+	default:
+		return nil, fmt.Errorf("no NUT bundle for fork %s", fork)
+	}
+
+	bundle, err := readNUTBundle(bundleLabel, bytes.NewReader(bundleJSON))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s NUT bundle: %w", fork, err)
+	}
+	return bundle, nil
+}
+
+// UpgradeTransactions returns a fork's NUT bundle deposits and the gas its activation block adds
+// to the gas limit. The fork name selects the embedded bundle JSON.
+//
+// The gas is UpgradeGas(fork) rather than the sum of the returned transactions' own gas limits:
+// for Lagoon it also covers the wrapper deposits that only a multi-chain activation emits. Both
+// getters report the same number, so no caller can reserve less than the system config
+// reconstructed from the activation block subtracts again. See UpgradeGas.
+func UpgradeTransactions(fork forks.Name) ([]hexutil.Bytes, uint64, error) {
+	bundle, err := nutBundleForFork(fork)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	txs, err := bundle.toDepositTransactions()
+	if err != nil {
+		return nil, 0, fmt.Errorf("converting %s NUT bundle to deposit txs: %w", fork, err)
+	}
+
+	return txs, upgradeGasForBundle(fork, bundle), nil
+}
+
+// UpgradeGas returns the gas added to a fork's activation block gas limit so its upgrade
+// transactions do not need to fit within the regular block gas limit.
+//
+// For Lagoon this exceeds the NUT bundle's own total: it also reserves gas for the setFeature and
+// ETHLiquidity funding wrappers, which only a multi-chain activation emits (see
+// LagoonActivationUpgradeTransactions). The reservation is unconditional because the system config
+// reconstructed from the activation block must subtract the same amount again for the next block,
+// and that path sees only the rollup config and a timestamp — never the dependency set. A
+// single-chain activation therefore carries the wrapper gas as unused headroom in that one block.
+func UpgradeGas(fork forks.Name) (uint64, error) {
+	bundle, err := nutBundleForFork(fork)
+	if err != nil {
+		return 0, err
+	}
+	return upgradeGasForBundle(fork, bundle), nil
+}
+
+// upgradeGasForBundle is the single definition of a fork's activation-block gas bump: its bundle's
+// own total, plus for Lagoon the gas its wrapper deposits occupy. Both UpgradeTransactions and
+// UpgradeGas route through here so the two can never disagree.
+func upgradeGasForBundle(fork forks.Name, bundle *nutBundle) uint64 {
+	gas := bundle.totalGas()
+	if fork == forks.Lagoon {
+		gas += interopWrapperGas()
+	}
+	return gas
+}

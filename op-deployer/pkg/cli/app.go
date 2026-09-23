@@ -6,7 +6,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/clean"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/inspect"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/manage"
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/upgrade"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/validate"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
@@ -35,16 +35,28 @@ func NewApp(versionWithMeta string) *cli.App {
 			Action: deployer.InitCLI(),
 		},
 		{
-			Name:   "apply",
-			Usage:  "applies a chain intent to the chain",
-			Flags:  cliapp.ProtectFlags(deployer.ApplyFlags),
-			Action: deployer.ApplyCLI(),
+			Name:   "prepare",
+			Usage:  "prepares a chain deployment by generating the genesis artifacts. MUST be called after init",
+			Flags:  cliapp.ProtectFlags(deployer.PrepareFlags),
+			Action: deployer.PrepareCLI(),
 		},
 		{
-			Name:        "upgrade",
-			Usage:       "upgrades contracts by sending tx to OPCM.upgrade function",
-			Flags:       cliapp.ProtectFlags(deployer.UpgradeFlags),
-			Subcommands: upgrade.Commands,
+			Name:   "prestate",
+			Usage:  "commits absolute prestate hashes to state",
+			Flags:  cliapp.ProtectFlags(deployer.PrestateFlags),
+			Action: deployer.PrestateCLI(),
+		},
+		{
+			Name:   "continue",
+			Usage:  "broadcasts and validates already-prepared chain deployments",
+			Flags:  cliapp.ProtectFlags(deployer.ContinueFlags),
+			Action: deployer.ContinueCLI(),
+		},
+		{
+			Name:   "apply",
+			Usage:  "applies a chain intent to the chain. MUST NOT be used on an intent on which `prepare` was already used",
+			Flags:  cliapp.ProtectFlags(deployer.ApplyFlags),
+			Action: deployer.ApplyCLI(),
 		},
 		{
 			Name:        "bootstrap",
@@ -63,7 +75,7 @@ func NewApp(versionWithMeta string) *cli.App {
 		},
 		{
 			Name:   "verify",
-			Usage:  "verifies deployed contracts on Etherscan",
+			Usage:  "verifies deployed contracts with contract explorers",
 			Flags:  cliapp.ProtectFlags(deployer.VerifyFlags),
 			Action: verify.VerifyCLI,
 		},
@@ -71,6 +83,11 @@ func NewApp(versionWithMeta string) *cli.App {
 			Name:        "manage",
 			Usage:       "manages the chain",
 			Subcommands: manage.Commands,
+		},
+		{
+			Name:        "validate",
+			Usage:       "validates chain configuration and deployment",
+			Subcommands: validate.Commands(),
 		},
 	}
 	return app

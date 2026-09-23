@@ -140,13 +140,16 @@ func NewClaimStatus(firstHalf, clockExpired, resolvable, resolved bool) ClaimSta
 	}
 }
 
-type HonestActorData struct {
+type HonestActorClaimData struct {
 	PendingClaimCount int
 	ValidClaimCount   int
 	InvalidClaimCount int
-	PendingBonds      *big.Int
-	LostBonds         *big.Int
-	WonBonds          *big.Int
+}
+
+type HonestActorBondData struct {
+	Pending *big.Int
+	Lost    *big.Int
+	Won     *big.Int
 }
 
 type Metricer interface {
@@ -157,7 +160,8 @@ type Metricer interface {
 
 	RecordFailedGames(count int)
 
-	RecordHonestActorClaims(address common.Address, stats *HonestActorData)
+	RecordHonestActorClaims(address common.Address, stats *HonestActorClaimData)
+	RecordHonestActorBonds(address common.Address, stats *HonestActorBondData)
 
 	RecordGameResolutionStatus(status ResolutionStatus, count int)
 
@@ -197,6 +201,13 @@ type Metricer interface {
 
 	RecordOldestGameUpdateTime(t time.Time)
 
+	RecordGameTypes(gameTypeCounts map[string]int)
+	RecordGamesWaitingForRootSource(gameTypeCounts map[string]int)
+
+	RecordAnchorStateL2SequenceNumber(anchorStateRegistry common.Address, l2SequenceNumber uint64)
+
+	RecordZKGamesPendingLifecycleActions(resolution, bondDistribution int)
+
 	caching.Metrics
 	contractMetrics.ContractMetricer
 	opmetrics.RPCMetricer
@@ -234,12 +245,13 @@ type Metrics struct {
 	lastOutputFetch      prometheus.Gauge
 	oldestGameUpdateTime prometheus.Gauge
 
-	gamesAgreement             prometheus.GaugeVec
-	latestValidProposalL2Block prometheus.Gauge
-	latestProposals            prometheus.GaugeVec
-	ignoredGames               prometheus.Gauge
-	failedGames                prometheus.Gauge
-	l2Challenges               prometheus.GaugeVec
+	gamesAgreement              prometheus.GaugeVec
+	latestValidProposalL2Block  prometheus.Gauge
+	latestProposals             prometheus.GaugeVec
+	anchorStateL2SequenceNumber prometheus.GaugeVec
+	ignoredGames                prometheus.Gauge
+	failedGames                 prometheus.Gauge
+	l2Challenges                prometheus.GaugeVec
 
 	requiredCollateral         prometheus.GaugeVec
 	availableCollateral        prometheus.GaugeVec
@@ -248,7 +260,10 @@ type Metrics struct {
 	nodeEndpointOutOfSyncCount prometheus.Gauge
 	mixedAvailabilityGames     prometheus.Gauge
 	mixedSafetyGames           prometheus.Gauge
-	differentOutputRootGames   prometheus.Gauge
+	differentRootGames         prometheus.Gauge
+	gameTypes                  prometheus.GaugeVec
+	gamesWaitingForRootSource  prometheus.GaugeVec
+	zkGamesPendingLifecycle    prometheus.GaugeVec
 }
 
 func (m *Metrics) Registry() *prometheus.Registry {
@@ -351,7 +366,7 @@ func NewMetrics() *Metrics {
 		withdrawalRequests: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
 			Name:      "withdrawal_requests",
-			Help:      "Number of withdrawal requests categorised by the source DelayedWETH contract and whether the withdrawal request amount matches or diverges from its fault dispute game credits",
+			Help:      "Number of withdrawal requests categorised by the source DelayedWETH contract and whether the withdrawal request amount matches or diverges from its dispute game credits",
 		}, []string{
 			"delayedWETH",
 			"credits",
@@ -370,6 +385,14 @@ func NewMetrics() *Metrics {
 			Namespace: Namespace,
 			Name:      "latest_valid_proposal_l2_block",
 			Help:      "L2 block number proposed by the latest game with a valid root claim",
+		}),
+		anchorStateL2SequenceNumber: *factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "anchor_state_l2_sequence_number",
+			Help:      "L2 sequence number of the current anchor state in the AnchorStateRegistry",
+		}, []string{
+			// Address of the AnchorStateRegistry. A small, controlled set (typically one per chain).
+			"anchor_state_registry",
 		}),
 		latestProposals: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
@@ -446,6 +469,27 @@ func NewMetrics() *Metrics {
 			Name:      "different_output_root_games",
 			Help:      "Number of games where rollup nodes returned different output roots for the same L2 block in the last update cycle",
 		}),
+		gameTypes: *factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "games",
+			Help:      "Number of games in the monitoring window broken down by game type",
+		}, []string{
+			"game_type",
+		}),
+		gamesWaitingForRootSource: *factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "games_waiting_for_root_source",
+			Help:      "Number of games whose extraction is deferred while root sources catch up, broken down by game type",
+		}, []string{
+			"game_type",
+		}),
+		zkGamesPendingLifecycle: *factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "zk_games_pending_lifecycle_action",
+			Help:      "Number of ZK dispute games awaiting an honest lifecycle action",
+		}, []string{
+			"action",
+		}),
 	}
 }
 
@@ -476,14 +520,16 @@ func (m *Metrics) RecordMonitorDuration(dur time.Duration) {
 	m.monitorDuration.Observe(dur.Seconds())
 }
 
-func (m *Metrics) RecordHonestActorClaims(address common.Address, stats *HonestActorData) {
+func (m *Metrics) RecordHonestActorClaims(address common.Address, stats *HonestActorClaimData) {
 	m.honestActorClaims.WithLabelValues(address.Hex(), "pending").Set(float64(stats.PendingClaimCount))
 	m.honestActorClaims.WithLabelValues(address.Hex(), "invalid").Set(float64(stats.InvalidClaimCount))
 	m.honestActorClaims.WithLabelValues(address.Hex(), "valid").Set(float64(stats.ValidClaimCount))
+}
 
-	m.honestActorBonds.WithLabelValues(address.Hex(), "pending").Set(weiToEther(stats.PendingBonds))
-	m.honestActorBonds.WithLabelValues(address.Hex(), "lost").Set(weiToEther(stats.LostBonds))
-	m.honestActorBonds.WithLabelValues(address.Hex(), "won").Set(weiToEther(stats.WonBonds))
+func (m *Metrics) RecordHonestActorBonds(address common.Address, stats *HonestActorBondData) {
+	m.honestActorBonds.WithLabelValues(address.Hex(), "pending").Set(weiToEther(stats.Pending))
+	m.honestActorBonds.WithLabelValues(address.Hex(), "lost").Set(weiToEther(stats.Lost))
+	m.honestActorBonds.WithLabelValues(address.Hex(), "won").Set(weiToEther(stats.Won))
 }
 
 func (m *Metrics) RecordGameResolutionStatus(status ResolutionStatus, count int) {
@@ -573,6 +619,15 @@ func (m *Metrics) RecordLatestValidProposalL2Block(latestValid uint64) {
 func (m *Metrics) RecordLatestProposals(latestValid, latestInvalid uint64) {
 	m.latestProposals.WithLabelValues("agree").Set(float64(latestValid))
 	m.latestProposals.WithLabelValues("disagree").Set(float64(latestInvalid))
+}
+
+func (m *Metrics) RecordAnchorStateL2SequenceNumber(anchorStateRegistry common.Address, l2SequenceNumber uint64) {
+	m.anchorStateL2SequenceNumber.WithLabelValues(anchorStateRegistry.Hex()).Set(float64(l2SequenceNumber))
+}
+
+func (m *Metrics) RecordZKGamesPendingLifecycleActions(resolution, bondDistribution int) {
+	m.zkGamesPendingLifecycle.WithLabelValues("resolution").Set(float64(resolution))
+	m.zkGamesPendingLifecycle.WithLabelValues("bond_distribution").Set(float64(bondDistribution))
 }
 
 func (m *Metrics) RecordIgnoredGames(count int) {
@@ -674,6 +729,19 @@ func labelValuesFor(status GameAgreementStatus) []string {
 
 	default:
 		panic(fmt.Errorf("unknown game agreement status: %v", status))
+	}
+}
+
+func (m *Metrics) RecordGameTypes(gameTypeCounts map[string]int) {
+	for gameType, count := range gameTypeCounts {
+		m.gameTypes.WithLabelValues(gameType).Set(float64(count))
+	}
+}
+
+func (m *Metrics) RecordGamesWaitingForRootSource(gameTypeCounts map[string]int) {
+	m.gamesWaitingForRootSource.Reset()
+	for gameType, count := range gameTypeCounts {
+		m.gamesWaitingForRootSource.WithLabelValues(gameType).Set(float64(count))
 	}
 }
 

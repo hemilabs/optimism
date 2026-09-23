@@ -7,6 +7,8 @@ test args='./...': build-contracts copy-contract-artifacts
 
 build-contracts:
   just ../packages/contracts-bedrock/build-no-tests
+  # In-process devstack genesis tests explicitly opt into this mock verifier.
+  just ../packages/contracts-bedrock/forge-build test/dispute/zk/MockSP1Verifier.sol
 
 copy-contract-artifacts:
     #!/bin/bash
@@ -70,7 +72,6 @@ check-forge-version:
 export ROOT_DIR := parent_directory(justfile_directory())
 export DEFAULT_LOCATOR := "embedded"
 export NETWORK := env_var_or_default("NETWORK", "sepolia")
-export PROTOCOL_VERSIONS_PROXY := if NETWORK == "mainnet" { "0x8062AbC286f5e7D9428a0Ccb9AbD71e50d93b935" } else if NETWORK == "sepolia" { "0x79ADD5713B383DAa0a138d3C4780C7A1804a8090" } else { "" }
 export SUPERCHAIN_CONFIG_PROXY := if NETWORK == "mainnet" { "0x95703e0982140D16f8ebA6d158FccEde42f04a4C" } else if NETWORK == "sepolia" { "0xC2Be75506d5724086DEB7245bd260Cc9753911Be" } else { "" }
 export SUPERCHAIN_PROXY_ADMIN := if NETWORK == "mainnet" { "0x543ba4aadbab8f9025686bd03993043599c6fb04" } else if NETWORK == "sepolia" { "0x189abaaaa82dfc015a588a7dbad6f13b1d3485bc" } else { "" }
 export L1_PROXY_ADMIN_OWNER := if NETWORK == "mainnet" { "0x5a0Aae59D09fccBdDb6C6CcEB07B7279367C3d2A" } else if NETWORK == "sepolia" { "0x1Eb2fFc903729a0F03966B917003800b145F56E2" } else { "" }
@@ -91,17 +92,24 @@ pre-deploy: build build-contracts
 
 # Run with:
 # PRIVATE_KEY=0x1234.... NETWORK=sepolia just deploy-opcm
+# Set DEV_FEATURE_BITMAP when deploying a ZK-enabled OPCM release. Set SP1_VERIFIER_ADDRESS only to
+# override the network default or when deploying to a network without one.
 deploy-opcm locator="$DEFAULT_LOCATOR": _validate_rpc
   #!/bin/bash
   echo "Using artifacts locator: {{locator}}"
+  sp1_verifier_args=()
+  if [ -n "${SP1_VERIFIER_ADDRESS:-}" ]; then
+    sp1_verifier_args+=(--sp1-verifier-address "$SP1_VERIFIER_ADDRESS")
+  fi
   go run ./cmd/op-deployer bootstrap implementations \
     --l1-rpc-url $ETH_RPC_URL \
     --private-key $PRIVATE_KEY \
-    --protocol-versions-proxy $PROTOCOL_VERSIONS_PROXY \
     --superchain-config-proxy $SUPERCHAIN_CONFIG_PROXY \
     --upgrade-controller $L1_PROXY_ADMIN_OWNER \
     --superchain-proxy-admin $SUPERCHAIN_PROXY_ADMIN \
     --challenger $CHALLENGER \
+    --dev-feature-bitmap ${DEV_FEATURE_BITMAP:-0x0000000000000000000000000000000000000000000000000000000000000000} \
+    "${sp1_verifier_args[@]}" \
     --outfile deploy-${NETWORK}.json
 
 # Verifies the OPCM and the associated implementations contracts on Etherscan.

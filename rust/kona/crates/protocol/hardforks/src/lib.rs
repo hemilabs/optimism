@@ -9,6 +9,9 @@
 
 extern crate alloc;
 
+#[macro_use]
+mod nut_bundle;
+
 mod traits;
 pub use traits::Hardfork;
 
@@ -24,8 +27,8 @@ pub use ecotone::Ecotone;
 mod isthmus;
 pub use isthmus::Isthmus;
 
-mod interop;
-pub use interop::Interop;
+mod lagoon;
+pub use lagoon::Lagoon;
 
 mod jovian;
 pub use jovian::Jovian;

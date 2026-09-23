@@ -6,8 +6,6 @@ import (
 
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	opforks "github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
@@ -42,7 +41,6 @@ type SuperchainConfigurator interface {
 	WithSuperchainConfigProxy(address common.Address) SuperchainConfigurator
 	WithProxyAdminOwner(address common.Address) SuperchainConfigurator
 	WithGuardian(address common.Address) SuperchainConfigurator
-	WithProtocolVersionsOwner(address common.Address) SuperchainConfigurator
 	WithChallenger(address common.Address) SuperchainConfigurator
 }
 
@@ -53,7 +51,6 @@ type L2Configurator interface {
 	WithL1StartBlockHash(hash common.Hash)
 	WithAdditionalDisputeGames(games []state.AdditionalDisputeGame)
 	WithFinalizationPeriodSeconds(value uint64)
-	WithRevenueShare(enabled bool, chainFeesRecipient common.Address)
 	WithCustomGasToken(name string, symbol string, initialLiquidity *big.Int, liquidityControllerOwner common.Address)
 	ContractsConfigurator
 	L2VaultsConfigurator
@@ -62,6 +59,7 @@ type L2Configurator interface {
 	L2HardforkConfigurator
 	WithPrefundedAccount(addr common.Address, amount uint256.Int) L2Configurator
 	WithDAFootprintGasScalar(scalar uint16)
+	WithGasLimit(v uint64)
 }
 
 type ContractsConfigurator interface {
@@ -96,7 +94,10 @@ type L2FeesConfigurator interface {
 
 type L2HardforkConfigurator interface {
 	WithForkAtGenesis(fork opforks.Name)
+	// WithForkAtOffset configures fork to activate at offset. A nil offset
+	// deactivates fork and every subsequent fork, so calls are order-sensitive.
 	WithForkAtOffset(fork opforks.Name, offset *uint64)
+	WithKeepKarstUpgradeGas()
 }
 
 type Builder interface {
@@ -140,7 +141,6 @@ func WithDevkeyL1Roles(t require.TestingT, dk devkeys.Keys, configurator L2Confi
 func WithDevkeySuperRoles(t require.TestingT, dk devkeys.Keys, l1ID eth.ChainID, configurator SuperchainConfigurator) {
 	addrFor := RoleToAddrProvider(t, dk, l1ID)
 	configurator.WithGuardian(addrFor(devkeys.SuperchainConfigGuardianKey))
-	configurator.WithProtocolVersionsOwner(addrFor(devkeys.SuperchainDeployerKey))
 	configurator.WithProxyAdminOwner(addrFor(devkeys.L1ProxyAdminOwnerRole))
 	configurator.WithChallenger(addrFor(devkeys.ChallengerRole))
 }
@@ -272,11 +272,6 @@ func (c *superchainConfigurator) WithGuardian(address common.Address) Superchain
 	return c
 }
 
-func (c *superchainConfigurator) WithProtocolVersionsOwner(address common.Address) SuperchainConfigurator {
-	c.builder.intent.SuperchainRoles.ProtocolVersionsOwner = address
-	return c
-}
-
 func (c *superchainConfigurator) WithChallenger(address common.Address) SuperchainConfigurator {
 	c.builder.intent.SuperchainRoles.Challenger = address
 	return c
@@ -356,9 +351,10 @@ func (c *l1Configurator) WithPrefundedAccount(addr common.Address, amount uint25
 
 func (c *l1Configurator) WithL1ForkAtGenesis(fork forks.Fork) L1Configurator {
 	c.initL1DevGenesisParams()
-	var future bool
+	require.True(c.t, fork >= forks.Cancun && fork <= forks.Amsterdam, "unsupported L1 fork %s", fork)
+	future := fork == forks.Cancun // Cancun is always active in the dev L1 genesis.
 	// NOTE: keep the start and end forks here in sync with WithL1ForkAtOffset.
-	for f := forks.Prague; f <= forks.BPO2; f++ {
+	for f := forks.Prague; f <= forks.Amsterdam; f++ {
 		if future {
 			c.WithL1ForkAtOffset(f, nil)
 		} else {
@@ -372,7 +368,7 @@ func (c *l1Configurator) WithL1ForkAtGenesis(fork forks.Fork) L1Configurator {
 }
 
 func (c *l1Configurator) WithL1ForkAtOffset(fork forks.Fork, offset *uint64) L1Configurator {
-	// NOTE: Keep the first and last forks listed here in sync with the loop in WithL1ForkAtOffset.
+	// NOTE: Keep the first and last forks listed here in sync with the loop in WithL1ForkAtGenesis.
 	switch fork {
 	case forks.Prague:
 		c.builder.intent.L1DevGenesisParams.PragueTimeOffset = offset
@@ -382,6 +378,14 @@ func (c *l1Configurator) WithL1ForkAtOffset(fork forks.Fork, offset *uint64) L1C
 		c.builder.intent.L1DevGenesisParams.BPO1TimeOffset = offset
 	case forks.BPO2:
 		c.builder.intent.L1DevGenesisParams.BPO2TimeOffset = offset
+	case forks.BPO3:
+		c.builder.intent.L1DevGenesisParams.BPO3TimeOffset = offset
+	case forks.BPO4:
+		c.builder.intent.L1DevGenesisParams.BPO4TimeOffset = offset
+	case forks.BPO5:
+		c.builder.intent.L1DevGenesisParams.BPO5TimeOffset = offset
+	case forks.Amsterdam:
+		c.builder.intent.L1DevGenesisParams.AmsterdamTimeOffset = offset
 	default:
 		require.Fail(c.t, "unknown fork", fork.String())
 	}
@@ -496,39 +500,38 @@ func (c *l2Configurator) WithOperatorFeeConstant(value uint64) {
 }
 
 func (c *l2Configurator) WithForkAtGenesis(fork opforks.Name) {
-	var future bool
-	for _, refFork := range opforks.All {
-		if refFork == opforks.Bedrock {
-			continue
-		}
-
-		if future {
-			c.WithForkAtOffset(refFork, nil)
-		} else {
-			c.WithForkAtOffset(refFork, new(uint64))
-		}
-
-		if refFork == fork {
-			future = true
-		}
+	require.True(c.t, opforks.IsValid(fork))
+	overrides, err := genesis.ForkOverridesAtGenesis(fork)
+	require.NoError(c.t, err)
+	for k, v := range overrides {
+		c.builder.intent.Chains[c.chainIndex].DeployOverrides[k] = v
 	}
+}
+
+func (c *l2Configurator) WithKeepKarstUpgradeGas() {
+	c.builder.intent.Chains[c.chainIndex].DeployOverrides["keepKarstUpgradeGas"] = true
 }
 
 func (c *l2Configurator) WithForkAtOffset(fork opforks.Name, offset *uint64) {
 	require.True(c.t, opforks.IsValid(fork))
-	key := fmt.Sprintf("l2Genesis%sTimeOffset", cases.Title(language.English).String(string(fork)))
+	key, ok := genesis.ForkOffsetKey(fork)
+	require.True(c.t, ok, "fork %q has no deploy-config time offset", fork)
 
+	// The typing is important, or op-deployer merge-JSON tricks will fail.
+	//
+	// A nil offset writes an explicit null override rather than removing the key.
+	// Op-deployer merges user overrides over its defaults, so an omitted key
+	// inherits the default schedule.
+	c.builder.intent.Chains[c.chainIndex].DeployOverrides[key] = (*hexutil.Uint64)(offset)
+
+	// If we are deactivating a fork, then we need to also deactivate all subsequent forks.
 	if offset == nil {
-		delete(c.builder.intent.Chains[c.chainIndex].DeployOverrides, key)
-	} else {
-		// The typing is important, or op-deployer merge-JSON tricks will fail
-		c.builder.intent.Chains[c.chainIndex].DeployOverrides[key] = (*hexutil.Uint64)(offset)
+		for _, opFork := range opforks.From(fork) {
+			key, ok := genesis.ForkOffsetKey(opFork)
+			require.True(c.t, ok, "fork %q has no deploy-config time offset", opFork)
+			c.builder.intent.Chains[c.chainIndex].DeployOverrides[key] = (*hexutil.Uint64)(nil)
+		}
 	}
-}
-
-func (c *l2Configurator) WithRevenueShare(enabled bool, chainFeesRecipient common.Address) {
-	c.builder.intent.Chains[c.chainIndex].UseRevenueShare = enabled
-	c.builder.intent.Chains[c.chainIndex].ChainFeesRecipient = chainFeesRecipient
 }
 
 func (c *l2Configurator) initL2DevGenesisParams() *state.L2DevGenesisParams {
@@ -542,6 +545,10 @@ func (c *l2Configurator) initL2DevGenesisParams() *state.L2DevGenesisParams {
 func (c *l2Configurator) WithPrefundedAccount(addr common.Address, amount uint256.Int) L2Configurator {
 	c.initL2DevGenesisParams().Prefund[addr] = (*hexutil.U256)(&amount)
 	return c
+}
+
+func (c *l2Configurator) WithGasLimit(v uint64) {
+	c.builder.intent.Chains[c.chainIndex].GasLimit = v
 }
 
 func (c *l2Configurator) WithAdditionalDisputeGames(games []state.AdditionalDisputeGame) {

@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"errors"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -10,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-core/forks"
+	"github.com/ethereum-optimism/optimism/op-core/interop/depset"
 	"github.com/ethereum-optimism/optimism/op-node/config"
 	"github.com/ethereum-optimism/optimism/op-node/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
@@ -24,7 +26,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/event"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 )
 
 // MockL1OriginSelector is a shim to override the origin as sequencer, so we can force it to stay on an older origin.
@@ -107,10 +108,15 @@ func (s *L2Sequencer) ActL2StartBlock(t Testing) {
 		t.InvalidAction("already started building L2 block")
 		return
 	}
-	s.synchronousEvents.Emit(t.Ctx(), sequencing.SequencerActionEvent{})
-	require.NoError(t, s.drainer.DrainUntil(event.Is[engine.BuildStartedEvent], false),
-		"failed to start block building")
-
+	s.sequencer.RunAction()
+	if err := s.drainer.Drain(); err != nil {
+		return err
+	}
+	// Assert the job exists rather than that some event was seen: several
+	// failure paths also emit a forkchoice update without starting a build.
+	if s.sequencer.Building().Info.ID == (eth.PayloadID{}) {
+		return errors.New("sequencer did not start a block-building job")
+	}
 	s.l2Building = true
 }
 
@@ -122,8 +128,8 @@ func (s *L2Sequencer) ActL2EndBlock(t Testing) eth.L2BlockRef {
 	}
 	s.l2Building = false
 
-	s.synchronousEvents.Emit(t.Ctx(), sequencing.SequencerActionEvent{})
-	require.NoError(t, s.drainer.DrainUntil(event.Is[engine.PayloadSuccessEvent], false),
+	s.sequencer.RunAction()
+	require.NoError(t, s.drainer.DrainUntil(event.Is[engine.UnsafeUpdateEvent], false),
 		"failed to complete block building")
 
 	// After having built a L2 block, make sure to get an engine update processed,
@@ -267,8 +273,8 @@ func (s *L2Sequencer) ActBuildL2ToIsthmus(t Testing) {
 // we can use ActBuildL2ToTime with (e.g.) the JovianTime.
 
 func (s *L2Sequencer) ActBuildL2ToInterop(t Testing) {
-	require.NotNil(t, s.RollupCfg.InteropTime, "cannot activate InteropTime when it is not scheduled")
-	for s.L2Unsafe().Time < *s.RollupCfg.InteropTime {
+	require.NotNil(t, s.RollupCfg.LagoonTime, "cannot activate LagoonTime when it is not scheduled")
+	for s.L2Unsafe().Time < *s.RollupCfg.LagoonTime {
 		s.ActL2EmptyBlock(t)
 	}
 }

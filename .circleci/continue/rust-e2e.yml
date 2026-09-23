@@ -4,129 +4,29 @@ version: 2.1
 # This file contains E2E tests that depend on both kona and op-reth.
 # It is merged with main.yml and rust-ci.yml when rust/** changes are detected.
 # Shared orbs, commands, and jobs come from main.yml and rust-ci.yml during merge.
+orbs:
+  utils: ethereum-optimism/circleci-utils@1.0.31
 
 parameters:
-  # Required parameters (also in main.yml, merged during continuation)
   c-default_docker_image:
     type: string
     default: cimg/base:2026.03
-  c-rust_e2e_dispatch:
-    type: boolean
-    default: false
+  c-rust_base_image:
+    type: string
+    default: us-docker.pkg.dev/oplabs-tools-artifacts/images/nexus/circleci-runner-wolfi@sha256:f79d7c422cf320f67bbd9dbe3f36ed2755bf800d7065e4fbb63a034c3ff56914
   c-go-cache-version:
     type: string
-    default: "v0.0"
-  c-rust_changes_detected:
+    default: "v0.1"
+  # Workflow activation flags (set by compute-workflow-conditions.sh)
+  c-run_rust_e2e_ci:
     type: boolean
     default: false
-  c-non_docs_changes:
+  c-run_rust_e2e_gate_skip:
     type: boolean
     default: false
-  # Passthrough declarations for setup config parameters.
-  # CircleCI forwards all explicitly-passed pipeline parameters to continuation configs.
-  # Without these declarations, manually triggered pipelines fail with "Unexpected argument(s)".
-  # These are not referenced by any job — the c- prefixed versions above are used instead.
-  default_docker_image:
-    type: string
-    default: cimg/base:2026.03
-  base_image:
-    type: string
-    default: default
-  main_dispatch:
-    type: boolean
-    default: true
-  fault_proofs_dispatch:
+  c-run_scheduled_sp1_elf_smoke:
     type: boolean
     default: false
-  reproducibility_dispatch:
-    type: boolean
-    default: false
-  kontrol_dispatch:
-    type: boolean
-    default: false
-  cannon_full_test_dispatch:
-    type: boolean
-    default: false
-  sdk_dispatch:
-    type: boolean
-    default: false
-  docker_publish_dispatch:
-    type: boolean
-    default: false
-  stale_check_dispatch:
-    type: boolean
-    default: false
-  contracts_coverage_dispatch:
-    type: boolean
-    default: false
-  heavy_fuzz_dispatch:
-    type: boolean
-    default: false
-  sync_test_op_node_dispatch:
-    type: boolean
-    default: false
-  ai_contracts_test_dispatch:
-    type: boolean
-    default: false
-  rust_ci_dispatch:
-    type: boolean
-    default: false
-  rust_e2e_dispatch:
-    type: boolean
-    default: false
-  github-event-type:
-    type: string
-    default: "__not_set__"
-  github-event-action:
-    type: string
-    default: "__not_set__"
-  github-event-base64:
-    type: string
-    default: "__not_set__"
-  devnet-metrics-collect:
-    type: boolean
-    default: false
-  go-cache-version:
-    type: string
-    default: "v0.0"
-
-# Commands used by rust-e2e jobs
-commands:
-  go-restore-cache:
-    parameters:
-      module:
-        type: string
-        default: .
-      namespace:
-        type: string
-      version:
-        type: string
-        default: <<pipeline.parameters.c-go-cache-version>>
-    steps:
-      - restore_cache:
-          name: Restore go cache for <<parameters.namespace>> (<<parameters.module>>/go.mod)
-          keys:
-            - go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-{{ checksum "<<parameters.module>>/go.mod" }}-{{ checksum "<<parameters.module>>/go.sum" }}
-            - go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-{{ checksum "<<parameters.module>>/go.mod" }}-
-            - go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-
-
-  go-save-cache:
-    parameters:
-      module:
-        type: string
-        default: .
-      namespace:
-        type: string
-      version:
-        type: string
-        default: <<pipeline.parameters.c-go-cache-version>>
-    steps:
-      - save_cache:
-          name: Save go cache for <<parameters.namespace>> (<<parameters.module>>/go.mod)
-          paths:
-            - ~/.cache/go-build
-            - ~/go/pkg/mod
-          key: go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-{{ checksum "<<parameters.module>>/go.mod" }}-{{ checksum "<<parameters.module>>/go.sum" }}
 
 # ============================================================================
 # RUST E2E JOBS
@@ -143,8 +43,8 @@ jobs:
         type: boolean
         default: false
     docker:
-      - image: <<pipeline.parameters.c-default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -152,17 +52,17 @@ jobs:
           at: .
       - go-restore-cache:
           namespace: kona-ci
-      - rust-build: &kona-rust-build-release
-          directory: rust
-          profile: release
-          binary: "kona-node"
+      # Build the superchain-configs.zip these Go tests //go:embed (workspace carries only Rust binaries).
+      - run:
+          name: Build superchain bundle
+          command: just build-superchain-go
       - run:
           name: Run common tests for node with sysgo orchestrator
           no_output_timeout: 60m
           command: |
             WD=$(pwd)
             echo "Running tests..."
-            export OP_RETH_EXEC_PATH="$WD/rust/target/release/op-reth"
+            export RUST_BINARY_PATH_OP_RETH="$WD/rust/target/release/op-reth"
             export RUST_BINARY_PATH_KONA_NODE="$WD/rust/target/release/kona-node"
             cd rust/kona && just test-e2e-sysgo-run node node/common "<<parameters.devnet_config>>"
       - when:
@@ -175,7 +75,7 @@ jobs:
                 command: |
                   WD=$(pwd)
                   echo "Running tests..."
-                  export OP_RETH_EXEC_PATH="$WD/rust/target/release/op-reth"
+                  export RUST_BINARY_PATH_OP_RETH="$WD/rust/target/release/op-reth"
                   export RUST_BINARY_PATH_KONA_NODE="$WD/rust/target/release/kona-node"
                   cd rust/kona && just test-e2e-sysgo-run node node/reorgs "<<parameters.devnet_config>>"
       - go-save-cache:
@@ -189,8 +89,10 @@ jobs:
   # Kona Node Restart Tests (from node_e2e_sysgo_tests.yaml)
   rust-restart-sysgo-tests:
     docker:
-      - image: <<pipeline.parameters.c-default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge.gen2
+    # One test per node via the timing split in test-e2e-sysgo-run.
+    parallelism: 3
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -198,16 +100,22 @@ jobs:
           at: .
       - go-restore-cache:
           namespace: kona-ci
-      - rust-build:
-          <<: *kona-rust-build-release
+      # Build the superchain-configs.zip these Go tests //go:embed (workspace carries only Rust binaries).
+      - run:
+          name: Build superchain bundle
+          command: just build-superchain-go
       - run:
           name: Run restart tests for node with sysgo orchestrator
           no_output_timeout: 60m
+          # test-e2e-sysgo-run skips build-kona/build-reth; the binaries come
+          # prebuilt from the attached workspace via the RUST_BINARY_PATH_*
+          # exports.
           command: |
             echo "Running tests..."
             WD=$(pwd)
+            export RUST_BINARY_PATH_OP_RETH="$WD/rust/target/release/op-reth"
             export RUST_BINARY_PATH_KONA_NODE="$WD/rust/target/release/kona-node"
-            cd rust/kona && just test-e2e-sysgo node node/restart
+            cd rust/kona && just test-e2e-sysgo-run node node/restart
       - go-save-cache:
           namespace: kona-ci
       - store_test_results:
@@ -219,8 +127,8 @@ jobs:
   # op-reth E2E Sysgo Tests
   op-reth-e2e-sysgo-tests:
     docker:
-      - image: <<pipeline.parameters.c-default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -228,16 +136,16 @@ jobs:
           at: .
       - go-restore-cache:
           namespace: op-reth-e2e
-      - rust-build:
-          directory: rust
-          profile: release
-          binary: "op-reth"
+      # Build the superchain-configs.zip these Go tests //go:embed (workspace carries only Rust binaries).
+      - run:
+          name: Build superchain bundle
+          command: just build-superchain-go
       - run:
           name: Run op-reth E2E tests with sysgo orchestrator
           working_directory: rust/op-reth/tests
           no_output_timeout: 60m
           command: |
-            export OP_RETH_EXEC_PATH="$(pwd)/../../target/release/op-reth"
+            export RUST_BINARY_PATH_OP_RETH="$(pwd)/../../target/release/op-reth"
             just test-e2e-sysgo
       - go-save-cache:
           namespace: op-reth-e2e
@@ -254,9 +162,11 @@ jobs:
         description: The kind of action test (single or interop)
         type: string
     docker:
-      - image: <<pipeline.parameters.c-default_docker_image>>
-    resource_class: xlarge
-    parallelism: 4
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge.gen2
+    # ~35 action tests, timing-split across nodes (see action-tests-single-run).
+    # 8 nodes roughly halves per-node test time vs 4.
+    parallelism: 8
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -264,9 +174,10 @@ jobs:
           at: .
       - go-restore-cache:
           namespace: kona-ci
-      - rust-build:
-          <<: *kona-rust-build-release
-          binary: "kona-host"
+      # Build the superchain-configs.zip these Go tests //go:embed (workspace carries only Rust binaries).
+      - run:
+          name: Build superchain bundle
+          command: just build-superchain-go
       - run:
           name: Build kona and run action tests
           working_directory: rust/kona
@@ -278,17 +189,234 @@ jobs:
       - go-save-cache:
           namespace: kona-ci
       - store_test_results:
-          path: op-e2e/actions/proofs/tmp/test-results
+          path: rust/kona/tests/proofs/tmp/test-results
       - store_artifacts:
-          path: op-e2e/actions/proofs/tmp/testlogs
+          path: rust/kona/tests/proofs/tmp/testlogs
           when: always
+
+  # Build SP1 guest ELFs and persist them for future rust-e2e consumers.
+  kona-build-sp1-elfs:
+    docker:
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: large.gen2
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+          enable-mise-cache: true
+      - rust-prepare-and-restore-cache: &sp1-guest-checks-cache-args
+          directory: rust/kona/sp1/programs
+          init_superchain_submodule: false
+      - restore_cache:
+          name: Restore SP1 toolchain cache
+          keys:
+            # cargo-prove selects the matching native toolchain. An SP1 pin
+            # update changes this checksum and forces a fresh installation.
+            - sp1-toolchain-v1-{{ arch }}-{{ checksum "mise.toml" }}
+      - run:
+          name: Install or link SP1 toolchain
+          command: |
+            install_sp1_toolchain() {
+              (cd rust/kona/sp1 && just install-sp1-toolchain)
+            }
+
+            mise_sp1_version="$(yq -r '.tools."github:succinctlabs/sp1".version // "<missing>"' mise.toml)"
+            root_manifest_sp1_sdk="$(yq -r '.workspace.dependencies."sp1-sdk".version // "<missing>"' rust/Cargo.toml)"
+            guest_manifest_sp1_lib="$(yq -r '.workspace.dependencies."sp1-lib".version // "<missing>"' rust/kona/sp1/programs/Cargo.toml)"
+            guest_manifest_sp1_zkvm="$(yq -r '.workspace.dependencies."sp1-zkvm".version // "<missing>"' rust/kona/sp1/programs/Cargo.toml)"
+            sp1_tag="$(cd rust/kona/sp1 && just --evaluate SP1_TAG 2>/dev/null || printf '<missing>')"
+
+            lock_data_dir="$(mktemp -d)"
+            trap 'rm -rf "$lock_data_dir"' EXIT
+            root_lock_sp1_sdk="<lockfile parse failed>"
+            if yq -p=toml -o=json '.package // []' rust/Cargo.lock > "$lock_data_dir/root.json"; then
+              if ! root_lock_sp1_sdk="$(jq -er '[.[] | select(.name == "sp1-sdk") | .version] | unique | if length == 1 then .[0] else error("expected exactly one resolved sp1-sdk version") end' "$lock_data_dir/root.json")"; then
+                root_lock_sp1_sdk="<missing or multiple versions>"
+              fi
+            fi
+
+            guest_lock_sp1_lib="<lockfile parse failed>"
+            guest_lock_sp1_zkvm="<lockfile parse failed>"
+            if yq -p=toml -o=json '.package // []' rust/kona/sp1/programs/Cargo.lock > "$lock_data_dir/guest.json"; then
+              if ! guest_lock_sp1_lib="$(jq -er '[.[] | select(.name == "sp1-lib") | .version] | unique | if length == 1 then .[0] else error("expected exactly one resolved sp1-lib version") end' "$lock_data_dir/guest.json")"; then
+                guest_lock_sp1_lib="<missing or multiple versions>"
+              fi
+              if ! guest_lock_sp1_zkvm="$(jq -er '[.[] | select(.name == "sp1-zkvm") | .version] | unique | if length == 1 then .[0] else error("expected exactly one resolved sp1-zkvm version") end' "$lock_data_dir/guest.json")"; then
+                guest_lock_sp1_zkvm="<missing or multiple versions>"
+              fi
+            fi
+
+            if [ "$root_manifest_sp1_sdk" != "$mise_sp1_version" ] || \
+              [ "$guest_manifest_sp1_lib" != "$mise_sp1_version" ] || \
+              [ "$guest_manifest_sp1_zkvm" != "$mise_sp1_version" ] || \
+              [ "$root_lock_sp1_sdk" != "$mise_sp1_version" ] || \
+              [ "$guest_lock_sp1_lib" != "$mise_sp1_version" ] || \
+              [ "$guest_lock_sp1_zkvm" != "$mise_sp1_version" ] || \
+              [ "$sp1_tag" != "v${mise_sp1_version}" ]; then
+              printf '%s\n' \
+                "ERROR: SP1 version drift; mise.toml cargo-prove is canonical." \
+                "  mise.toml cargo-prove: ${mise_sp1_version}" \
+                "  rust/Cargo.toml sp1-sdk: ${root_manifest_sp1_sdk}" \
+                "  rust/Cargo.lock resolved sp1-sdk: ${root_lock_sp1_sdk}" \
+                "  rust/kona/sp1/programs/Cargo.toml sp1-lib: ${guest_manifest_sp1_lib}" \
+                "  rust/kona/sp1/programs/Cargo.toml sp1-zkvm: ${guest_manifest_sp1_zkvm}" \
+                "  rust/kona/sp1/programs/Cargo.lock resolved sp1-lib: ${guest_lock_sp1_lib}" \
+                "  rust/kona/sp1/programs/Cargo.lock resolved sp1-zkvm: ${guest_lock_sp1_zkvm}" \
+                "  rust/kona/sp1/justfile SP1_TAG: ${sp1_tag} (expected v${mise_sp1_version})" >&2
+              exit 1
+            fi
+
+            toolchain_dir="$(find "$HOME/.sp1/toolchains" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null || true)"
+            if [ -n "$toolchain_dir" ]; then
+              rustup toolchain remove succinct || true
+              if rustup toolchain link succinct "$toolchain_dir" && rustc +succinct --version >/dev/null; then
+                echo "Restored SP1 toolchain from $toolchain_dir"
+              else
+                echo "Cached SP1 toolchain is invalid; reinstalling"
+                install_sp1_toolchain
+              fi
+            else
+              install_sp1_toolchain
+            fi
+            rustc +succinct --version
+      - save_cache:
+          name: Save SP1 toolchain cache
+          key: sp1-toolchain-v1-{{ arch }}-{{ checksum "mise.toml" }}
+          paths:
+            - ~/.sp1/toolchains
+      - run:
+          # Check the committed guest lock before build-elfs-native regenerates it in place and masks drift.
+          name: Check SP1 guest lock
+          working_directory: rust
+          command: just check-sp1-guest-lock
+      - run:
+          name: Build SP1 guest ELFs
+          working_directory: rust/kona/sp1
+          no_output_timeout: 40m
+          command: just build-elfs-native
+      - run:
+          # The Go acceptance setup (op-acceptance-tests/tests/proofs/zk,
+          # loadSuperAggregationVKey) reads this key when running with real
+          # artifacts (KONA_SP1_ELF_DIR set); renaming it in the vkeys
+          # manifest breaks that consumer silently, since PR CI runs the
+          # acceptance tests with stub artifacts.
+          name: Check vkeys manifest names expected by consumers
+          command: grep -q '^super-aggregation = "0x' rust/kona/sp1/elf/vkeys.toml
+      - store_artifacts:
+          path: rust/kona/sp1/elf
+      - persist_to_workspace:
+          root: .
+          paths:
+            - rust/kona/sp1/elf/
+      - run:
+          name: Test SP1 guest programs
+          working_directory: rust
+          environment:
+            RUSTFLAGS: -Dwarnings
+          command: just test-sp1-guest
+      - run:
+          name: Lint SP1 guest programs
+          working_directory: rust
+          environment:
+            RUSTFLAGS: -Dwarnings
+          command: just lint-sp1-guest
+      - run:
+          name: Check + test the range-vkeys crate
+          working_directory: rust
+          environment:
+            RUSTFLAGS: -Dwarnings
+          command: just check-range-vkeys
+      - rust-save-build-cache: *sp1-guest-checks-cache-args
+
+  sp1-super-range-elf-smoke:
+    docker:
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    # Full SP1 ELF execution peaked near 13 GiB locally. Keep it isolated on a
+    # 32 GB runner instead of competing with parallel acceptance tests.
+    resource_class: 2xlarge.gen2
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+          enable-mise-cache: true
+      - rust-prepare-and-restore-cache:
+          directory: rust
+      - attach_workspace:
+          at: .
+      - go-restore-cache:
+          namespace: sp1-super-range-elf-smoke
+      - run:
+          name: Test proposer aggregation vkey against built ELF
+          working_directory: rust
+          command: |
+            KONA_SP1_ELF_DIR="$PWD/kona/sp1/elf" \
+              cargo nextest run --package kona-sp1-proposer \
+              real_elf_agg_vkey_matches_vkeys_toml_prestate
+      - run:
+          name: Run SP1 super-root ELF acceptance
+          no_output_timeout: 30m
+          command: |
+            ROOT_DIR="$(pwd)"
+            RESULTS_DIR="$ROOT_DIR/tmp/test-results"
+            LOG_DIR="$ROOT_DIR/tmp/testlogs/sp1-super-range-elf"
+            mkdir -p "$RESULTS_DIR" "$LOG_DIR"
+
+            export DEVSTACK_L2CL_KIND=op-node
+            export DEVSTACK_L2EL_KIND=op-reth
+            export RUST_BINARY_PATH_OP_RETH="$ROOT_DIR/rust/target/release/op-reth"
+            export RUST_BINARY_PATH_KONA_HOST="$ROOT_DIR/rust/target/release/kona-host"
+            export RUST_BINARY_PATH_KONA_SP1_PROPOSER="$ROOT_DIR/rust/target/release/kona-sp1-proposer"
+            export KONA_SP1_SUPER_RANGE_ELF_EXECUTOR_PATH="$ROOT_DIR/rust/target/release/kona-sp1-super-range-executor"
+            export KONA_SP1_ELF_DIR="$ROOT_DIR/rust/kona/sp1/elf"
+
+            test -x "$RUST_BINARY_PATH_OP_RETH"
+            test -x "$RUST_BINARY_PATH_KONA_HOST"
+            test -x "$RUST_BINARY_PATH_KONA_SP1_PROPOSER"
+            test -x "$KONA_SP1_SUPER_RANGE_ELF_EXECUTOR_PATH"
+            test -x "$ROOT_DIR/cannon/bin/cannon"
+            test -s "$ROOT_DIR/rust/kona/prestate-artifacts-cannon-interop/prestate.bin.gz"
+            test -s "$KONA_SP1_ELF_DIR/super-range-elf"
+            test -s "$KONA_SP1_ELF_DIR/super-aggregation-elf"
+            test -s "$KONA_SP1_ELF_DIR/vkeys.toml"
+
+            gotestsum \
+              --format=testname \
+              --junitfile="$RESULTS_DIR/sp1-super-range-elf.xml" \
+              --jsonfile="$LOG_DIR/go-test.json" \
+              -- \
+              -count=1 \
+              -parallel=1 \
+              -timeout=60m \
+              ./op-acceptance-tests/tests/interop/proofs/sp1
+
+            # List to a file first: grep -q closing the pipe early would SIGPIPE go test under pipefail.
+            go test -list '^TestDeploymentUsesSuperAggregationVKey$' \
+              ./op-acceptance-tests/tests/proofs/zk > "$LOG_DIR/vkey-test-list.txt"
+            grep -Fxq TestDeploymentUsesSuperAggregationVKey "$LOG_DIR/vkey-test-list.txt"
+            go test \
+              -count=1 \
+              -timeout=30m \
+              -run '^TestDeploymentUsesSuperAggregationVKey$' \
+              ./op-acceptance-tests/tests/proofs/zk
+      - go-save-cache:
+          namespace: sp1-super-range-elf-smoke
+      - store_test_results:
+          path: tmp/test-results
+      - store_artifacts:
+          path: tmp/testlogs/sp1-super-range-elf
+          when: always
+      - notify-failures-on-develop:
+          mentions: "@proofs-team"
 
   required-rust-e2e:
     docker:
       - image: <<pipeline.parameters.c-default_docker_image>>
-    resource_class: small
+    parameters:
+      always-succeed:
+        description: Force always succeed (skip API gate)
+        type: boolean
+        default: false
     steps:
-      - run: echo "Required Rust E2E checks passed"
+      - utils/ci-gate:
+          always-succeed: << parameters.always-succeed >>
 
 # ============================================================================
 # RUST E2E WORKFLOWS
@@ -296,15 +424,7 @@ jobs:
 workflows:
   # Rust E2E CI — runs on rust path changes or manual dispatch
   rust-e2e-ci:
-    when:
-      or:
-        - and:
-            - equal: ["webhook", << pipeline.trigger_source >>]
-            - << pipeline.parameters.c-rust_changes_detected >>
-            - << pipeline.parameters.c-non_docs_changes >>
-        - and:
-            - equal: [true, <<pipeline.parameters.c-rust_e2e_dispatch>>]
-            - equal: ["api", << pipeline.trigger_source >>]
+    when: << pipeline.parameters.c-run_rust_e2e_ci >>
     jobs:
       - contracts-bedrock-build:
           build_args: --skip test
@@ -313,101 +433,123 @@ workflows:
       - cannon-prestate: &rust-e2e-job-base
           context:
             - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary: &cannon-kona-host
-          name: cannon-kona-host
+      # rust-workspace-release builds the whole rust workspace (no binary filter),
+      # so it produces kona-host, kona-node, op-reth, and the rest. Downstream
+      # e2e jobs attach the workspace and consume the binaries directly.
+      - rust-build-binary: &rust-workspace-release
+          name: rust-workspace-release
           directory: rust
           profile: release
-          binary: "kona-host"
+          persist_to_workspace: true
           context:
             - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary: &kona-build-release
-          name: kona-build-release
-          directory: rust
-          profile: release
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary:
-          name: op-reth-build
-          directory: rust
-          profile: release
-          binary: "op-reth"
-          context:
-            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
       - rust-e2e-sysgo-tests:
           name: rust-e2e-<<matrix.devnet_config>>
           matrix:
             parameters:
-              devnet_config: ["simple-kona", "simple-kona-geth", "simple-kona-sequencer"]
+              devnet_config:
+                ["simple-kona", "simple-kona-sequencer"]
           context:
             - circleci-repo-readonly-authenticated-github-token
           requires:
             - contracts-bedrock-build
             - cannon-prestate
-            - cannon-kona-host
-            - kona-build-release
-            - op-reth-build
+            - rust-workspace-release
       - op-reth-e2e-sysgo-tests:
           <<: *rust-e2e-job-base
           requires:
             - contracts-bedrock-build
-            - op-reth-build
+            - rust-workspace-release
       - rust-restart-sysgo-tests:
           name: rust-e2e-restart
           <<: *rust-e2e-job-base
           requires:
             - contracts-bedrock-build
             - cannon-prestate
-            - cannon-kona-host
-            - kona-build-release
-      # Proof tests - single kind only, interop excluded per original config
+            - rust-workspace-release
+      # Proof action tests - single-chain only. Interop proof coverage runs
+      # under kona-host in op-acceptance-tests, not as action tests.
       - kona-proof-action-tests:
           name: kona-proof-action-single
           kind: single
           requires:
-            - kona-build-release
+            - rust-workspace-release
             - contracts-bedrock-build
           context:
             - circleci-repo-readonly-authenticated-github-token
+      - kona-build-sp1-elfs:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
       # -----------------------------------------------------------------------
       # Required gate — fans in on all E2E test jobs
       # -----------------------------------------------------------------------
       - required-rust-e2e:
           requires:
-            - rust-e2e-simple-kona
-            - rust-e2e-simple-kona-geth
-            - rust-e2e-simple-kona-sequencer
-            - rust-e2e-restart
-            - kona-proof-action-single
-
-  # Required Rust E2E gate (skip) — runs when no rust changes and no dispatch
-  # Just runs action tests
+            - rust-e2e-simple-kona: terminal
+            - rust-e2e-simple-kona-sequencer: terminal
+            - rust-e2e-restart: terminal
+            - op-reth-e2e-sysgo-tests: terminal
+            - kona-proof-action-single: terminal
+            - kona-build-sp1-elfs: terminal
+          context:
+            - circleci-api-token
   rust-e2e-gate-skip:
-    when:
-      and:
-        - equal: ["webhook", << pipeline.trigger_source >>]
-        - not: << pipeline.parameters.c-rust_changes_detected >>
+    when: << pipeline.parameters.c-run_rust_e2e_gate_skip >>
     jobs:
-      - contracts-bedrock-build:
-          build_args: --skip test
+      - required-rust-e2e:
+          always-succeed: true
+          context:
+            - circleci-api-token
+
+  scheduled-sp1-elf-smoke:
+    when: << pipeline.parameters.c-run_scheduled_sp1_elf_smoke >>
+    jobs:
+      - prep-go-modules:
           context:
             - circleci-repo-readonly-authenticated-github-token
+      - prep-superchain:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - contracts-bedrock-build:
+          build_args: --deny-warnings --skip test
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+          requires:
+            - prep-go-modules
       - rust-build-binary:
-          name: kona-build-release
+          # The workspace release build includes op-reth, kona-host, the SP1
+          # proposer, and the super-range executor used by this job.
+          name: sp1-elf-smoke-rust-binaries
           directory: rust
           profile: release
+          persist_to_workspace: true
           context:
             - circleci-repo-readonly-authenticated-github-token
-      # Proof tests - single kind only, interop excluded per original config
-      - kona-proof-action-tests:
-          name: kona-proof-action-single
-          kind: single
+            - sccache-gcs-optimism
+      - kona-build-sp1-elfs:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
+      - cannon-prestate:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - go-binaries-for-sysgo:
           requires:
-            - kona-build-release
+            - prep-go-modules
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - sp1-super-range-elf-smoke:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
+            - slack
+          requires:
+            - prep-go-modules
+            - prep-superchain
             - contracts-bedrock-build
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-
-      - required-rust-e2e:
-          requires:
-            - kona-proof-action-single
-
+            - sp1-elf-smoke-rust-binaries
+            - kona-build-sp1-elfs
+            - cannon-prestate
+            - go-binaries-for-sysgo
