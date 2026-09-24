@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/eip1559"
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"

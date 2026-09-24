@@ -1,9 +1,11 @@
 package txmgr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -347,6 +349,7 @@ func (m *SimpleTxManager) prepare(ctx context.Context, candidate TxCandidate) (*
 // NOTE: This method SHOULD NOT publish the resulting transaction.
 // NOTE: If the [TxCandidate.GasLimit] is non-zero, it will be used as the transaction's gas.
 // NOTE: Otherwise, the [SimpleTxManager] will query the specified backend for an estimate.
+// NOTE: In either case, the gas limit is raised to at least the EIP-7623/EIP-7976 calldata floor.
 func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*types.Transaction, error) {
 	m.l.Debug("crafting Transaction", "blobs", len(candidate.Blobs), "calldata_size", len(candidate.TxData))
 	gasTipCap, baseFee, blobBaseFee, err := m.SuggestGasPriceCaps(ctx)
@@ -389,20 +392,22 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		callMsg.BlobGasFeeCap = blobBaseFee
 		callMsg.BlobHashes = blobHashes
 	}
-	// If the gas limit is set, we can use that as the gas
+
 	if gasLimit == 0 {
 		gas, err := m.backend.EstimateGas(ctx, callMsg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to estimate gas: %w", errutil.TryAddRevertReason(err))
 		}
 		gasLimit = gas
-	} else {
-		callMsg.Gas = gasLimit
-		_, err := m.backend.CallContract(ctx, callMsg, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to call: %w", errutil.TryAddRevertReason(err))
-		}
 	}
+
+	// Ensure the gas limit covers the EIP-7623/EIP-7976 calldata floor,
+	// which the node will otherwise reject the transaction for.
+	if floor := floorDataGas(candidate.TxData); floor > gasLimit {
+		gasLimit = floor
+	}
+
+	m.l.Debug("will use gas", "gas", gasLimit)
 
 	var txMessage types.TxData
 	if sidecar != nil {
@@ -1123,6 +1128,34 @@ func updateFees(oldTip, oldFeeCap, newTip, newBaseFee *big.Int, isBlobTx bool, l
 		lgr.Debug("Using threshold tip and threshold feecap")
 		return thresholdTip, thresholdFeeCap
 	}
+}
+
+// Calldata cost floor parameters.
+//
+// EIP-7623 redefines the cost of calldata in tokens: 1 token per zero byte,
+// 4 tokens per non-zero byte, with a minimum cost of 10 gas per token on top
+// of the 21000 base intrinsic gas. EIP-7976 raises the per-token floor from
+// 10 to 16 gas. We apply the EIP-7976 value, which subsumes EIP-7623.
+const (
+	floorTokenPerZeroByte    uint64 = 1
+	floorTokenPerNonZeroByte uint64 = 4
+	floorCostPerToken        uint64 = 16
+	floorBaseGas             uint64 = 21000
+)
+
+// floorDataGas computes the minimum gas limit a transaction carrying the given
+// calldata must specify under the EIP-7623/EIP-7976 calldata cost floor:
+//
+//	floor = 21000 + (zeroBytes + 4*nonZeroBytes) * 16
+//
+// It saturates at math.MaxUint64 instead of erroring on overflow.
+func floorDataGas(data []byte) uint64 {
+	zeroBytes := uint64(bytes.Count(data, []byte{0}))
+	tokens := zeroBytes*floorTokenPerZeroByte + (uint64(len(data))-zeroBytes)*floorTokenPerNonZeroByte
+	if tokens > (math.MaxUint64-floorBaseGas)/floorCostPerToken {
+		return math.MaxUint64
+	}
+	return floorBaseGas + tokens*floorCostPerToken
 }
 
 // calcGasFeeCap deterministically computes the recommended gas fee cap given
