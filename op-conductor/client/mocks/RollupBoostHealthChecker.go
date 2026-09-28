@@ -86,3 +86,4 @@ func NewRollupBoostHealthChecker(t mockConstructorTestingTNewRollupBoostHealthCh
 
 	return mock
 }
+
