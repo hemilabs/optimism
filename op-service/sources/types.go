@@ -65,6 +65,12 @@ type RPCHeader struct {
 	// RequestsHash was added by EIP-7685 and is ignored in legacy headers.
 	RequestsHash *common.Hash `json:"requestsHash,omitempty" rlp:"optional"`
 
+	// BlockAccessListHash was added by EIP-7928 (Glamsterdam) and is ignored in legacy headers.
+	BlockAccessListHash *common.Hash `json:"blockAccessListHash,omitempty"`
+
+	// SlotNumber was added by EIP-7843 (Glamsterdam) and is ignored in legacy headers.
+	SlotNumber *hexutil.Uint64 `json:"slotNumber,omitempty"`
+
 	// untrusted info included by RPC, may have to be checked
 	Hash common.Hash `json:"hash"`
 }
@@ -122,6 +128,9 @@ func (hdr *RPCHeader) CreateGethHeader() *types.Header {
 		ParentBeaconRoot: hdr.ParentBeaconRoot,
 		// Prague
 		RequestsHash: hdr.RequestsHash,
+		// Amsterdam (Glamsterdam)
+		BlockAccessListHash: hdr.BlockAccessListHash,
+		SlotNumber:          (*uint64)(hdr.SlotNumber),
 	}
 }
 
@@ -237,6 +246,13 @@ func (block *RPCBlock) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInf
 func (block *RPCBlock) ExecutionPayloadEnvelope(trustCache bool) (*eth.ExecutionPayloadEnvelope, error) {
 	if err := block.checkPostMerge(); err != nil {
 		return nil, err
+	}
+	// ExecutionPayload has no representation of the Glamsterdam (Amsterdam) header fields,
+	// so a block carrying them cannot be converted without silently dropping them: the resulting
+	// payload would never pass CheckBlockHash. Only L2 blocks are converted to payloads, and the
+	// L2 does not activate Amsterdam; refuse rather than hand out an inconsistent payload.
+	if block.BlockAccessListHash != nil || block.SlotNumber != nil {
+		return nil, errors.New("block carries Amsterdam header fields (blockAccessListHash/slotNumber), which ExecutionPayload cannot represent")
 	}
 	if !trustCache {
 		if err := block.Verify(); err != nil {
