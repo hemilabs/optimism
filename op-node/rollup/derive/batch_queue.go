@@ -180,6 +180,19 @@ batchLoop:
 				"parent_time", parent.Time,
 			)
 			continue
+		case BatchPast:
+			// CheckBatch applies the Holocene rules to a batch from an L1 block on
+			// which Holocene is active, and then reports a batch that is older than
+			// the parent as past instead of dropped. This queue stays in use until
+			// the pipeline's own origin, which trails the batches by the channel
+			// window, reaches Holocene, so it sees such batches around the
+			// activation and on resets from before it. Treat them like any other
+			// batch there is nothing to do with: drop and move on.
+			batch.Batch.LogContext(bq.log).Warn("Dropping past batch",
+				"parent", parent.ID(),
+				"parent_time", parent.Time,
+			)
+			continue
 		case BatchAccept:
 			nextBatch = batch
 			// don't keep the current batch in the remaining items since we are processing it now,

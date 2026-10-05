@@ -848,6 +848,60 @@ func testBatchStage_AdvancedEpoch(t *testing.T, batchType int, newBatchStage tes
 }
 
 // testBatchQueue_Shuffle tests batch queue can reorder shuffled valid batches
+// TestBatchQueuePastBatchOnHolocene checks that the pre-Holocene batch queue drops a batch
+// that is older than the parent when the batch comes from an L1 block on which Holocene is
+// active, instead of failing with a critical error. The pipeline keeps using this queue
+// until its own origin reaches Holocene, which trails the L1 blocks the batches come from.
+func TestBatchQueuePastBatchOnHolocene(t *testing.T) {
+	log := testlog.Logger(t, log.LevelCrit)
+	l1 := L1Chain([]uint64{10, 15, 20, 25})
+	chainId := big.NewInt(1234)
+	holoceneTime := uint64(15)
+	cfg := &rollup.Config{
+		Genesis: rollup.Genesis{
+			L2Time: 10,
+		},
+		BlockTime:         2,
+		MaxSequencerDrift: 600,
+		SeqWindowSize:     2,
+		L2ChainID:         chainId,
+		HoloceneTime:      &holoceneTime,
+	}
+	// The parent is well past the batch at t = 12.
+	parent := eth.L2BlockRef{
+		Hash:           mockHash(16, 2),
+		Number:         3,
+		ParentHash:     mockHash(14, 2),
+		Time:           16,
+		L1Origin:       l1[0].ID(),
+		SequenceNumber: 3,
+	}
+	// The batch is included in an L1 block on which Holocene is active, so CheckBatch
+	// applies the Holocene rules and reports it as a past batch.
+	input := &fakeBatchQueueInput{
+		batches: []Batch{b(cfg.L2ChainID, 12, l1[0])},
+		errors:  []error{nil, io.EOF},
+		origin:  l1[1],
+	}
+	require.True(t, cfg.IsHolocene(l1[1].Time))
+	require.False(t, cfg.IsHolocene(l1[0].Time))
+
+	bq := NewBatchQueue(log, cfg, input, nil)
+	_ = bq.Reset(context.Background(), l1[0], eth.SystemConfig{})
+
+	// The past batch must be dropped, not turned into a critical error.
+	for i := 0; i < 3; i++ {
+		batch, _, err := bq.NextBatch(context.Background(), parent)
+		require.Nil(t, batch)
+		require.False(t, errors.Is(err, ErrCritical), "past batch must not be a critical error: %v", err)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.ErrorIs(t, err, NotEnoughData)
+	}
+	require.Empty(t, bq.batches, "the past batch must have been dropped")
+}
+
 func testBatchQueue_Shuffle(t *testing.T, batchType int) {
 	log := testlog.Logger(t, log.LevelCrit)
 	l1 := L1Chain([]uint64{0, 6, 12, 18, 24}) // L1 block time: 6s
