@@ -1,6 +1,9 @@
 package testutils
 
 import (
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/hemilabs/heminetwork/hemi"
+
 	"context"
 	"encoding/json"
 
@@ -20,6 +23,20 @@ func (m *MockEngine) GetPayload(ctx context.Context, payloadInfo eth.PayloadInfo
 
 func (m *MockEngine) ExpectGetPayload(payloadId eth.PayloadID, payload *eth.ExecutionPayloadEnvelope, err error) {
 	m.Mock.On("GetPayload", payloadId).Once().Return(payload, err)
+}
+
+func (m *MockEngine) NewKeystone(ctx context.Context, keystone hemi.L2Keystone) (*eth.KeystoneStatus, error) {
+	out := m.Mock.Called(keystone)
+	return out.Get(0).(*eth.KeystoneStatus), out.Error(1)
+}
+
+func (m *MockEngine) ExpectNewKeystone(keystone hemi.L2Keystone, status *eth.KeystoneStatus, err error) {
+	m.Mock.On("NewKeystone", keystone).Once().Return(status, err)
+}
+
+func (m *MockEngine) PopPayoutsByL2Keystone(ctx context.Context, abrevHash chainhash.Hash) ([]eth.PopPayout, error) {
+	out := m.Mock.Called(abrevHash)
+	return out.Get(0).([]eth.PopPayout), out.Error(1)
 }
 
 func (m *MockEngine) ForkchoiceUpdate(ctx context.Context, state *eth.ForkchoiceState, attr *eth.PayloadAttributes) (*eth.ForkchoiceUpdatedResult, error) {
