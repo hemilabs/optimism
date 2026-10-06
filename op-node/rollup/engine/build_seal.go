@@ -104,6 +104,18 @@ func (e *EngineController) onBuildSeal(ctx context.Context, ev BuildSealEvent) {
 		return
 	}
 
+	// A block is never published or inserted before its timestamp.  The
+	// sequencer seals a block early after a temporary error (it backs off for
+	// a second and then seals whatever job is in flight), and a block that is
+	// more than 5 seconds ahead of the clock is rejected by the gossip
+	// validator of every node, including this one.  Wait here, as Hemi did
+	// since e11618f4b until the January upstream merge dropped it.
+	if forwardDrift := int64(ref.Time*1000) - time.Now().UnixMilli(); forwardDrift > 0 {
+		e.log.Debug("Block sealer waiting for the block timestamp", "wait_ms", forwardDrift, "time", ref.Time)
+		time.Sleep(time.Duration(forwardDrift) * time.Millisecond)
+		e.log.Debug("Done waiting, proceeding to seal")
+	}
+
 	now := time.Now()
 	sealTime := now.Sub(sealingStart)
 	buildTime := now.Sub(ev.BuildStarted)
