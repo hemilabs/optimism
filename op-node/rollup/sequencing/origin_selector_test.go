@@ -175,7 +175,8 @@ func TestOriginSelectorAdvances(t *testing.T) {
 		s.nextOrigin = b
 
 		// Trigger the background fetch via a forkchoice update.
-		// This should be a no-op because the next origin is already cached.
+		// The next origin is already cached, so this only prefetches its successor.
+		l1.ExpectL1BlockRefByNumber(c.Number, c, nil)
 		handled := s.OnEvent(context.Background(), engine.ForkchoiceUpdateEvent{UnsafeL2Head: l2Head})
 		require.True(t, handled)
 
@@ -186,17 +187,15 @@ func TestOriginSelectorAdvances(t *testing.T) {
 			Time:     26,
 		}
 
-		// The origin is still `b` because the next origin has not been fetched yet.
-		requireL1OriginAt(l2Head, b)
+		// Adopting `b` promoted the prefetched `c` to next origin, so the origin
+		// advances again without waiting for another forkchoice update.
+		requireL1OriginAt(l2Head, c)
 
-		l1.ExpectL1BlockRefByNumber(c.Number, c, nil)
-
-		// Trigger the background fetch via a forkchoice update.
-		// This will actually fetch the next origin because the internal cache is empty.
+		// The forkchoice update now looks further ahead, but `d` is not available yet.
+		l1.ExpectL1BlockRefByNumber(d.Number, eth.BlockRef{}, ethereum.NotFound)
 		handled = s.OnEvent(context.Background(), engine.ForkchoiceUpdateEvent{UnsafeL2Head: l2Head})
 		require.True(t, handled)
 
-		// The next origin should be `c` now.
 		requireL1OriginAt(l2Head, c)
 
 		// Now force the retrieval of the next L1 origin
@@ -314,8 +313,9 @@ func TestOriginSelectorFetchesNextOrigin(t *testing.T) {
 		Time:     24,
 	}
 
-	// This is called as part of the background prefetch job
+	// These are called as part of the background prefetch job
 	l1.ExpectL1BlockRefByNumber(b.Number, b, nil)
+	l1.ExpectL1BlockRefByNumber(b.Number+1, eth.L1BlockRef{}, ethereum.NotFound)
 
 	s := NewL1OriginSelector(ctx, log, cfg, l1)
 	s.currentOrigin = a
@@ -372,8 +372,19 @@ func TestOriginSelectorHandlesReorg(t *testing.T) {
 		Time:     24,
 	}
 
-	// This is called as part of the background prefetch job
+	// A reorg happens and `b` is replaced by a block with a different hash,
+	// which the canonical `c` builds on.
+	c := eth.L1BlockRef{
+		Hash:       common.Hash{'c'},
+		Number:     12,
+		Time:       24,
+		ParentHash: common.Hash{'b', '2'},
+	}
+
+	// These are called as part of the background prefetch job. The lookahead
+	// already sees the reorged chain.
 	l1.ExpectL1BlockRefByNumber(b.Number, b, nil)
+	l1.ExpectL1BlockRefByNumber(c.Number, c, nil)
 
 	s := NewL1OriginSelector(ctx, log, cfg, l1)
 	s.currentOrigin = a
@@ -396,20 +407,15 @@ func TestOriginSelectorHandlesReorg(t *testing.T) {
 	// The next origin should be `b` now.
 	requireFindl1OriginEqual(b)
 
-	// A reorg happens and `b` is replaced by a block with a different hash
-	c := eth.L1BlockRef{
-		Hash:       common.Hash{'c'},
-		Number:     12,
-		Time:       24,
-		ParentHash: common.Hash{'b', '2'},
-	}
-	l1.ExpectL1BlockRefByNumber(c.Number, c, nil)
 	l2Head = eth.L2BlockRef{
 		L1Origin: b.ID(),
 		Time:     26,
 	}
 
-	// Trigger the background fetch via a forkchoice update
+	// The lookahead `c` does not extend `b`, so it is not promoted along with `b`:
+	// the forkchoice update fetches the next origin again.
+	l1.ExpectL1BlockRefByNumber(c.Number, c, nil)
+	l1.ExpectL1BlockRefByNumber(c.Number+1, eth.L1BlockRef{}, ethereum.NotFound)
 	handled = s.OnEvent(context.Background(), engine.ForkchoiceUpdateEvent{UnsafeL2Head: l2Head})
 	require.True(t, handled)
 
