@@ -15,7 +15,9 @@ static ALLOC: reth_cli_util::allocator::Allocator = reth_cli_util::allocator::ne
 static MALLOC_CONF: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 fn main() {
-    reth_cli_util::sigsegv_handler::install();
+    // Hemi: no reth SIGSEGV handler. op-reth links the Go runtime (the hVM bridge), which relies on
+    // its own SIGSEGV handler to turn nil dereferences in Go into recoverable panics; replacing it
+    // would abort the process instead.
 
     // Enable backtraces unless a RUST_BACKTRACE value has already been explicitly provided.
     if std::env::var_os("RUST_BACKTRACE").is_none() {

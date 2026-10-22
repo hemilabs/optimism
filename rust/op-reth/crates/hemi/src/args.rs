@@ -38,12 +38,12 @@ pub struct HvmArgs {
     #[arg(id = "hvm_override_hvm0", long = "override.hvm0")]
     pub override_hvm0: Option<u64>,
 
-    /// Address for the TBC daemon to listen on.
-    #[arg(id = "hvm_tbc_listen_address", long = "tbc.listenaddress", default_value = "127.0.0.1")]
+    /// Address for the TBC daemon to listen on (TBC's default when unset).
+    #[arg(id = "hvm_tbc_listen_address", long = "tbc.listenaddress", default_value = "")]
     pub tbc_listen_address: String,
 
-    /// Max number of transactions TBC will cache before flushing to disk.
-    #[arg(id = "hvm_tbc_max_cached_txs", long = "tbc.maxcachedtxs", default_value_t = 1_000_000)]
+    /// Max number of transactions TBC will cache before flushing to disk (TBC's default when 0).
+    #[arg(id = "hvm_tbc_max_cached_txs", long = "tbc.maxcachedtxs", default_value_t = 0)]
     pub tbc_max_cached_txs: i64,
 
     /// Directory for TBC's LevelDB database.
@@ -81,8 +81,8 @@ impl Default for HvmArgs {
             header_data_dir: "~/.tbcdheaders".to_string(),
             deucalion_address: String::new(),
             override_hvm0: None,
-            tbc_listen_address: "127.0.0.1".to_string(),
-            tbc_max_cached_txs: 1_000_000,
+            tbc_listen_address: String::new(),
+            tbc_max_cached_txs: 0,
             tbc_level_db_home: "~/.tbcd".to_string(),
             tbc_block_sanity: false,
             tbc_network: "testnet3".to_string(),

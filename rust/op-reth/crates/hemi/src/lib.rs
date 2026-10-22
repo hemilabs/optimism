@@ -261,11 +261,20 @@ impl Hvm {
     /// Registers a block and checks that hVM can process it now (the full Bitcoin node has the
     /// data it needs). Used by the engine API before importing a payload.
     pub fn check_block(&self, block: &HvmBlock) -> Result<(), HvmError> {
+        if !self.enabled() {
+            return Ok(());
+        }
+        // Only check (and register) blocks that extend a block hVM knows, so the registry stays a
+        // connected chain: a payload whose ancestors have not been processed yet cannot be imported
+        // now anyway, and checking it would move the hVM state along an unknown path.
+        if !self.has_block(block.parent_hash) {
+            return Ok(());
+        }
+        self.register_block(block)?;
         if !self.is_active(block.timestamp) {
             return Ok(());
         }
         wait_started();
-        self.register_block(block)?;
         let guard = self.prepare_block(block.hash)?;
         if let Some(mut guard) = guard {
             guard.succeed();
@@ -553,9 +562,7 @@ impl HemiExecutionHook for ExecutionHook {
         wait_started();
         match execution {
             HemiExecution::Block { hash, parent_hash, number, timestamp, btc_attributes } => {
-                if !hvm.is_active(*timestamp) {
-                    return Ok(None);
-                }
+                // Register every block, so the parent of the first hVM block is known.
                 let block = HvmBlock {
                     hash: *hash,
                     parent_hash: *parent_hash,
@@ -564,6 +571,9 @@ impl HemiExecutionHook for ExecutionHook {
                     btc_attributes: btc_attributes.clone(),
                 };
                 hvm.register_block(&block).map_err(|e| e.to_string())?;
+                if !hvm.is_active(*timestamp) {
+                    return Ok(None);
+                }
                 // Missing Bitcoin data is transient (the full node or L2 peers will deliver it):
                 // wait for it rather than rejecting a valid block. The engine API checks ahead of
                 // execution, so this only waits on sync paths.

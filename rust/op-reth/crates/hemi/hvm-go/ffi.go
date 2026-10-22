@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -339,7 +340,8 @@ func waitFullNodeAtGenesis(genesisHeader *wire.BlockHeader, genesisHeight uint64
 // called HvmSetHead before.
 //
 //export HvmStart
-func HvmStart(out **C.uchar, outLen *C.size_t) C.int32_t {
+func HvmStart(out **C.uchar, outLen *C.size_t) (status C.int32_t) {
+	defer recoverStatus("HvmStart", &status, out, outLen)
 	if headerCfg == nil {
 		return statusDisabled
 	}
@@ -401,7 +403,8 @@ func HvmRegisterBlock(hash, parent *C.uchar, number, timestamp C.uint64_t, attrs
 // it writes a new head block.
 //
 //export HvmSetHead
-func HvmSetHead(hash *C.uchar, out **C.uchar, outLen *C.size_t) C.int32_t {
+func HvmSetHead(hash *C.uchar, out **C.uchar, outLen *C.size_t) (status C.int32_t) {
+	defer recoverStatus("HvmSetHead", &status, out, outLen)
 	if bc == nil {
 		return statusDisabled
 	}
@@ -468,7 +471,7 @@ func HvmPrepareBlock(hash *C.uchar, out **C.uchar, outLen *C.size_t) C.int32_t {
 	}
 
 	bc.chainmu.Lock()
-	status, err := bc.prepareBlock(block)
+	status, err := bc.prepareBlockRecovering(block)
 	if status != statusOK {
 		bc.chainmu.Unlock()
 		if err != nil {
@@ -477,6 +480,17 @@ func HvmPrepareBlock(hash *C.uchar, out **C.uchar, outLen *C.size_t) C.int32_t {
 		return status
 	}
 	return statusOK
+}
+
+func (bc *BlockChain) prepareBlockRecovering(block *Block) (status C.int32_t, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("panic in hVM bridge", "fn", "HvmPrepareBlock", "panic", r, "stack", string(debug.Stack()))
+			session.active = false
+			status, err = statusError, fmt.Errorf("panic preparing block %s: %v", block.Hash(), r)
+		}
+	}()
+	return bc.prepareBlock(block)
 }
 
 func (bc *BlockChain) prepareBlock(block *Block) (C.int32_t, error) {
@@ -555,15 +569,18 @@ func (bc *BlockChain) prepareBlock(block *Block) (C.int32_t, error) {
 }
 
 // HvmFinishBlock ends the execution started by HvmPrepareBlock or HvmPrepareBuild and releases the
-// hVM lock. When the block was invalid (ok == 0) the hVM state is reverted to where it was. When
-// the block is valid but does not extend the canonical head, the hVM state is moved back to the
-// canonical head, like op-geth does for blocks inserted without setting the head.
+// hVM lock. When the block was invalid (ok == 0) the hVM state is reverted to where it was.
 //
 //export HvmFinishBlock
 func HvmFinishBlock(ok C.int32_t) {
 	if bc == nil || !session.active {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("panic in hVM bridge", "fn", "HvmFinishBlock", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	defer func() {
 		session.active = false
 		session.tbcHeader, session.block = nil, nil
@@ -580,21 +597,10 @@ func HvmFinishBlock(ok C.int32_t) {
 		bc.revertHvmStateAfterInvalidBlock(session.tbcHeader, block)
 		return
 	}
-	current := bc.currentBlock.Load()
-	if current == nil || block.ParentHash() == current.Hash() || block.Hash() == current.Hash() {
-		return
-	}
-	if session.tbcHeader != nil {
-		if err := bc.updateHvmHeaderConsensus(session.tbcHeader, true); err != nil {
-			if isHvmFullNodeBehind(err) {
-				log.Warn("Full TBC node is behind reverted state", "block", session.tbcHeader.Hash(), "err", err)
-			} else if isHvmReapplyRecoverableError(err) {
-				bc.recoverReapplyHvmState("revert lightweight view after side block", err)
-			} else {
-				log.Crit("Unable to revert lightweight TBC node", "err", err)
-			}
-		}
-	}
+	// A valid block leaves the hVM state at the block. op-geth moves it back when the block does
+	// not extend the canonical head; op-reth does not need to: every execution first moves the
+	// state to the block's parent, and every new canonical head moves it to the head (HvmSetHead).
+	// Moving it back here would make a backfill of N blocks walk O(N^2) blocks.
 }
 
 // HvmPrepareBuild moves the hVM state to the parent of a block op-reth is about to build and takes
@@ -608,6 +614,11 @@ func HvmPrepareBuild(parentHash *C.uchar, timestamp C.uint64_t, out **C.uchar, o
 	parent := bc.GetHeaderByHash(hash32(parentHash))
 	bc.chainmu.Lock()
 	session.active, session.build, session.block, session.tbcHeader = true, true, nil, nil
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("panic in hVM bridge", "fn", "HvmPrepareBuild", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	if parent == nil || !bc.chainConfig.IsHvm0(uint64(timestamp)) || !bc.chainConfig.IsHvm0(parent.Time) {
 		return statusOK
 	}
@@ -626,7 +637,8 @@ func HvmPrepareBuild(parentHash *C.uchar, timestamp C.uint64_t, out **C.uchar, o
 // block should not carry one.
 //
 //export HvmNextBtcAttr
-func HvmNextBtcAttr(parentHash *C.uchar, timestamp C.uint64_t, out **C.uchar, outLen *C.size_t) C.int32_t {
+func HvmNextBtcAttr(parentHash *C.uchar, timestamp C.uint64_t, out **C.uchar, outLen *C.size_t) (status C.int32_t) {
+	defer recoverStatus("HvmNextBtcAttr", &status, out, outLen)
 	if bc == nil || !bc.hvmEnabled {
 		return statusDisabled
 	}
@@ -755,6 +767,17 @@ func HvmMissingBtcBlocks(out **C.uchar, outLen *C.size_t) C.int32_t {
 	}
 	setOut(out, outLen, b)
 	return statusOK
+}
+
+// recoverStatus turns a panic in an exported function into statusError, so a fault in hVM
+// surfaces as an error in op-reth instead of terminating it.
+func recoverStatus(name string, status *C.int32_t, out **C.uchar, outLen *C.size_t) {
+	if r := recover(); r != nil {
+		stack := string(debug.Stack())
+		log.Error("panic in hVM bridge", "fn", name, "panic", r, "stack", stack)
+		setErr(out, outLen, fmt.Errorf("panic in %s: %v", name, r))
+		*status = statusError
+	}
 }
 
 func strip0x(s string) string { return strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X") }
