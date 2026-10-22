@@ -43,6 +43,10 @@ pub enum OpEthApiError {
     /// Sequencer client error.
     #[error(transparent)]
     Sequencer(#[from] SequencerClientError),
+    /// Hemi: an undefined or inactive opcode was executed. Reported with go-ethereum's error text
+    /// (`vm.ErrInvalidOpCode`) for compatibility with clients of hemilabs/op-geth.
+    #[error("invalid opcode: {0:?}")]
+    InvalidOpcode(revm::context::result::HaltReason),
 }
 
 impl AsEthApiError for OpEthApiError {
@@ -64,6 +68,9 @@ impl From<OpEthApiError> for jsonrpsee_types::error::ErrorObject<'static> {
             OpEthApiError::L1BlockGasError |
             OpEthApiError::InvalidPostExecPayload(_) => internal_rpc_err(err.to_string()),
             OpEthApiError::Sequencer(err) => err.into(),
+            OpEthApiError::InvalidOpcode(_) => {
+                jsonrpsee_types::error::ErrorObject::owned(-32000, err.to_string(), None::<()>)
+            }
         }
     }
 }
@@ -204,6 +211,11 @@ impl FromEvmHalt<OpHaltReason> for OpEthApiError {
             OpHaltReason::FailedDeposit => {
                 OpInvalidTransactionError::HaltedDepositPostRegolith.into()
             }
+            OpHaltReason::Base(
+                halt @ (revm::context::result::HaltReason::NotActivated |
+                revm::context::result::HaltReason::OpcodeNotFound |
+                revm::context::result::HaltReason::InvalidFEOpcode),
+            ) => Self::InvalidOpcode(halt),
             OpHaltReason::Base(halt) => EthApiError::from_evm_halt(halt, gas_limit).into(),
         }
     }
