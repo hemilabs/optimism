@@ -254,6 +254,38 @@ impl From<OpTransactionReceipt> for OpReceiptEnvelope<alloy_primitives::Log> {
                 };
                 Self::Deposit(consensus_receipt)
             }
+            OpReceiptEnvelope::PopPayout(OpDepositReceiptWithBloom { logs_bloom, receipt }) => {
+                let consensus_logs = receipt.inner.logs.into_iter().map(|log| log.inner).collect();
+                let consensus_receipt = OpDepositReceiptWithBloom {
+                    receipt: OpDepositReceipt {
+                        inner: Receipt {
+                            status: receipt.inner.status,
+                            cumulative_gas_used: receipt.inner.cumulative_gas_used,
+                            logs: consensus_logs,
+                        },
+                        deposit_nonce: receipt.deposit_nonce,
+                        deposit_receipt_version: receipt.deposit_receipt_version,
+                    },
+                    logs_bloom,
+                };
+                Self::PopPayout(consensus_receipt)
+            }
+            OpReceiptEnvelope::BtcAttributesDeposited(OpDepositReceiptWithBloom { logs_bloom, receipt }) => {
+                let consensus_logs = receipt.inner.logs.into_iter().map(|log| log.inner).collect();
+                let consensus_receipt = OpDepositReceiptWithBloom {
+                    receipt: OpDepositReceipt {
+                        inner: Receipt {
+                            status: receipt.inner.status,
+                            cumulative_gas_used: receipt.inner.cumulative_gas_used,
+                            logs: consensus_logs,
+                        },
+                        deposit_nonce: receipt.deposit_nonce,
+                        deposit_receipt_version: receipt.deposit_receipt_version,
+                    },
+                    logs_bloom,
+                };
+                Self::BtcAttributesDeposited(consensus_receipt)
+            }
         }
     }
 }

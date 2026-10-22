@@ -115,6 +115,16 @@ impl TryFrom<OpGethReceipt> for OpReceipt {
                 deposit_nonce: None,
                 deposit_receipt_version: None,
             })),
+            OpTxType::PopPayout => Ok(Self::PopPayout(OpDepositReceipt {
+                inner: receipt,
+                deposit_nonce: None,
+                deposit_receipt_version: None,
+            })),
+            OpTxType::BtcAttributesDeposited => Ok(Self::BtcAttributesDeposited(OpDepositReceipt {
+                inner: receipt,
+                deposit_nonce: None,
+                deposit_receipt_version: None,
+            })),
         }
     }
 }

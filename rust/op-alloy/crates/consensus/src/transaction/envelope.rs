@@ -1,5 +1,5 @@
 use crate::{
-    OpPooledTransaction, TxDeposit, TxPostExec,
+    OpPooledTransaction, TxBtcAttributesDeposited, TxDeposit, TxPopPayout, TxPostExec,
     transaction::{OpDepositInfo, OpTransactionInfo},
 };
 use alloy_consensus::{
@@ -33,13 +33,27 @@ pub enum OpTxEnvelope {
     #[envelope(ty = 126)]
     #[serde(serialize_with = "crate::serde_deposit_tx_rpc")]
     Deposit(Sealed<TxDeposit>),
-    /// A [`TxPostExec`] tagged with type 0x7D.
-    #[envelope(ty = 0x7D)]
+    /// A [`TxPostExec`] tagged with type 0x7B (upstream uses 0x7D, which Hemi uses for PoP payouts).
+    #[envelope(ty = 0x7B)]
     #[serde(
         serialize_with = "crate::post_exec::serde_post_exec_tx_rpc",
         deserialize_with = "crate::post_exec::serde_post_exec_tx_rpc_de"
     )]
     PostExec(Sealed<TxPostExec>),
+    /// Hemi: a [`TxPopPayout`] tagged with type 0x7D.
+    #[envelope(ty = 0x7D)]
+    #[serde(
+        serialize_with = "crate::hemi::serde_hemi_system_tx_rpc",
+        deserialize_with = "crate::hemi::serde_hemi_system_tx_rpc_de"
+    )]
+    PopPayout(Sealed<TxPopPayout>),
+    /// Hemi: a [`TxBtcAttributesDeposited`] tagged with type 0x7C.
+    #[envelope(ty = 0x7C)]
+    #[serde(
+        serialize_with = "crate::hemi::serde_hemi_system_tx_rpc",
+        deserialize_with = "crate::hemi::serde_hemi_system_tx_rpc_de"
+    )]
+    BtcAttributesDeposited(Sealed<TxBtcAttributesDeposited>),
 }
 
 /// Represents an Optimism transaction envelope.
@@ -55,6 +69,12 @@ pub trait OpTransaction {
 
     /// Returns `Some` if the transaction is a post-exec transaction.
     fn as_post_exec(&self) -> Option<&Sealed<TxPostExec>>;
+
+    /// Hemi: returns `true` if the transaction is a PoP payout (0x7D) or Bitcoin Attributes
+    /// Deposited (0x7C) transaction.
+    fn is_hemi_system_tx(&self) -> bool {
+        false
+    }
 }
 
 impl OpTransaction for OpTxEnvelope {
@@ -68,6 +88,10 @@ impl OpTransaction for OpTxEnvelope {
 
     fn as_post_exec(&self) -> Option<&Sealed<TxPostExec>> {
         self.as_post_exec()
+    }
+
+    fn is_hemi_system_tx(&self) -> bool {
+        self.is_hemi_system_tx()
     }
 }
 
@@ -87,6 +111,10 @@ impl<T: OpTransaction> OpTransaction for alloy_consensus::transaction::Recovered
 
     fn as_post_exec(&self) -> Option<&Sealed<TxPostExec>> {
         self.inner().as_post_exec()
+    }
+
+    fn is_hemi_system_tx(&self) -> bool {
+        self.inner().is_hemi_system_tx()
     }
 }
 
@@ -113,6 +141,13 @@ where
         match self {
             Self::BuiltIn(b) => b.as_post_exec(),
             Self::Other(t) => t.as_post_exec(),
+        }
+    }
+
+    fn is_hemi_system_tx(&self) -> bool {
+        match self {
+            Self::BuiltIn(b) => b.is_hemi_system_tx(),
+            Self::Other(t) => t.is_hemi_system_tx(),
         }
     }
 }
@@ -175,6 +210,8 @@ impl From<Signed<OpTypedTransaction>> for OpTxEnvelope {
             }
             OpTypedTransaction::Deposit(tx) => Self::Deposit(Sealed::new_unchecked(tx, hash)),
             OpTypedTransaction::PostExec(tx) => Self::PostExec(Sealed::new_unchecked(tx, hash)),
+            OpTypedTransaction::PopPayout(tx) => Self::PopPayout(Sealed::new_unchecked(tx, hash)),
+            OpTypedTransaction::BtcAttributesDeposited(tx) => Self::BtcAttributesDeposited(Sealed::new_unchecked(tx, hash)),
         }
     }
 }
@@ -200,6 +237,30 @@ impl From<TxPostExec> for OpTxEnvelope {
 impl From<Sealed<TxPostExec>> for OpTxEnvelope {
     fn from(v: Sealed<TxPostExec>) -> Self {
         Self::PostExec(v)
+    }
+}
+
+impl From<TxPopPayout> for OpTxEnvelope {
+    fn from(v: TxPopPayout) -> Self {
+        Self::PopPayout(v.seal_slow())
+    }
+}
+
+impl From<Sealed<TxPopPayout>> for OpTxEnvelope {
+    fn from(v: Sealed<TxPopPayout>) -> Self {
+        Self::PopPayout(v)
+    }
+}
+
+impl From<TxBtcAttributesDeposited> for OpTxEnvelope {
+    fn from(v: TxBtcAttributesDeposited) -> Self {
+        Self::BtcAttributesDeposited(v.seal_slow())
+    }
+}
+
+impl From<Sealed<TxBtcAttributesDeposited>> for OpTxEnvelope {
+    fn from(v: Sealed<TxBtcAttributesDeposited>) -> Self {
+        Self::BtcAttributesDeposited(v)
     }
 }
 
@@ -234,6 +295,8 @@ impl From<OpTxEnvelope> for alloy_rpc_types_eth::TransactionRequest {
             OpTxEnvelope::Eip7702(tx) => tx.into_parts().0.into(),
             OpTxEnvelope::Deposit(tx) => tx.into_inner().into(),
             OpTxEnvelope::PostExec(tx) => tx.into_inner().into(),
+            OpTxEnvelope::PopPayout(tx) => tx.into_inner().into(),
+            OpTxEnvelope::BtcAttributesDeposited(tx) => tx.into_inner().into(),
             OpTxEnvelope::Legacy(tx) => tx.into_parts().0.into(),
         }
     }
@@ -302,6 +365,9 @@ impl OpTxEnvelope {
             tx @ Self::PostExec(_) => {
                 Err(ValueError::new(tx, "PostExec transactions cannot be pooled"))
             }
+            tx @ (Self::PopPayout(_) | Self::BtcAttributesDeposited(_)) => {
+                Err(ValueError::new(tx, "Hemi system transactions cannot be pooled"))
+            }
         }
     }
 
@@ -332,6 +398,10 @@ impl OpTxEnvelope {
                 tx,
                 "PostExec transactions cannot be converted to ethereum transaction",
             )),
+            tx @ (Self::PopPayout(_) | Self::BtcAttributesDeposited(_)) => Err(ValueError::new(
+                tx,
+                "Hemi system transactions cannot be converted to ethereum transaction",
+            )),
         }
     }
 
@@ -346,7 +416,8 @@ impl OpTxEnvelope {
         F: FnOnce(TxHash) -> Result<Option<OpDepositInfo>, E>,
     {
         let deposit_meta =
-            if self.is_deposit() { f(self.tx_hash())? } else { None }.unwrap_or_default();
+            if self.is_deposit() || self.is_hemi_system_tx() { f(self.tx_hash())? } else { None }
+                .unwrap_or_default();
 
         Ok(OpTransactionInfo::new(tx_info, deposit_meta))
     }
@@ -383,6 +454,8 @@ impl OpTxEnvelope {
             Self::Eip7702(tx) => &mut tx.tx_mut().input,
             Self::Deposit(tx) => &mut tx.inner_mut().input,
             Self::PostExec(tx) => &mut tx.inner_mut().input,
+            Self::PopPayout(tx) => &mut tx.inner_mut().input,
+            Self::BtcAttributesDeposited(tx) => &mut tx.inner_mut().input,
         }
     }
 
@@ -420,6 +493,47 @@ impl OpTxEnvelope {
     #[inline]
     pub const fn is_post_exec(&self) -> bool {
         matches!(self, Self::PostExec(_))
+    }
+
+    /// Returns true if the transaction is a Hemi PoP payout transaction (0x7D).
+    #[inline]
+    pub const fn is_pop_payout(&self) -> bool {
+        matches!(self, Self::PopPayout(_))
+    }
+
+    /// Returns true if the transaction is a Hemi Bitcoin Attributes Deposited transaction (0x7C).
+    #[inline]
+    pub const fn is_btc_attributes_deposited(&self) -> bool {
+        matches!(self, Self::BtcAttributesDeposited(_))
+    }
+
+    /// Returns true if the transaction is a Hemi system transaction (0x7C or 0x7D).
+    #[inline]
+    pub const fn is_hemi_system_tx(&self) -> bool {
+        matches!(self, Self::PopPayout(_) | Self::BtcAttributesDeposited(_))
+    }
+
+    /// Returns true if the transaction is excluded from the DA footprint, like hemilabs/op-geth's
+    /// `IsZeroDAFootprintTx`: deposits and the Hemi system transactions.
+    #[inline]
+    pub const fn is_zero_da_footprint_tx(&self) -> bool {
+        self.is_deposit() || self.is_hemi_system_tx()
+    }
+
+    /// Returns the [`TxBtcAttributesDeposited`] if the transaction is one.
+    pub const fn as_btc_attributes_deposited(&self) -> Option<&Sealed<TxBtcAttributesDeposited>> {
+        match self {
+            Self::BtcAttributesDeposited(tx) => Some(tx),
+            _ => None,
+        }
+    }
+
+    /// Returns the [`TxPopPayout`] if the transaction is one.
+    pub const fn as_pop_payout(&self) -> Option<&Sealed<TxPopPayout>> {
+        match self {
+            Self::PopPayout(tx) => Some(tx),
+            _ => None,
+        }
     }
 
     /// Returns the [`TxLegacy`] variant if the transaction is a legacy transaction.
@@ -471,7 +585,7 @@ impl OpTxEnvelope {
             Self::Eip2930(tx) => Some(tx.signature()),
             Self::Eip1559(tx) => Some(tx.signature()),
             Self::Eip7702(tx) => Some(tx.signature()),
-            Self::Deposit(_) | Self::PostExec(_) => None,
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => None,
         }
     }
 
@@ -484,6 +598,8 @@ impl OpTxEnvelope {
             Self::Eip7702(_) => OpTxType::Eip7702,
             Self::Deposit(_) => OpTxType::Deposit,
             Self::PostExec(_) => OpTxType::PostExec,
+            Self::PopPayout(_) => OpTxType::PopPayout,
+            Self::BtcAttributesDeposited(_) => OpTxType::BtcAttributesDeposited,
         }
     }
 
@@ -496,6 +612,8 @@ impl OpTxEnvelope {
             Self::Eip7702(tx) => tx.hash(),
             Self::Deposit(tx) => tx.hash_ref(),
             Self::PostExec(tx) => tx.hash_ref(),
+            Self::PopPayout(tx) => tx.hash_ref(),
+            Self::BtcAttributesDeposited(tx) => tx.hash_ref(),
         }
     }
 
@@ -513,6 +631,8 @@ impl OpTxEnvelope {
             Self::Eip7702(t) => t.eip2718_encoded_length(),
             Self::Deposit(t) => t.eip2718_encoded_length(),
             Self::PostExec(t) => t.eip2718_encoded_length(),
+            Self::PopPayout(t) => t.eip2718_encoded_length(),
+            Self::BtcAttributesDeposited(t) => t.eip2718_encoded_length(),
         }
     }
 }
@@ -539,6 +659,8 @@ impl alloy_consensus::transaction::SignerRecoverable for OpTxEnvelope {
             // Post-exec transactions are system transactions. They use a
             // canonical zero-address signer rather than a cryptographic signature.
             Self::PostExec(tx) => return Ok(tx.inner().signer_address()),
+            Self::PopPayout(tx) => return Ok(tx.inner().signer_address()),
+            Self::BtcAttributesDeposited(tx) => return Ok(tx.inner().signer_address()),
         };
         let signature = match self {
             Self::Legacy(tx) => tx.signature(),
@@ -546,7 +668,7 @@ impl alloy_consensus::transaction::SignerRecoverable for OpTxEnvelope {
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
             // Deposit and PostExec are unsigned and handled via early return above.
-            Self::Deposit(_) | Self::PostExec(_) => {
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => {
                 unreachable!("non-signed transactions should not be handled here")
             }
         };
@@ -567,6 +689,8 @@ impl alloy_consensus::transaction::SignerRecoverable for OpTxEnvelope {
             // Post-exec transactions are unsigned system transactions. They use a
             // canonical zero-address signer rather than a cryptographic signature.
             Self::PostExec(tx) => return Ok(tx.inner().signer_address()),
+            Self::PopPayout(tx) => return Ok(tx.inner().signer_address()),
+            Self::BtcAttributesDeposited(tx) => return Ok(tx.inner().signer_address()),
         };
         let signature = match self {
             Self::Legacy(tx) => tx.signature(),
@@ -574,7 +698,7 @@ impl alloy_consensus::transaction::SignerRecoverable for OpTxEnvelope {
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
             // Deposit and PostExec are unsigned and handled via early return above.
-            Self::Deposit(_) | Self::PostExec(_) => unreachable!(),
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => unreachable!(),
         };
         alloy_consensus::crypto::secp256k1::recover_signer_unchecked(signature, signature_hash)
     }
@@ -599,6 +723,8 @@ impl alloy_consensus::transaction::SignerRecoverable for OpTxEnvelope {
             // Deposit and PostExec are unsigned; return their canonical signer directly.
             Self::Deposit(tx) => Ok(tx.from),
             Self::PostExec(tx) => Ok(tx.inner().signer_address()),
+            Self::PopPayout(tx) => Ok(tx.inner().signer_address()),
+            Self::BtcAttributesDeposited(tx) => Ok(tx.inner().signer_address()),
         }
     }
 }
@@ -660,6 +786,28 @@ pub mod serde_bincode_compat {
             /// Owned post-exec transaction data.
             transaction: TxPostExec,
         },
+        /// Hemi PoP payout variant.
+        PopPayout {
+            /// Precomputed hash.
+            hash: B256,
+            /// Destination.
+            to: Option<alloy_primitives::Address>,
+            /// Gas limit.
+            gas_limit: u64,
+            /// Input.
+            input: alloy_primitives::Bytes,
+        },
+        /// Hemi Bitcoin Attributes Deposited variant.
+        BtcAttributesDeposited {
+            /// Precomputed hash.
+            hash: B256,
+            /// Destination.
+            to: Option<alloy_primitives::Address>,
+            /// Gas limit.
+            gas_limit: u64,
+            /// Input.
+            input: alloy_primitives::Bytes,
+        },
     }
 
     impl<'a> From<&'a super::OpTxEnvelope> for OpTxEnvelope<'a> {
@@ -689,6 +837,18 @@ pub mod serde_bincode_compat {
                     hash: sealed_post_exec.seal(),
                     transaction: sealed_post_exec.inner().clone(),
                 },
+                super::OpTxEnvelope::PopPayout(tx) => Self::PopPayout {
+                    hash: tx.seal(),
+                    to: tx.inner().to,
+                    gas_limit: tx.inner().gas_limit,
+                    input: tx.inner().input.clone(),
+                },
+                super::OpTxEnvelope::BtcAttributesDeposited(tx) => Self::BtcAttributesDeposited {
+                    hash: tx.seal(),
+                    to: tx.inner().to,
+                    gas_limit: tx.inner().gas_limit,
+                    input: tx.inner().input.clone(),
+                },
             }
         }
     }
@@ -713,6 +873,15 @@ pub mod serde_bincode_compat {
                 }
                 OpTxEnvelope::PostExec { hash, transaction } => {
                     Self::PostExec(Sealed::new_unchecked(transaction, hash))
+                }
+                OpTxEnvelope::PopPayout { hash, to, gas_limit, input } => Self::PopPayout(
+                    Sealed::new_unchecked(crate::TxPopPayout { to, gas_limit, input }, hash),
+                ),
+                OpTxEnvelope::BtcAttributesDeposited { hash, to, gas_limit, input } => {
+                    Self::BtcAttributesDeposited(Sealed::new_unchecked(
+                        crate::TxBtcAttributesDeposited { to, gas_limit, input },
+                        hash,
+                    ))
                 }
             }
         }

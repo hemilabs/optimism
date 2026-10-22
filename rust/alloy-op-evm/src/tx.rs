@@ -8,7 +8,7 @@ use alloy_eips::{Encodable2718, Typed2718, eip7594::Encodable7594};
 use alloy_evm::{FromRecoveredTx, FromTxWithEncoded, IntoTxEnv, TransactionEnvMut};
 use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
 use core::ops::{Deref, DerefMut};
-use op_alloy::consensus::{OpTxEnvelope, TxDeposit, TxPostExec};
+use op_alloy::consensus::{OpTxEnvelope, TxBtcAttributesDeposited, TxDeposit, TxPopPayout, TxPostExec};
 use op_revm::{OpTransaction, transaction::deposit::DepositTransactionParts};
 use revm::context::TxEnv;
 
@@ -181,6 +181,10 @@ impl FromTxWithEncoded<OpTxEnvelope> for OpTx {
             OpTxEnvelope::Eip7702(tx) => Self::from_encoded_tx(tx, caller, encoded),
             OpTxEnvelope::Deposit(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
             OpTxEnvelope::PostExec(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
+            OpTxEnvelope::PopPayout(tx) => Self::from_encoded_tx(tx.inner(), caller, encoded),
+            OpTxEnvelope::BtcAttributesDeposited(tx) => {
+                Self::from_encoded_tx(tx.inner(), caller, encoded)
+            }
         }
     }
 }
@@ -277,6 +281,41 @@ impl FromTxWithEncoded<TxPostExec> for OpTx {
         Self(OpTransaction { base, enveloped_tx: Some(encoded), deposit: Default::default() })
     }
 }
+
+/// Generates the [`OpTx`] conversions for the Hemi system transactions (PoP payout and Bitcoin
+/// Attributes Deposited). They are always sent by
+/// [`op_alloy::consensus::HEMI_SYSTEM_SENDER`], carry no value and pay no gas; op-revm executes
+/// them with deposit semantics (see `op_revm::transaction::deposit::is_deposit_like_tx_type`).
+macro_rules! impl_from_hemi_tx {
+    ($($tx:ty),+ $(,)?) => {
+        $(
+            impl FromRecoveredTx<$tx> for OpTx {
+                fn from_recovered_tx(tx: &$tx, _sender: Address) -> Self {
+                    let encoded = tx.encoded_2718();
+                    Self::from_encoded_tx(tx, tx.signer_address(), encoded.into())
+                }
+            }
+
+            impl FromTxWithEncoded<$tx> for OpTx {
+                fn from_encoded_tx(tx: &$tx, _caller: Address, encoded: Bytes) -> Self {
+                    let base = TxEnv {
+                        tx_type: tx.ty(),
+                        caller: tx.signer_address(),
+                        gas_limit: tx.gas_limit,
+                        kind: tx.kind(),
+                        value: U256::ZERO,
+                        data: tx.input.clone(),
+                        chain_id: None,
+                        ..Default::default()
+                    };
+                    Self(OpTransaction { base, enveloped_tx: Some(encoded), deposit: Default::default() })
+                }
+            }
+        )+
+    };
+}
+
+impl_from_hemi_tx!(TxPopPayout, TxBtcAttributesDeposited);
 
 impl TransactionEnvMut for OpTx {
     fn set_gas_limit(&mut self, gas_limit: u64) {

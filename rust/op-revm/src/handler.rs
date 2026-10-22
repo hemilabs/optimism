@@ -3,7 +3,10 @@ use crate::{
     L1BlockInfo, OpHaltReason, OpSpecId,
     api::exec::OpContextTr,
     constants::{BASE_FEE_RECIPIENT, L1_FEE_RECIPIENT, OPERATOR_FEE_RECIPIENT},
-    transaction::{OpTransactionError, OpTxTr, deposit::DEPOSIT_TRANSACTION_TYPE},
+    transaction::{
+        OpTransactionError, OpTxTr,
+        deposit::{DEPOSIT_TRANSACTION_TYPE, is_deposit_like_tx_type, is_hemi_system_tx_type},
+    },
 };
 use op_alloy_consensus::OpTxType;
 use revm::{
@@ -95,6 +98,11 @@ where
             return Ok(());
         }
 
+        // Hemi system transactions are protocol-generated and, like deposits, skip all checks.
+        if is_hemi_system_tx_type(tx_type) {
+            return Ok(());
+        }
+
         // Check that non-deposit transactions have enveloped_tx set
         if tx.enveloped_tx().is_none() {
             return Err(OpTransactionError::MissingEnvelopedTx.into());
@@ -111,7 +119,7 @@ where
         let (block, tx, cfg, journal, chain, _) = evm.ctx().all_mut();
         let spec = cfg.spec();
 
-        if tx.tx_type() == DEPOSIT_TRANSACTION_TYPE {
+        if is_deposit_like_tx_type(tx.tx_type()) {
             let basefee = block.basefee() as u128;
             let blob_price = block.blob_gasprice().unwrap_or_default();
             // deposit skips max fee check and just deducts the effective balance spending.
@@ -191,7 +199,7 @@ where
     ) -> Result<(), Self::Error> {
         let ctx = evm.ctx();
         let tx = ctx.tx();
-        let is_deposit = tx.tx_type() == DEPOSIT_TRANSACTION_TYPE;
+        let is_deposit = is_deposit_like_tx_type(tx.tx_type());
         let tx_gas_limit = tx.gas_limit();
         let is_regolith = ctx.cfg().spec().is_enabled_in(OpSpecId::REGOLITH);
 
@@ -284,7 +292,7 @@ where
         evm: &mut Self::Evm,
         frame_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
     ) -> Result<(), Self::Error> {
-        let additional_refund = if evm.ctx().tx().tx_type() != DEPOSIT_TRANSACTION_TYPE &&
+        let additional_refund = if !is_deposit_like_tx_type(evm.ctx().tx().tx_type()) &&
             !evm.ctx().cfg().is_fee_charge_disabled()
         {
             let spec = evm.ctx().cfg().spec();
@@ -304,7 +312,7 @@ where
     ) {
         frame_result.gas_mut().record_refund(eip7702_refund);
 
-        let is_deposit = evm.ctx().tx().tx_type() == DEPOSIT_TRANSACTION_TYPE;
+        let is_deposit = is_deposit_like_tx_type(evm.ctx().tx().tx_type());
         let is_regolith = evm.ctx().cfg().spec().is_enabled_in(OpSpecId::REGOLITH);
 
         // Prior to Regolith, deposit transactions did not receive gas refunds.
@@ -321,7 +329,7 @@ where
         evm: &mut Self::Evm,
         frame_result: &mut <<Self::Evm as EvmTr>::Frame as FrameTr>::FrameResult,
     ) -> Result<(), Self::Error> {
-        let is_deposit = evm.ctx().tx().tx_type() == DEPOSIT_TRANSACTION_TYPE;
+        let is_deposit = is_deposit_like_tx_type(evm.ctx().tx().tx_type());
 
         // Transfer fee to coinbase/beneficiary.
         if is_deposit {
@@ -439,7 +447,9 @@ where
             OpTxType::Eip2930 |
             OpTxType::Eip1559 |
             OpTxType::Eip7702 |
-            OpTxType::PostExec => self.discard_and_surface_error(evm, error),
+            OpTxType::PostExec |
+            OpTxType::PopPayout |
+            OpTxType::BtcAttributesDeposited => self.discard_and_surface_error(evm, error),
         }
     }
 

@@ -167,8 +167,8 @@ impl<T: Transaction> Transaction for OpTransaction<T> {
     }
 
     fn effective_gas_price(&self, base_fee: u128) -> u128 {
-        // Deposit transactions use gas_price directly
-        if self.tx_type() == DEPOSIT_TRANSACTION_TYPE {
+        // Deposit (and Hemi system) transactions use gas_price directly
+        if super::deposit::is_deposit_like_tx_type(self.tx_type()) {
             return self.gas_price();
         }
         self.base.effective_gas_price(base_fee)

@@ -49,6 +49,11 @@ pub fn encoded_tx_da_footprint(encoded_2718: &[u8], da_footprint_gas_scalar: u64
     if encoded_2718.first() == Some(&POST_EXEC_TX_TYPE_ID) {
         return 0;
     }
+    // Hemi: PoP payout and Bitcoin Attributes Deposited transactions are never posted to L1 and
+    // have no DA footprint (hemilabs/op-geth `IsZeroDAFootprintTx`).
+    if encoded_2718.first().is_some_and(|ty| deposit::is_hemi_system_tx_type(*ty)) {
+        return 0;
+    }
 
     estimate_tx_compressed_size(encoded_2718)
         .saturating_div(1_000_000)

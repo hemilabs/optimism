@@ -39,7 +39,7 @@ impl<T: OpTransaction + TransactionTrait> Transaction<T> {
     /// Converts a consensus `tx` with an additional context `tx_info` into an RPC [`Transaction`].
     pub fn from_transaction(tx: Recovered<T>, tx_info: OpTransactionInfo) -> Self {
         let base_fee = tx_info.inner.base_fee;
-        let effective_gas_price = if tx.is_deposit() {
+        let effective_gas_price = if tx.is_deposit() || tx.is_hemi_system_tx() {
             // For deposits, we must always set the `gasPrice` field to 0 in rpc
             // deposit tx don't have a gas price field, but serde of `Transaction` will take care of
             // it
@@ -222,6 +222,10 @@ impl<T: OpTransaction> OpTransaction for Transaction<T> {
     fn as_post_exec(&self) -> Option<&Sealed<TxPostExec>> {
         self.inner.as_ref().as_post_exec()
     }
+
+    fn is_hemi_system_tx(&self) -> bool {
+        self.inner.as_ref().is_hemi_system_tx()
+    }
 }
 
 mod tx_serde {
@@ -347,7 +351,8 @@ mod tx_serde {
             };
 
             // Only serialize deposit_nonce if inner transaction is deposit to avoid duplicated keys
-            let deposit_nonce = other.deposit_nonce.filter(|_| inner.is_deposit());
+            let deposit_nonce =
+                other.deposit_nonce.filter(|_| inner.is_deposit() || inner.is_hemi_system_tx());
 
             let effective_gas_price = other.effective_gas_price.or_else(|| inner.gas_price());
 

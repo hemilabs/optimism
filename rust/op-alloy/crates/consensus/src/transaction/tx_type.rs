@@ -22,18 +22,33 @@ impl Display for OpTxType {
             Self::Eip7702 => write!(f, "eip7702"),
             Self::Deposit => write!(f, "deposit"),
             Self::PostExec => write!(f, "post-exec"),
+            Self::PopPayout => write!(f, "pop-payout"),
+            Self::BtcAttributesDeposited => write!(f, "btc-attributes-deposited"),
         }
     }
 }
 
 impl OpTxType {
     /// List of all variants.
-    pub const ALL: [Self; 6] =
-        [Self::Legacy, Self::Eip2930, Self::Eip1559, Self::Eip7702, Self::Deposit, Self::PostExec];
+    pub const ALL: [Self; 8] = [
+        Self::Legacy,
+        Self::Eip2930,
+        Self::Eip1559,
+        Self::Eip7702,
+        Self::Deposit,
+        Self::PostExec,
+        Self::PopPayout,
+        Self::BtcAttributesDeposited,
+    ];
 
     /// Returns `true` if the type is [`OpTxType::Deposit`].
     pub const fn is_deposit(&self) -> bool {
         matches!(self, Self::Deposit)
+    }
+
+    /// Returns `true` if the type is one of the Hemi system transaction types.
+    pub const fn is_hemi_system(&self) -> bool {
+        matches!(self, Self::PopPayout | Self::BtcAttributesDeposited)
     }
 }
 
@@ -45,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_all_tx_types() {
-        assert_eq!(OpTxType::ALL.len(), 6);
+        assert_eq!(OpTxType::ALL.len(), 8);
         let all = vec![
             OpTxType::Legacy,
             OpTxType::Eip2930,
@@ -53,6 +68,8 @@ mod tests {
             OpTxType::Eip7702,
             OpTxType::Deposit,
             OpTxType::PostExec,
+            OpTxType::PopPayout,
+            OpTxType::BtcAttributesDeposited,
         ];
         assert_eq!(OpTxType::ALL.to_vec(), all);
     }

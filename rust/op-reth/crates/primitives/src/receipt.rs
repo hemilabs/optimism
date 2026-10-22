@@ -73,6 +73,14 @@ pub(super) mod serde_bincode_compat {
         Deposit(
             op_alloy_consensus::serde_bincode_compat::OpDepositReceipt<'a, alloy_primitives::Log>,
         ),
+        /// Hemi PoP payout receipt
+        PopPayout(
+            op_alloy_consensus::serde_bincode_compat::OpDepositReceipt<'a, alloy_primitives::Log>,
+        ),
+        /// Hemi Bitcoin Attributes Deposited receipt
+        BtcAttributesDeposited(
+            op_alloy_consensus::serde_bincode_compat::OpDepositReceipt<'a, alloy_primitives::Log>,
+        ),
     }
 
     impl<'a> From<&'a super::OpReceipt> for OpReceipt<'a> {
@@ -84,6 +92,8 @@ pub(super) mod serde_bincode_compat {
                 super::OpReceipt::Eip7702(receipt) => Self::Eip7702(receipt.into()),
                 super::OpReceipt::PostExec(receipt) => Self::PostExec(receipt.into()),
                 super::OpReceipt::Deposit(receipt) => Self::Deposit(receipt.into()),
+                super::OpReceipt::PopPayout(receipt) => Self::PopPayout(receipt.into()),
+                super::OpReceipt::BtcAttributesDeposited(receipt) => Self::BtcAttributesDeposited(receipt.into()),
             }
         }
     }
@@ -97,6 +107,8 @@ pub(super) mod serde_bincode_compat {
                 OpReceipt::Eip7702(receipt) => Self::Eip7702(receipt.into()),
                 OpReceipt::PostExec(receipt) => Self::PostExec(receipt.into()),
                 OpReceipt::Deposit(receipt) => Self::Deposit(receipt.into()),
+                OpReceipt::PopPayout(receipt) => Self::PopPayout(receipt.into()),
+                OpReceipt::BtcAttributesDeposited(receipt) => Self::BtcAttributesDeposited(receipt.into()),
             }
         }
     }

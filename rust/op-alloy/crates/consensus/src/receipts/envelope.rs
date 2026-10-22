@@ -42,14 +42,21 @@ pub enum OpReceiptEnvelope<T = Log> {
     /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
     #[cfg_attr(feature = "serde", serde(rename = "0x4", alias = "0x04"))]
     Eip7702(ReceiptWithBloom<Receipt<T>>),
-    /// Receipt envelope with type flag 125, containing a post-execution receipt.
-    #[cfg_attr(feature = "serde", serde(rename = "0x7d", alias = "0x7D"))]
+    /// Receipt envelope with type flag 123, containing a post-execution receipt.
+    #[cfg_attr(feature = "serde", serde(rename = "0x7b", alias = "0x7B"))]
     PostExec(ReceiptWithBloom<Receipt<T>>),
     /// Receipt envelope with type flag 126, containing a [deposit] receipt.
     ///
     /// [deposit]: https://specs.optimism.io/protocol/deposits.html
     #[cfg_attr(feature = "serde", serde(rename = "0x7e", alias = "0x7E"))]
     Deposit(ReceiptWithBloom<OpDepositReceipt<T>>),
+    /// Hemi: receipt of a PoP payout transaction (type `0x7D`). Encoded like a deposit receipt
+    /// carrying the sender nonce and no receipt version.
+    #[cfg_attr(feature = "serde", serde(rename = "0x7d", alias = "0x7D"))]
+    PopPayout(ReceiptWithBloom<OpDepositReceipt<T>>),
+    /// Hemi: receipt of a Bitcoin Attributes Deposited transaction (type `0x7C`).
+    #[cfg_attr(feature = "serde", serde(rename = "0x7c", alias = "0x7C"))]
+    BtcAttributesDeposited(ReceiptWithBloom<OpDepositReceipt<T>>),
 }
 
 impl OpReceiptEnvelope<Log> {
@@ -93,6 +100,14 @@ impl OpReceiptEnvelope<Log> {
                 };
                 Self::Deposit(inner)
             }
+            OpTxType::PopPayout => Self::PopPayout(OpDepositReceiptWithBloom {
+                receipt: OpDepositReceipt { inner: inner_receipt, deposit_nonce, deposit_receipt_version: None },
+                logs_bloom,
+            }),
+            OpTxType::BtcAttributesDeposited => Self::BtcAttributesDeposited(OpDepositReceiptWithBloom {
+                receipt: OpDepositReceipt { inner: inner_receipt, deposit_nonce, deposit_receipt_version: None },
+                logs_bloom,
+            }),
         }
     }
 }
@@ -107,6 +122,8 @@ impl<T> OpReceiptEnvelope<T> {
             Self::Eip7702(_) => OpTxType::Eip7702,
             Self::PostExec(_) => OpTxType::PostExec,
             Self::Deposit(_) => OpTxType::Deposit,
+            Self::PopPayout(_) => OpTxType::PopPayout,
+            Self::BtcAttributesDeposited(_) => OpTxType::BtcAttributesDeposited,
         }
     }
 
@@ -136,6 +153,8 @@ impl<T> OpReceiptEnvelope<T> {
             Self::Eip7702(r) => OpReceiptEnvelope::Eip7702(r.map_logs(f)),
             Self::PostExec(r) => OpReceiptEnvelope::PostExec(r.map_logs(f)),
             Self::Deposit(r) => OpReceiptEnvelope::Deposit(r.map_receipt(|r| r.map_logs(f))),
+            Self::PopPayout(r) => OpReceiptEnvelope::PopPayout(r.map_receipt(|r| r.map_logs(f))),
+            Self::BtcAttributesDeposited(r) => OpReceiptEnvelope::BtcAttributesDeposited(r.map_receipt(|r| r.map_logs(f))),
         }
     }
 
@@ -158,6 +177,8 @@ impl<T> OpReceiptEnvelope<T> {
             Self::Eip7702(t) |
             Self::PostExec(t) => &t.logs_bloom,
             Self::Deposit(t) => &t.logs_bloom,
+            Self::PopPayout(t) => &t.logs_bloom,
+            Self::BtcAttributesDeposited(t) => &t.logs_bloom,
         }
     }
 
@@ -179,6 +200,15 @@ impl<T> OpReceiptEnvelope<T> {
         }
     }
 
+    /// Hemi: returns the sender nonce recorded in a PoP payout or Bitcoin Attributes Deposited
+    /// receipt.
+    pub const fn hemi_system_nonce(&self) -> Option<u64> {
+        match self {
+            Self::PopPayout(t) | Self::BtcAttributesDeposited(t) => t.receipt.deposit_nonce,
+            _ => None,
+        }
+    }
+
     /// Returns the deposit receipt if it is a deposit receipt.
     pub const fn as_deposit_receipt(&self) -> Option<&OpDepositReceipt<T>> {
         match self {
@@ -196,6 +226,8 @@ impl<T> OpReceiptEnvelope<T> {
             Self::Eip7702(t) |
             Self::PostExec(t) => t.receipt,
             Self::Deposit(t) => t.receipt.into_inner(),
+            Self::PopPayout(t) => t.receipt.into_inner(),
+            Self::BtcAttributesDeposited(t) => t.receipt.into_inner(),
         }
     }
 
@@ -209,6 +241,8 @@ impl<T> OpReceiptEnvelope<T> {
             Self::Eip7702(t) |
             Self::PostExec(t) => Some(&t.receipt),
             Self::Deposit(t) => Some(&t.receipt.inner),
+            Self::PopPayout(t) => Some(&t.receipt.inner),
+            Self::BtcAttributesDeposited(t) => Some(&t.receipt.inner),
         }
     }
 }
@@ -223,6 +257,8 @@ impl OpReceiptEnvelope {
             Self::Eip7702(t) |
             Self::PostExec(t) => t.length(),
             Self::Deposit(t) => t.length(),
+            Self::PopPayout(t) => t.length(),
+            Self::BtcAttributesDeposited(t) => t.length(),
         }
     }
 
@@ -300,6 +336,8 @@ impl Typed2718 for OpReceiptEnvelope {
             Self::Eip7702(_) => OpTxType::Eip7702,
             Self::PostExec(_) => OpTxType::PostExec,
             Self::Deposit(_) => OpTxType::Deposit,
+            Self::PopPayout(_) => OpTxType::PopPayout,
+            Self::BtcAttributesDeposited(_) => OpTxType::BtcAttributesDeposited,
         };
         ty as u8
     }
@@ -323,6 +361,8 @@ impl Encodable2718 for OpReceiptEnvelope {
         }
         match self {
             Self::Deposit(t) => t.encode(out),
+            Self::PopPayout(t) => t.encode(out),
+            Self::BtcAttributesDeposited(t) => t.encode(out),
             Self::Legacy(t) |
             Self::Eip2930(t) |
             Self::Eip1559(t) |
@@ -344,6 +384,8 @@ impl Decodable2718 for OpReceiptEnvelope {
             OpTxType::Eip2930 => Ok(Self::Eip2930(Decodable::decode(buf)?)),
             OpTxType::PostExec => Ok(Self::PostExec(Decodable::decode(buf)?)),
             OpTxType::Deposit => Ok(Self::Deposit(Decodable::decode(buf)?)),
+            OpTxType::PopPayout => Ok(Self::PopPayout(Decodable::decode(buf)?)),
+            OpTxType::BtcAttributesDeposited => Ok(Self::BtcAttributesDeposited(Decodable::decode(buf)?)),
         }
     }
 

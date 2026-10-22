@@ -1,5 +1,5 @@
 pub use crate::transaction::envelope::OpTypedTransaction;
-use crate::{OpTxEnvelope, OpTxType, TxDeposit, TxPostExec};
+use crate::{OpTxEnvelope, OpTxType, TxBtcAttributesDeposited, TxDeposit, TxPopPayout, TxPostExec};
 use alloy_consensus::{
     EthereumTypedTransaction, SignableTransaction, Signed, TxEip1559, TxEip2930, TxEip7702,
     TxLegacy, Typed2718, TypedTransaction, error::ValueError, transaction::RlpEcdsaEncodableTx,
@@ -43,6 +43,18 @@ impl From<TxPostExec> for OpTypedTransaction {
     }
 }
 
+impl From<TxPopPayout> for OpTypedTransaction {
+    fn from(tx: TxPopPayout) -> Self {
+        Self::PopPayout(tx)
+    }
+}
+
+impl From<TxBtcAttributesDeposited> for OpTypedTransaction {
+    fn from(tx: TxBtcAttributesDeposited) -> Self {
+        Self::BtcAttributesDeposited(tx)
+    }
+}
+
 impl From<OpTxEnvelope> for OpTypedTransaction {
     fn from(envelope: OpTxEnvelope) -> Self {
         match envelope {
@@ -52,6 +64,8 @@ impl From<OpTxEnvelope> for OpTypedTransaction {
             OpTxEnvelope::Eip7702(tx) => Self::Eip7702(tx.strip_signature()),
             OpTxEnvelope::Deposit(tx) => Self::Deposit(tx.into_inner()),
             OpTxEnvelope::PostExec(tx) => Self::PostExec(tx.into_inner()),
+            OpTxEnvelope::PopPayout(tx) => Self::PopPayout(tx.into_inner()),
+            OpTxEnvelope::BtcAttributesDeposited(tx) => Self::BtcAttributesDeposited(tx.into_inner()),
         }
     }
 }
@@ -74,6 +88,8 @@ impl From<OpTypedTransaction> for alloy_rpc_types_eth::TransactionRequest {
             OpTypedTransaction::Eip7702(tx) => tx.into(),
             OpTypedTransaction::Deposit(tx) => tx.into(),
             OpTypedTransaction::PostExec(tx) => tx.into(),
+            OpTypedTransaction::PopPayout(tx) => tx.into(),
+            OpTypedTransaction::BtcAttributesDeposited(tx) => tx.into(),
         }
     }
 }
@@ -88,6 +104,8 @@ impl OpTypedTransaction {
             Self::Eip7702(_) => OpTxType::Eip7702,
             Self::Deposit(_) => OpTxType::Deposit,
             Self::PostExec(_) => OpTxType::PostExec,
+            Self::PopPayout(_) => OpTxType::PopPayout,
+            Self::BtcAttributesDeposited(_) => OpTxType::BtcAttributesDeposited,
         }
     }
 
@@ -101,7 +119,7 @@ impl OpTypedTransaction {
             Self::Eip1559(tx) => Some(tx.signature_hash()),
             Self::Eip7702(tx) => Some(tx.signature_hash()),
             // Deposit and PostExec are system transactions with no signature hash.
-            Self::Deposit(_) | Self::PostExec(_) => None,
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => None,
         }
     }
 
@@ -162,6 +180,8 @@ impl OpTypedTransaction {
             Self::Eip7702(tx) => tx.tx_hash(signature),
             Self::Deposit(tx) => tx.tx_hash(),
             Self::PostExec(tx) => tx.tx_hash(),
+            Self::PopPayout(tx) => tx.tx_hash(),
+            Self::BtcAttributesDeposited(tx) => tx.tx_hash(),
         }
     }
 
@@ -201,6 +221,10 @@ impl OpTypedTransaction {
                 tx,
                 "PostExec transactions cannot be converted to ethereum transaction",
             )),
+            tx @ (Self::PopPayout(_) | Self::BtcAttributesDeposited(_)) => Err(ValueError::new(
+                tx,
+                "Hemi system transactions cannot be converted to ethereum transaction",
+            )),
         }
     }
 }
@@ -214,6 +238,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.rlp_encoded_fields_length(),
             Self::Deposit(tx) => tx.rlp_encoded_fields_length(),
             Self::PostExec(tx) => tx.rlp_encoded_fields_length(),
+            Self::PopPayout(tx) => tx.rlp_encoded_fields_length(),
+            Self::BtcAttributesDeposited(tx) => tx.rlp_encoded_fields_length(),
         }
     }
 
@@ -225,6 +251,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.rlp_encode_fields(out),
             Self::Deposit(tx) => tx.rlp_encode_fields(out),
             Self::PostExec(tx) => tx.rlp_encode_fields(out),
+            Self::PopPayout(tx) => tx.rlp_encode_fields(out),
+            Self::BtcAttributesDeposited(tx) => tx.rlp_encode_fields(out),
         }
     }
 
@@ -236,6 +264,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.eip2718_encode_with_type(signature, tx.ty(), out),
             Self::Deposit(tx) => tx.encode_2718(out),
             Self::PostExec(tx) => tx.encode_2718(out),
+            Self::PopPayout(tx) => tx.encode_2718(out),
+            Self::BtcAttributesDeposited(tx) => tx.encode_2718(out),
         }
     }
 
@@ -247,6 +277,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.eip2718_encode(signature, out),
             Self::Deposit(tx) => tx.encode_2718(out),
             Self::PostExec(tx) => tx.encode_2718(out),
+            Self::PopPayout(tx) => tx.encode_2718(out),
+            Self::BtcAttributesDeposited(tx) => tx.encode_2718(out),
         }
     }
 
@@ -258,6 +290,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.network_encode_with_type(signature, tx.ty(), out),
             Self::Deposit(tx) => tx.network_encode(out),
             Self::PostExec(tx) => tx.network_encode(out),
+            Self::PopPayout(tx) => tx.network_encode(out),
+            Self::BtcAttributesDeposited(tx) => tx.network_encode(out),
         }
     }
 
@@ -269,6 +303,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.network_encode(signature, out),
             Self::Deposit(tx) => tx.network_encode(out),
             Self::PostExec(tx) => tx.network_encode(out),
+            Self::PopPayout(tx) => tx.network_encode(out),
+            Self::BtcAttributesDeposited(tx) => tx.network_encode(out),
         }
     }
 
@@ -280,6 +316,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.tx_hash_with_type(signature, tx.ty()),
             Self::Deposit(tx) => tx.tx_hash(),
             Self::PostExec(tx) => tx.tx_hash(),
+            Self::PopPayout(tx) => tx.tx_hash(),
+            Self::BtcAttributesDeposited(tx) => tx.tx_hash(),
         }
     }
 
@@ -291,6 +329,8 @@ impl RlpEcdsaEncodableTx for OpTypedTransaction {
             Self::Eip7702(tx) => tx.tx_hash(signature),
             Self::Deposit(tx) => tx.tx_hash(),
             Self::PostExec(tx) => tx.tx_hash(),
+            Self::PopPayout(tx) => tx.tx_hash(),
+            Self::BtcAttributesDeposited(tx) => tx.tx_hash(),
         }
     }
 }
@@ -302,7 +342,7 @@ impl SignableTransaction<Signature> for OpTypedTransaction {
             Self::Eip2930(tx) => tx.set_chain_id(chain_id),
             Self::Eip1559(tx) => tx.set_chain_id(chain_id),
             Self::Eip7702(tx) => tx.set_chain_id(chain_id),
-            Self::Deposit(_) | Self::PostExec(_) => {}
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => {}
         }
     }
 
@@ -312,7 +352,7 @@ impl SignableTransaction<Signature> for OpTypedTransaction {
             Self::Eip2930(tx) => tx.encode_for_signing(out),
             Self::Eip1559(tx) => tx.encode_for_signing(out),
             Self::Eip7702(tx) => tx.encode_for_signing(out),
-            Self::Deposit(_) | Self::PostExec(_) => {}
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => {}
         }
     }
 
@@ -322,7 +362,7 @@ impl SignableTransaction<Signature> for OpTypedTransaction {
             Self::Eip2930(tx) => tx.payload_len_for_signature(),
             Self::Eip1559(tx) => tx.payload_len_for_signature(),
             Self::Eip7702(tx) => tx.payload_len_for_signature(),
-            Self::Deposit(_) | Self::PostExec(_) => 0,
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => 0,
         }
     }
 

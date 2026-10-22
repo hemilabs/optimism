@@ -4,6 +4,25 @@ use revm::primitives::B256;
 /// Deposit transaction type.
 pub const DEPOSIT_TRANSACTION_TYPE: u8 = 0x7E;
 
+/// Hemi PoP payout transaction type.
+pub const POP_PAYOUT_TRANSACTION_TYPE: u8 = 0x7D;
+
+/// Hemi Bitcoin Attributes Deposited transaction type.
+pub const BTC_ATTRIBUTES_DEPOSITED_TRANSACTION_TYPE: u8 = 0x7C;
+
+/// Returns `true` for the Hemi system transaction types (PoP payout and Bitcoin Attributes
+/// Deposited).
+pub const fn is_hemi_system_tx_type(tx_type: u8) -> bool {
+    tx_type == POP_PAYOUT_TRANSACTION_TYPE || tx_type == BTC_ATTRIBUTES_DEPOSITED_TRANSACTION_TYPE
+}
+
+/// Returns `true` for transaction types executed with deposit semantics: no fee checks or
+/// payments, no nonce check, and pre-Regolith gas accounting. hemilabs/op-geth applies these
+/// semantics to deposits (0x7E) and to the Hemi system transactions (0x7C, 0x7D).
+pub const fn is_deposit_like_tx_type(tx_type: u8) -> bool {
+    tx_type == DEPOSIT_TRANSACTION_TYPE || is_hemi_system_tx_type(tx_type)
+}
+
 /// Deposit transaction parts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

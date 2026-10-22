@@ -249,6 +249,8 @@ impl Encodable2718 for OvmTransactionSigned {
             }
             OpTypedTransaction::Deposit(deposit_tx) => deposit_tx.eip2718_encoded_length(),
             OpTypedTransaction::PostExec(post_exec_tx) => post_exec_tx.eip2718_encoded_length(),
+            OpTypedTransaction::PopPayout(tx) => tx.eip2718_encoded_length(),
+            OpTypedTransaction::BtcAttributesDeposited(tx) => tx.eip2718_encoded_length(),
         }
     }
 
@@ -281,6 +283,10 @@ impl Decodable2718 for OvmTransactionSigned {
                 OpTypedTransaction::PostExec(TxPostExec::rlp_decode(buf)?),
                 TxPostExec::signature(),
             )),
+            // OVM (pre-Bedrock) history never contains the Hemi system transactions.
+            OpTxType::PopPayout | OpTxType::BtcAttributesDeposited => {
+                Err(Eip2718Error::UnexpectedType(ty))
+            }
         }
     }
 

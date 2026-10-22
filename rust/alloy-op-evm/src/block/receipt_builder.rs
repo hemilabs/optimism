@@ -38,6 +38,16 @@ pub trait OpReceiptBuilder: Debug {
     /// Builds receipt for a deposit transaction.
     fn build_deposit_receipt(&self, inner: OpDepositReceipt) -> Self::Receipt;
 
+    /// Hemi: builds the receipt of a PoP payout (0x7D) or Bitcoin Attributes Deposited (0x7C)
+    /// transaction. These receipts are encoded like deposit receipts carrying the sender nonce.
+    ///
+    /// `build_receipt` must return `Err` for these transaction types.
+    fn build_hemi_system_receipt(
+        &self,
+        tx_type: <Self::Transaction as TransactionEnvelope>::TxType,
+        inner: OpDepositReceipt,
+    ) -> Self::Receipt;
+
     /// Strips the deposit nonce from `receipt` if the receipt is a deposit variant that carries
     /// one.
     ///
@@ -63,7 +73,7 @@ impl OpReceiptBuilder for OpAlloyReceiptBuilder {
         ctx: ReceiptBuilderCtx<'a, OpTxType, E>,
     ) -> Result<Self::Receipt, ReceiptBuilderCtx<'a, OpTxType, E>> {
         match ctx.tx_type {
-            OpTxType::Deposit => Err(ctx),
+            OpTxType::Deposit | OpTxType::PopPayout | OpTxType::BtcAttributesDeposited => Err(ctx),
             ty => {
                 let receipt = alloy_consensus::Receipt {
                     status: Eip658Value::Eip658(ctx.result.is_success()),
@@ -78,7 +88,9 @@ impl OpReceiptBuilder for OpAlloyReceiptBuilder {
                     OpTxType::Eip1559 => OpReceiptEnvelope::Eip1559(receipt),
                     OpTxType::Eip7702 => OpReceiptEnvelope::Eip7702(receipt),
                     OpTxType::PostExec => OpReceiptEnvelope::PostExec(receipt),
-                    OpTxType::Deposit => unreachable!(),
+                    OpTxType::Deposit |
+                    OpTxType::PopPayout |
+                    OpTxType::BtcAttributesDeposited => unreachable!(),
                 })
             }
         }
@@ -86,6 +98,13 @@ impl OpReceiptBuilder for OpAlloyReceiptBuilder {
 
     fn build_deposit_receipt(&self, inner: OpDepositReceipt) -> Self::Receipt {
         OpReceiptEnvelope::Deposit(inner.with_bloom())
+    }
+
+    fn build_hemi_system_receipt(&self, tx_type: OpTxType, inner: OpDepositReceipt) -> Self::Receipt {
+        match tx_type {
+            OpTxType::PopPayout => OpReceiptEnvelope::PopPayout(inner.with_bloom()),
+            _ => OpReceiptEnvelope::BtcAttributesDeposited(inner.with_bloom()),
+        }
     }
 
     fn strip_deposit_nonce(&self, receipt: &mut Self::Receipt) {

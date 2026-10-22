@@ -24,7 +24,7 @@ use op_revm::{
     L1BlockInfo, OpTransaction,
     constants::{BASE_FEE_RECIPIENT, L1_BLOCK_CONTRACT, OPERATOR_FEE_RECIPIENT},
     encoded_tx_da_footprint,
-    transaction::deposit::DEPOSIT_TRANSACTION_TYPE,
+    transaction::deposit::{DEPOSIT_TRANSACTION_TYPE, is_hemi_system_tx_type},
     tx_da_footprint,
 };
 pub use receipt_builder::OpAlloyReceiptBuilder;
@@ -295,6 +295,8 @@ pub struct OpTxResult<H, T> {
     pub is_deposit: bool,
     /// Whether the transaction is a post-exec transaction.
     pub is_post_exec: bool,
+    /// Hemi: whether the transaction is a PoP payout or Bitcoin Attributes Deposited transaction.
+    pub is_hemi_system: bool,
     /// Gas used by EVM execution before any post-exec (SDM) refund — the "real compute" performed.
     ///
     /// Accumulated and bounded against the block gas limit by both block builders and the executor
@@ -868,12 +870,16 @@ where
         let (tx_env, tx) = tx.into_parts();
         let is_deposit = tx.tx().ty() == DEPOSIT_TRANSACTION_TYPE;
         let is_post_exec = tx.tx().ty() == POST_EXEC_TX_TYPE_ID;
+        // Hemi: PoP payout (0x7D) and Bitcoin Attributes Deposited (0x7C) transactions are
+        // protocol transactions executed like deposits (hemilabs/op-geth).
+        let is_hemi_system = is_hemi_system_tx_type(tx.tx().ty());
+        let is_deposit_like = is_deposit || is_hemi_system;
         let tx_index = self.receipts.len() as u64;
 
         // Since Jovian, fork-activation blocks must contain only deposit transactions — before,
         // the sequencer skipped user txs there by policy, but it wasn't a consensus rule. The
         // synthetic post-exec SDM tx is not a user tx, so it is allowed.
-        if self.ctx.no_user_tx_activation_block && !is_deposit && !is_post_exec {
+        if self.ctx.no_user_tx_activation_block && !is_deposit_like && !is_post_exec {
             return Err(validation_error(
                 OpBlockExecutionError::UnexpectedNonDepositTxInForkActivationBlock,
             ));
@@ -887,7 +893,12 @@ where
         // pre-refund sum within the limit. Since `evm_gas_used >= gas_used`, this subsumes the
         // canonical block-gas-limit check; with SDM off the two are identical.
         let evm_gas_available = self.evm.block().gas_limit().saturating_sub(self.evm_gas_used);
-        validate_block_gas(transaction_gas_limit, evm_gas_available, self.is_regolith, is_deposit)?;
+        validate_block_gas(
+            transaction_gas_limit,
+            evm_gas_available,
+            self.is_regolith,
+            is_deposit_like,
+        )?;
 
         if is_post_exec {
             let payload =
@@ -909,6 +920,7 @@ where
                 },
                 is_deposit: false,
                 is_post_exec: true,
+                is_hemi_system: false,
                 evm_gas_used: 0,
                 canonical_gas_used: 0,
                 post_exec: None,
@@ -919,7 +931,7 @@ where
         let da_footprint_used = if self
             .spec
             .is_jovian_active_at_timestamp(self.evm.block().timestamp().saturating_to()) &&
-            !is_deposit
+            !is_deposit_like
         {
             let da_footprint_available =
                 self.evm.block().gas_limit().saturating_sub(self.da_footprint_used);
@@ -989,7 +1001,7 @@ where
         // Pre-compute depositor nonce here so `commit_transaction` can be infallible.
         // Only post-regolith deposit transactions need the depositor account from DB.
         let sender = *tx.signer();
-        let depositor_nonce = if self.is_regolith && is_deposit {
+        let depositor_nonce = if self.is_regolith && is_deposit_like {
             let account = self
                 .evm
                 .db_mut()
@@ -1016,6 +1028,7 @@ where
             },
             is_deposit,
             is_post_exec: false,
+            is_hemi_system,
             evm_gas_used,
             canonical_gas_used,
             post_exec,
@@ -1029,6 +1042,7 @@ where
             inner: EthTxResult { result: ResultAndState { result, state }, blob_gas_used, tx_type },
             is_deposit,
             is_post_exec,
+            is_hemi_system,
             evm_gas_used,
             canonical_gas_used,
             post_exec,
@@ -1061,7 +1075,8 @@ where
         // Update DA footprint if Jovian is active
         if self.spec.is_jovian_active_at_timestamp(self.evm.block().timestamp().saturating_to()) &&
             !is_deposit &&
-            !is_post_exec
+            !is_post_exec &&
+            !is_hemi_system
         {
             // Add to DA footprint used
             self.da_footprint_used = self.da_footprint_used.saturating_add(blob_gas_used);
@@ -1085,6 +1100,18 @@ where
                         logs: ctx.result.into_logs(),
                     };
 
+                    if is_hemi_system {
+                        // Hemi: the receipt records the sender nonce like a deposit receipt, but
+                        // never a receipt version.
+                        self.receipt_builder.build_hemi_system_receipt(
+                            ctx.tx_type,
+                            OpDepositReceipt {
+                                inner: receipt,
+                                deposit_nonce: depositor_nonce,
+                                deposit_receipt_version: None,
+                            },
+                        )
+                    } else {
                     self.receipt_builder.build_deposit_receipt(OpDepositReceipt {
                         inner: receipt,
                         deposit_nonce: depositor_nonce,
@@ -1099,6 +1126,7 @@ where
                             ))
                         .then_some(1),
                     })
+                    }
                 }
             },
         );

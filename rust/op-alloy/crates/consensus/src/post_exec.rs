@@ -17,7 +17,8 @@ use alloy_rlp::{BufMut, Decodable, Encodable, Header, RlpDecodable, RlpEncodable
 use crate::OpTransaction;
 
 /// Type byte for the post-execution transaction.
-pub const POST_EXEC_TX_TYPE_ID: u8 = 0x7D;
+// Hemi: moved from upstream 0x7D, which Hemi uses for the PoP payout transaction.
+pub const POST_EXEC_TX_TYPE_ID: u8 = 0x7B;
 
 /// Current format version for [`PostExecPayload`].
 pub const POST_EXEC_PAYLOAD_VERSION: u8 = 1;

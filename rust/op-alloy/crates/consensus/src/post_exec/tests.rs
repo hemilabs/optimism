@@ -71,11 +71,8 @@ fn post_exec_tx_hash_is_keccak_of_canonical_encoding() {
     let mut canonical = vec![POST_EXEC_TX_TYPE_ID];
     canonical.extend_from_slice(&data);
     assert_eq!(tx.tx_hash(), keccak256(&canonical), "tx_hash must be keccak256 of encode_2718");
-    assert_eq!(
-        tx.tx_hash(),
-        b256!("0xcbc64a9665039744307b562634bf760d96f3bed235fecd9e09a1f1276a1823c7"),
-        "post-exec tx hash must be keccak256(0x7D || Data), matching the TxDeposit rule",
-    );
+    // Hemi: the upstream pinned hash (0xcbc64a96...) assumed type byte 0x7D; post-exec moved to
+    // 0x7B because Hemi uses 0x7D for PoP payouts, so only the keccak rule above is asserted.
 
     // Guard against the pre-#805 `keccak256(0x7D || RLP([Data]))` value.
     assert_ne!(
@@ -197,7 +194,7 @@ fn post_exec_envelope_rpc_deserialize_ignores_extra_fields() {
     let tx = build_post_exec_tx(27, vec![SDMGasEntry { index: 1, gas_refund: 9 }]);
     let sealed = tx.clone().seal_slow();
     let json = serde_json::json!({
-        "type": "0x7d",
+        "type": "0x7b",
         "hash": sealed.hash(),
         "gas": "0x0",
         "value": "0x0",

@@ -20,7 +20,7 @@ impl OpReceiptBuilder for OpRethReceiptBuilder {
         ctx: ReceiptBuilderCtx<'a, OpTxType, E>,
     ) -> Result<Self::Receipt, ReceiptBuilderCtx<'a, OpTxType, E>> {
         match ctx.tx_type {
-            OpTxType::Deposit => Err(ctx),
+            OpTxType::Deposit | OpTxType::PopPayout | OpTxType::BtcAttributesDeposited => Err(ctx),
             ty => {
                 let receipt = Receipt {
                     // Success flag was added in `EIP-658: Embedding transaction status code in
@@ -36,7 +36,9 @@ impl OpReceiptBuilder for OpRethReceiptBuilder {
                     OpTxType::Eip2930 => OpReceipt::Eip2930(receipt),
                     OpTxType::Eip7702 => OpReceipt::Eip7702(receipt),
                     OpTxType::PostExec => OpReceipt::PostExec(receipt),
-                    OpTxType::Deposit => unreachable!(),
+                    OpTxType::Deposit |
+                    OpTxType::PopPayout |
+                    OpTxType::BtcAttributesDeposited => unreachable!(),
                 })
             }
         }
@@ -44,6 +46,13 @@ impl OpReceiptBuilder for OpRethReceiptBuilder {
 
     fn build_deposit_receipt(&self, inner: OpDepositReceipt) -> Self::Receipt {
         OpReceipt::Deposit(inner)
+    }
+
+    fn build_hemi_system_receipt(&self, tx_type: OpTxType, inner: OpDepositReceipt) -> Self::Receipt {
+        match tx_type {
+            OpTxType::PopPayout => OpReceipt::PopPayout(inner),
+            _ => OpReceipt::BtcAttributesDeposited(inner),
+        }
     }
 
     fn strip_deposit_nonce(&self, receipt: &mut Self::Receipt) {

@@ -323,6 +323,10 @@ impl OpReceiptBuilder {
                 OpReceipt::Eip7702(receipt) => OpReceipt::Eip7702(map_logs(receipt)),
                 OpReceipt::PostExec(receipt) => OpReceipt::PostExec(map_logs(receipt)),
                 OpReceipt::Deposit(receipt) => OpReceipt::Deposit(receipt.map_inner(map_logs)),
+                OpReceipt::PopPayout(receipt) => OpReceipt::PopPayout(receipt.map_inner(map_logs)),
+                OpReceipt::BtcAttributesDeposited(receipt) => {
+                    OpReceipt::BtcAttributesDeposited(receipt.map_inner(map_logs))
+                }
             };
             mapped_receipt.into_with_bloom()
         });
@@ -362,10 +366,15 @@ impl OpReceiptBuilder {
             core_receipt.contract_address = Some(core_receipt.from.create(deposit_nonce));
         }
 
-        let op_receipt_fields = OpReceiptFieldsBuilder::new(timestamp, block_number)
-            .l1_block_info(chain_spec, tx_signed, l1_block_info)?
-            .op_gas_refund(op_gas_refund)
-            .build();
+        // Hemi: like hemilabs/op-geth, PoP payout and Bitcoin Attributes Deposited receipts carry
+        // no L1 fee fields; they are never posted to L1.
+        let fields = OpReceiptFieldsBuilder::new(timestamp, block_number);
+        let fields = if tx_signed.is_hemi_system_tx() {
+            fields
+        } else {
+            fields.l1_block_info(chain_spec, tx_signed, l1_block_info)?
+        };
+        let op_receipt_fields = fields.op_gas_refund(op_gas_refund).build();
 
         Ok(Self { core_receipt, op_receipt_fields })
     }

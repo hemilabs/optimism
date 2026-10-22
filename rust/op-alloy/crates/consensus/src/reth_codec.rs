@@ -12,7 +12,8 @@
 //!   were previously provided by reth's in-tree codecs crate.
 
 use crate::{
-    OpReceipt, OpTxEnvelope, OpTxType, OpTypedTransaction, POST_EXEC_TX_TYPE_ID, TxDeposit,
+    BTC_ATTRIBUTES_DEPOSITED_TX_TYPE_ID, OpReceipt, OpTxEnvelope, OpTxType, OpTypedTransaction,
+    POP_PAYOUT_TX_TYPE_ID, POST_EXEC_TX_TYPE_ID, TxBtcAttributesDeposited, TxDeposit, TxPopPayout,
     TxPostExec,
 };
 use alloc::vec::Vec;
@@ -48,6 +49,14 @@ impl Compact for OpTxType {
                 buf.put_u8(POST_EXEC_TX_TYPE_ID);
                 COMPACT_EXTENDED_IDENTIFIER_FLAG
             }
+            Self::PopPayout => {
+                buf.put_u8(POP_PAYOUT_TX_TYPE_ID);
+                COMPACT_EXTENDED_IDENTIFIER_FLAG
+            }
+            Self::BtcAttributesDeposited => {
+                buf.put_u8(BTC_ATTRIBUTES_DEPOSITED_TX_TYPE_ID);
+                COMPACT_EXTENDED_IDENTIFIER_FLAG
+            }
         }
     }
 
@@ -63,6 +72,8 @@ impl Compact for OpTxType {
                     alloy_consensus::constants::EIP7702_TX_TYPE_ID => Self::Eip7702,
                     crate::DEPOSIT_TX_TYPE_ID => Self::Deposit,
                     POST_EXEC_TX_TYPE_ID => Self::PostExec,
+                    POP_PAYOUT_TX_TYPE_ID => Self::PopPayout,
+                    BTC_ATTRIBUTES_DEPOSITED_TX_TYPE_ID => Self::BtcAttributesDeposited,
                     _ => panic!("Unsupported OpTxType identifier: {extended_identifier}"),
                 };
                 (ty, buf)
@@ -151,6 +162,33 @@ impl Compact for TxPostExec {
     }
 }
 
+// --- Hemi system transactions ---
+
+macro_rules! hemi_compact {
+    ($ty:ty) => {
+        impl Compact for $ty {
+            fn to_compact<B>(&self, buf: &mut B) -> usize
+            where
+                B: bytes::BufMut + AsMut<[u8]>,
+            {
+                let mut rlp = Vec::with_capacity(self.rlp_encoded_length());
+                self.rlp_encode(&mut rlp);
+                Bytes::from(rlp).to_compact(buf)
+            }
+
+            fn from_compact(buf: &[u8], len: usize) -> (Self, &[u8]) {
+                let (rlp, buf) = Bytes::from_compact(buf, len);
+                let mut slice = rlp.as_ref();
+                let tx = Self::rlp_decode(&mut slice).expect("valid compact hemi system tx");
+                (tx, buf)
+            }
+        }
+    };
+}
+
+hemi_compact!(TxPopPayout);
+hemi_compact!(TxBtcAttributesDeposited);
+
 // --- OpTypedTransaction ---
 
 impl Compact for OpTypedTransaction {
@@ -177,6 +215,12 @@ impl Compact for OpTypedTransaction {
                 tx.to_compact(buf);
             }
             Self::PostExec(tx) => {
+                tx.to_compact(buf);
+            }
+            Self::PopPayout(tx) => {
+                tx.to_compact(buf);
+            }
+            Self::BtcAttributesDeposited(tx) => {
                 tx.to_compact(buf);
             }
         }
@@ -210,6 +254,14 @@ impl Compact for OpTypedTransaction {
                 let (tx, buf) = TxPostExec::from_compact(buf, buf.len());
                 (Self::PostExec(tx), buf)
             }
+            OpTxType::PopPayout => {
+                let (tx, buf) = TxPopPayout::from_compact(buf, buf.len());
+                (Self::PopPayout(tx), buf)
+            }
+            OpTxType::BtcAttributesDeposited => {
+                let (tx, buf) = TxBtcAttributesDeposited::from_compact(buf, buf.len());
+                (Self::BtcAttributesDeposited(tx), buf)
+            }
         }
     }
 }
@@ -223,7 +275,7 @@ impl Envelope for OpTxEnvelope {
             Self::Eip2930(tx) => tx.signature(),
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
-            Self::Deposit(_) | Self::PostExec(_) => {
+            Self::Deposit(_) | Self::PostExec(_) | Self::PopPayout(_) | Self::BtcAttributesDeposited(_) => {
                 const DEPOSIT_SIG: Signature = Signature::new(U256::ZERO, U256::ZERO, false);
                 &DEPOSIT_SIG
             }
@@ -256,6 +308,12 @@ impl ToTxCompact for OpTxEnvelope {
                 tx.inner().to_compact(buf);
             }
             Self::PostExec(tx) => {
+                tx.inner().to_compact(buf);
+            }
+            Self::PopPayout(tx) => {
+                tx.inner().to_compact(buf);
+            }
+            Self::BtcAttributesDeposited(tx) => {
                 tx.inner().to_compact(buf);
             }
         };
@@ -295,6 +353,14 @@ impl FromTxCompact for OpTxEnvelope {
             OpTxType::PostExec => {
                 let (tx, buf) = TxPostExec::from_compact(buf, buf.len());
                 (Self::PostExec(alloy_consensus::Sealed::new(tx)), buf)
+            }
+            OpTxType::PopPayout => {
+                let (tx, buf) = TxPopPayout::from_compact(buf, buf.len());
+                (Self::PopPayout(alloy_consensus::Sealed::new(tx)), buf)
+            }
+            OpTxType::BtcAttributesDeposited => {
+                let (tx, buf) = TxBtcAttributesDeposited::from_compact(buf, buf.len());
+                (Self::BtcAttributesDeposited(alloy_consensus::Sealed::new(tx)), buf)
             }
         }
     }
@@ -350,7 +416,11 @@ impl From<&OpReceipt> for CompactOpReceipt {
     fn from(receipt: &OpReceipt) -> Self {
         use alloy_consensus::TxReceipt;
         let (deposit_nonce, deposit_receipt_version) = match receipt {
-            OpReceipt::Deposit(deposit) => (deposit.deposit_nonce, deposit.deposit_receipt_version),
+            OpReceipt::Deposit(deposit) |
+            OpReceipt::PopPayout(deposit) |
+            OpReceipt::BtcAttributesDeposited(deposit) => {
+                (deposit.deposit_nonce, deposit.deposit_receipt_version)
+            }
             _ => (None, None),
         };
         Self {
@@ -377,6 +447,16 @@ impl From<CompactOpReceipt> for OpReceipt {
             OpTxType::Eip1559 => Self::Eip1559(receipt),
             OpTxType::Eip7702 => Self::Eip7702(receipt),
             OpTxType::PostExec => Self::PostExec(receipt),
+            OpTxType::PopPayout => Self::PopPayout(crate::OpDepositReceipt {
+                inner: receipt,
+                deposit_nonce: compact.deposit_nonce,
+                deposit_receipt_version: None,
+            }),
+            OpTxType::BtcAttributesDeposited => Self::BtcAttributesDeposited(crate::OpDepositReceipt {
+                inner: receipt,
+                deposit_nonce: compact.deposit_nonce,
+                deposit_receipt_version: None,
+            }),
             OpTxType::Deposit => Self::Deposit(crate::OpDepositReceipt {
                 inner: receipt,
                 deposit_nonce: compact.deposit_nonce,
