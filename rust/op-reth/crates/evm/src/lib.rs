@@ -200,6 +200,13 @@ where
             parent_beacon_block_root: block.header().parent_beacon_block_root(),
             extra_data: block.header().extra_data().clone(),
             post_exec_mode: post_exec_mode.unwrap_or_default(),
+            hemi: hemi_block_execution(
+                block.hash(),
+                block.header().parent_hash(),
+                block.header().number(),
+                block.header().timestamp(),
+                reth_primitives_traits::BlockBody::transactions(block.body()),
+            ),
         }
     }
 
@@ -216,6 +223,12 @@ where
                 .chain_spec()
                 .is_no_user_tx_activation_block(parent.timestamp(), attributes.timestamp),
             parent_beacon_block_root: attributes.parent_beacon_block_root,
+            hemi: alloy_op_evm::hemi::execution_hook().map(|_| {
+                alloy_op_evm::hemi::HemiExecution::Build {
+                    parent_hash: parent.hash(),
+                    timestamp: attributes.timestamp,
+                }
+            }),
             extra_data: attributes.extra_data,
             post_exec_mode,
         }
@@ -402,6 +415,13 @@ where
             parent_beacon_block_root: payload.sidecar.parent_beacon_block_root(),
             extra_data: payload.payload.as_v1().extra_data.clone(),
             post_exec_mode,
+            hemi: hemi_block_execution(
+                payload.payload.block_hash(),
+                payload.payload.parent_hash(),
+                payload.payload.block_number(),
+                payload.payload.timestamp(),
+                transactions.iter(),
+            ),
         })
     }
 
@@ -1121,4 +1141,31 @@ mod tests {
         // Assert that splitting at the first block number returns None for the lower outcome
         assert_eq!(exec_res.clone().split_at(123), (None, exec_res));
     }
+}
+
+/// Hemi: describes the execution of an existing block for the hVM execution hook, or `None` when
+/// no hook is installed (non-Hemi node).
+pub fn hemi_block_execution<'a, T>(
+    hash: alloy_primitives::B256,
+    parent_hash: alloy_primitives::B256,
+    number: u64,
+    timestamp: u64,
+    transactions: impl IntoIterator<Item = &'a T>,
+) -> Option<alloy_op_evm::hemi::HemiExecution>
+where
+    T: alloy_consensus::Transaction + 'a,
+{
+    alloy_op_evm::hemi::execution_hook()?;
+    let btc_attributes = transactions
+        .into_iter()
+        .filter(|tx| tx.ty() == op_alloy_consensus::BTC_ATTRIBUTES_DEPOSITED_TX_TYPE_ID)
+        .map(|tx| tx.input().clone())
+        .collect();
+    Some(alloy_op_evm::hemi::HemiExecution::Block {
+        hash,
+        parent_hash,
+        number,
+        timestamp,
+        btc_attributes,
+    })
 }

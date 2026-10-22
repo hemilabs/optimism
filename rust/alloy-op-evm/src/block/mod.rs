@@ -261,6 +261,8 @@ pub struct OpBlockExecutionCtx {
     pub extra_data: Bytes,
     /// Canonical post-exec execution mode for this block.
     pub post_exec_mode: PostExecMode,
+    /// Hemi: what this execution means for hVM; `None` on non-Hemi nodes.
+    pub hemi: Option<crate::hemi::HemiExecution>,
 }
 
 /// Balance patch that reconciles fee distribution with the post-refund gas used.
@@ -376,6 +378,8 @@ pub struct OpBlockExecutor<Evm, R: OpReceiptBuilder, Spec> {
     pub post_exec: PostExecState,
     /// Per-transaction exact policy-provided refund attribution events aligned with receipts.
     pub refund_events_by_tx: Vec<Vec<PostExecRefundEvent>>,
+    /// Hemi: guard holding the hVM state while the block executes.
+    pub hemi_guard: Option<Box<dyn crate::hemi::HemiExecutionGuard>>,
 }
 
 impl<E, R, Spec> OpBlockExecutor<E, R, Spec>
@@ -402,6 +406,7 @@ where
             l1_block_info: None,
             post_exec,
             refund_events_by_tx: Vec::new(),
+            hemi_guard: None,
         }
     }
 
@@ -800,6 +805,13 @@ where
     type Result = OpTxResult<E::HaltReason, <R::Transaction as TransactionEnvelope>::TxType>;
 
     fn apply_pre_execution_changes(&mut self) -> Result<(), BlockExecutionError> {
+        // Hemi: move the hVM state (Bitcoin view and indexers) to this block before executing it.
+        if let (Some(execution), Some(hook)) = (&self.ctx.hemi, crate::hemi::execution_hook()) {
+            self.hemi_guard = hook
+                .begin(execution)
+                .map_err(|e| BlockExecutionError::other(crate::hemi::HemiExecutionError(e)))?;
+        }
+
         if let Some(reason) = self.post_exec.invalid_reason() {
             return Err(Self::invalid_post_exec_payload(String::from(reason)));
         }
@@ -1161,6 +1173,10 @@ where
             .db_mut()
             .increment_balances(balance_increments)
             .map_err(|_| BlockValidationError::IncrementBalanceFailed)?;
+
+        if let Some(mut guard) = self.hemi_guard.take() {
+            guard.succeed();
+        }
 
         Ok((
             self.evm,

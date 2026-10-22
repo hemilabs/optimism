@@ -48,6 +48,7 @@ pub mod tx;
 pub use tx::OpTx;
 
 pub mod block;
+pub mod hemi;
 pub use block::{
     OpBlockExecutionCtx, OpBlockExecutor, OpBlockExecutorFactory, PostExecMode, PreRefundGasUsed,
 };
@@ -169,6 +170,10 @@ impl<DB: Database, I, Tx, R: Default> OpEvm<DB, I, PrecompilesMap, Tx, R> {
         inspect: bool,
     ) -> Self {
         let spec_id = input.cfg_env.spec;
+        let timestamp: u64 = input.block_env.timestamp.saturating_to();
+        let mut precompiles =
+            PrecompilesMap::from_static(OpPrecompiles::new_with_spec(spec_id).precompiles());
+        hemi::extend_with_hvm_precompiles(&mut precompiles, timestamp);
         let inner = Context::mainnet()
             .with_tx(OpTx(OpTransaction::builder().build_fill()))
             .with_cfg(CfgEnv::new_with_spec(OpSpecId::BEDROCK))
@@ -177,9 +182,7 @@ impl<DB: Database, I, Tx, R: Default> OpEvm<DB, I, PrecompilesMap, Tx, R> {
             .with_block(input.block_env)
             .with_cfg(input.cfg_env)
             .build_op_with_inspector(inspector)
-            .with_precompiles(PrecompilesMap::from_static(
-                OpPrecompiles::new_with_spec(spec_id).precompiles(),
-            ));
+            .with_precompiles(precompiles);
 
         Self::new(inner, inspect)
     }

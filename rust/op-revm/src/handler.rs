@@ -82,6 +82,13 @@ where
     type Error = ERROR;
     type HaltReason = OpHaltReason;
 
+    fn load_accounts(&self, evm: &mut Self::Evm) -> Result<(), Self::Error> {
+        self.mainnet.load_accounts(evm)?;
+        // Hemi: warm the precompiles hemilabs/op-geth warms (no-op on non-Hemi nodes).
+        crate::hemi::apply_hemi_warm_precompiles(evm.ctx());
+        Ok(())
+    }
+
     fn validate_env(&self, evm: &mut Self::Evm) -> Result<(), Self::Error> {
         // Do not perform any extra validation for deposit transactions, they are pre-verified on
         // L1.
