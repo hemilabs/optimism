@@ -13,63 +13,63 @@ const DEFAULT_GENESIS_HEIGHT: u64 = 3522419;
 #[command(next_help_heading = "Hemi hVM")]
 pub struct HvmArgs {
     /// Whether hVM is enabled.
-    #[arg(long = "hvm.enabled", default_value_t = true, action = clap::ArgAction::Set,
+    #[arg(id = "hvm_enabled", long = "hvm.enabled", default_value_t = true, action = clap::ArgAction::Set,
         num_args = 0..=1, default_missing_value = "true")]
     pub enabled: bool,
 
     /// The genesis Bitcoin block header (hex) where hVM starts tracking Bitcoin consensus.
-    #[arg(long = "hvm.genesisheader", default_value = DEFAULT_GENESIS_HEADER)]
+    #[arg(id = "hvm_genesis_header", long = "hvm.genesisheader", default_value = DEFAULT_GENESIS_HEADER)]
     pub genesis_header: String,
 
     /// The height of the hVM genesis Bitcoin block.
-    #[arg(long = "hvm.genesisheight", default_value_t = DEFAULT_GENESIS_HEIGHT)]
+    #[arg(id = "hvm_genesis_height", long = "hvm.genesisheight", default_value_t = DEFAULT_GENESIS_HEIGHT)]
     pub genesis_height: u64,
 
     /// Data directory where the Bitcoin headers for hVM consensus tracking are stored.
-    #[arg(long = "hvm.headerdatadir", default_value = "~/.tbcdheaders")]
+    #[arg(id = "hvm_header_data_dir", long = "hvm.headerdatadir", default_value = "~/.tbcdheaders")]
     pub header_data_dir: String,
 
     /// Deucalion address for health checks (unused by op-reth, which has its own health
     /// endpoints; accepted for compatibility with op-geth command lines).
-    #[arg(long = "hvm.deucalionaddress", default_value = "")]
+    #[arg(id = "hvm_deucalion_address", long = "hvm.deucalionaddress", default_value = "")]
     pub deucalion_address: String,
 
     /// hVM Phase 0 activation timestamp, overriding the chain configuration (`hvm0Time`).
-    #[arg(long = "override.hvm0")]
+    #[arg(id = "hvm_override_hvm0", long = "override.hvm0")]
     pub override_hvm0: Option<u64>,
 
     /// Address for the TBC daemon to listen on.
-    #[arg(long = "tbc.listenaddress", default_value = "127.0.0.1")]
+    #[arg(id = "hvm_tbc_listen_address", long = "tbc.listenaddress", default_value = "127.0.0.1")]
     pub tbc_listen_address: String,
 
     /// Max number of transactions TBC will cache before flushing to disk.
-    #[arg(long = "tbc.maxcachedtxs", default_value_t = 1_000_000)]
+    #[arg(id = "hvm_tbc_max_cached_txs", long = "tbc.maxcachedtxs", default_value_t = 1_000_000)]
     pub tbc_max_cached_txs: i64,
 
     /// Directory for TBC's LevelDB database.
-    #[arg(long = "tbc.leveldbhome", default_value = "~/.tbcd")]
+    #[arg(id = "hvm_tbc_level_db_home", long = "tbc.leveldbhome", default_value = "~/.tbcd")]
     pub tbc_level_db_home: String,
 
     /// Enable/disable block sanity checks before inserting.
-    #[arg(long = "tbc.blocksanity", default_value_t = false, action = clap::ArgAction::Set,
+    #[arg(id = "hvm_tbc_block_sanity", long = "tbc.blocksanity", default_value_t = false, action = clap::ArgAction::Set,
         num_args = 0..=1, default_missing_value = "true")]
     pub tbc_block_sanity: bool,
 
     /// Bitcoin network TBC is running on.
-    #[arg(long = "tbc.network", default_value = "testnet3")]
+    #[arg(id = "hvm_tbc_network", long = "tbc.network", default_value = "testnet3")]
     pub tbc_network: String,
 
     /// Prometheus address for TBC metric monitoring.
-    #[arg(long = "tbc.prometheusaddress", default_value = "")]
+    #[arg(id = "hvm_tbc_prometheus_address", long = "tbc.prometheusaddress", default_value = "")]
     pub tbc_prometheus_address: String,
 
     /// Override TBC seeds when finding peers.
-    #[arg(long = "tbc.seeds", value_delimiter = ',')]
+    #[arg(id = "hvm_tbc_seeds", long = "tbc.seeds", value_delimiter = ',')]
     pub tbc_seeds: Vec<String>,
 
     /// hVM / TBC log verbosity (geth levels 0-5).
-    #[arg(long = "hvm.verbosity", default_value_t = 3)]
-    pub verbosity: i32,
+    #[arg(id = "hvm_verbosity", long = "hvm.verbosity", default_value_t = 3)]
+    pub hvm_verbosity: i32,
 }
 
 impl Default for HvmArgs {
@@ -88,7 +88,7 @@ impl Default for HvmArgs {
             tbc_network: "testnet3".to_string(),
             tbc_prometheus_address: String::new(),
             tbc_seeds: Vec::new(),
-            verbosity: 3,
+            hvm_verbosity: 3,
         }
     }
 }
@@ -111,7 +111,7 @@ impl HvmArgs {
             tbc_block_sanity: self.tbc_block_sanity,
             tbc_prometheus_address: self.tbc_prometheus_address.clone(),
             tbc_seeds: self.tbc_seeds.clone(),
-            log_level: self.verbosity,
+            log_level: self.hvm_verbosity,
         }
     }
 }
