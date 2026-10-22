@@ -294,6 +294,10 @@ pub struct RollupArgs {
         default_value_t = 0
     )]
     pub proofs_history_verification_interval: u64,
+
+    /// Hemi hVM / TBC settings.
+    #[command(flatten)]
+    pub hvm: reth_optimism_hemi::HvmArgs,
 }
 
 impl Default for RollupArgs {
@@ -322,6 +326,7 @@ impl Default for RollupArgs {
             },
             proofs_history_window: ProofsHistoryWindowArg::default(),
             proofs_history_verification_interval: 0,
+            hvm: Default::default(),
         }
     }
 }

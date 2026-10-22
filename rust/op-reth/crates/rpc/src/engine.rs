@@ -36,6 +36,8 @@ pub const OP_ENGINE_CAPABILITIES: &[&str] = &[
     "engine_newPayloadV4",
     "engine_getPayloadBodiesByHashV1",
     "engine_getPayloadBodiesByRangeV1",
+    "engine_newKeystone",
+    "engine_popPayoutsByL2Keystone",
 ];
 
 /// Extension trait that gives access to Optimism engine API RPC methods.
@@ -241,6 +243,100 @@ pub trait OpEngineApi<Engine: EngineTypes> {
     /// See also <https://github.com/ethereum/execution-apis/blob/6452a6b194d7db269bf1dbd087a267251d3cc7f8/src/engine/common.md#capabilities>
     #[method(name = "exchangeCapabilities")]
     async fn exchange_capabilities(&self, capabilities: Vec<String>) -> RpcResult<Vec<String>>;
+
+    /// Hemi: stores an L2 keystone sent by op-node and notifies `kss` subscribers.
+    #[method(name = "newKeystone")]
+    async fn new_keystone(&self, keystone: serde_json::Value) -> RpcResult<serde_json::Value>;
+
+    /// Hemi: returns the PoP payouts (miner address and amount) of the Bitcoin PoP transactions
+    /// that endorse the L2 keystone with the given abbreviated hash.
+    #[method(name = "popPayoutsByL2Keystone")]
+    async fn pop_payouts_by_l2_keystone(
+        &self,
+        abrev_hash: serde_json::Value,
+    ) -> RpcResult<serde_json::Value>;
+}
+
+/// Hemi: before importing a payload, checks that hVM can process it, i.e. that the full Bitcoin
+/// node has every Bitcoin block it needs. Returns `SYNCING` otherwise, like hemilabs/op-geth
+/// (`delayPayloadImport`), so op-node retries instead of the block being marked invalid.
+async fn hemi_check_payload(payload: &OpExecData) -> Option<PayloadStatus> {
+    let hvm = reth_optimism_hemi::hvm()?;
+    let p = &payload.payload;
+    if !hvm.is_active(p.timestamp()) {
+        return None;
+    }
+    let mut btc_attributes = Vec::new();
+    for raw in p.transactions() {
+        if raw.first() == Some(&op_alloy_consensus::BTC_ATTRIBUTES_DEPOSITED_TX_TYPE_ID) {
+            match <op_alloy_consensus::TxBtcAttributesDeposited as alloy_eips::Decodable2718>::decode_2718_exact(raw) {
+                Ok(tx) => btc_attributes.push(tx.input),
+                // malformed: let regular validation reject the payload
+                Err(_) => return None,
+            }
+        }
+    }
+    let block = reth_optimism_hemi::HvmBlock {
+        hash: p.block_hash(),
+        parent_hash: p.parent_hash(),
+        number: p.block_number(),
+        timestamp: p.timestamp(),
+        btc_attributes,
+    };
+    let result = tokio::task::spawn_blocking(move || hvm.check_block(&block)).await.ok()?;
+    match result {
+        Err(reth_optimism_hemi::HvmError::Defer(msg)) => {
+            debug!(target: "rpc::engine", block = %p.block_hash(), %msg, "hVM is missing Bitcoin data, delaying payload import");
+            reth_optimism_hemi::events::request_btc_blocks(hvm.missing_btc_blocks());
+            Some(PayloadStatus::from_status(alloy_rpc_types_engine::PayloadStatusEnum::Syncing))
+        }
+        Err(err) => {
+            debug!(target: "rpc::engine", block = %p.block_hash(), %err, "hVM pre-check failed, leaving it to block validation");
+            None
+        }
+        Ok(()) => None,
+    }
+}
+
+/// Hemi: Bitcoin Attributes Deposited transactions in payload attributes (a verifier rebuilding a
+/// derived block) need their Bitcoin blocks; request the missing ones from L2 peers and fail the
+/// forkchoice update so op-node retries, like hemilabs/op-geth.
+fn hemi_check_attributes<A: serde::Serialize>(attributes: Option<&A>) -> RpcResult<()> {
+    let (Some(attributes), Some(hvm)) = (attributes, reth_optimism_hemi::hvm()) else {
+        return Ok(());
+    };
+    if !hvm.enabled() {
+        return Ok(());
+    }
+    let Ok(value) = serde_json::to_value(attributes) else { return Ok(()) };
+    let Some(txs) = value.get("transactions").and_then(|t| t.as_array()) else { return Ok(()) };
+    let mut missing = Vec::new();
+    for tx in txs {
+        let Some(raw) = tx.as_str().and_then(|s| alloy_primitives::hex::decode(s).ok()) else {
+            continue;
+        };
+        if raw.first() != Some(&op_alloy_consensus::BTC_ATTRIBUTES_DEPOSITED_TX_TYPE_ID) {
+            continue;
+        }
+        let tx = <op_alloy_consensus::TxBtcAttributesDeposited as alloy_eips::Decodable2718>::decode_2718_exact(&raw)
+            .map_err(|_| invalid_attributes("invalid Bitcoin Attributes Deposited transaction"))?;
+        let hashes = reth_optimism_hemi::btc_attributes_block_hashes(&tx.input)
+            .map_err(|_| invalid_attributes("invalid canonical tip BtcAttributesDepositData"))?;
+        missing.extend(hashes.into_iter().filter(|h| !hvm.btc_block_available(*h)));
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    reth_optimism_hemi::events::request_btc_blocks(missing);
+    Err(jsonrpsee_types::ErrorObject::owned(
+        -32000,
+        "missing blocks in forkchoiceupdated, will try to fetch",
+        None::<()>,
+    ))
+}
+
+fn invalid_attributes(msg: &str) -> jsonrpsee_types::ErrorObjectOwned {
+    jsonrpsee_types::ErrorObject::owned(-38003, msg.to_string(), None::<()>)
 }
 
 /// The Engine API implementation that grants the Consensus layer access to data and
@@ -269,10 +365,14 @@ where
     Pool: TransactionPool + 'static,
     Validator: EngineApiValidator<EngineT>,
     ChainSpec: EthereumHardforks + Send + Sync + 'static,
+    EngineT::PayloadAttributes: serde::Serialize,
 {
     async fn new_payload_v2(&self, payload: ExecutionPayloadInputV2) -> RpcResult<PayloadStatus> {
         trace!(target: "rpc::engine", "Serving engine_newPayloadV2");
         let payload = OpExecData::from(op_alloy_rpc_types_engine::OpExecutionData::v2(payload));
+        if let Some(status) = hemi_check_payload(&payload).await {
+            return Ok(status);
+        }
         Ok(self.inner.new_payload_v2_metered(payload).await?)
     }
 
@@ -288,6 +388,9 @@ where
             versioned_hashes,
             parent_beacon_block_root,
         ));
+        if let Some(status) = hemi_check_payload(&payload).await {
+            return Ok(status);
+        }
 
         Ok(self.inner.new_payload_v3_metered(payload).await?)
     }
@@ -306,6 +409,9 @@ where
             parent_beacon_block_root,
             execution_requests,
         ));
+        if let Some(status) = hemi_check_payload(&payload).await {
+            return Ok(status);
+        }
 
         Ok(self.inner.new_payload_v4_metered(payload).await?)
     }
@@ -315,6 +421,7 @@ where
         fork_choice_state: ForkchoiceState,
         payload_attributes: Option<EngineT::PayloadAttributes>,
     ) -> RpcResult<ForkchoiceUpdated> {
+        hemi_check_attributes(payload_attributes.as_ref())?;
         Ok(self.inner.fork_choice_updated_v1_metered(fork_choice_state, payload_attributes).await?)
     }
 
@@ -324,6 +431,7 @@ where
         payload_attributes: Option<EngineT::PayloadAttributes>,
     ) -> RpcResult<ForkchoiceUpdated> {
         trace!(target: "rpc::engine", "Serving engine_forkchoiceUpdatedV2");
+        hemi_check_attributes(payload_attributes.as_ref())?;
         Ok(self.inner.fork_choice_updated_v2_metered(fork_choice_state, payload_attributes).await?)
     }
 
@@ -333,6 +441,7 @@ where
         payload_attributes: Option<EngineT::PayloadAttributes>,
     ) -> RpcResult<ForkchoiceUpdated> {
         trace!(target: "rpc::engine", "Serving engine_forkchoiceUpdatedV3");
+        hemi_check_attributes(payload_attributes.as_ref())?;
         Ok(self.inner.fork_choice_updated_v3_metered(fork_choice_state, payload_attributes).await?)
     }
 
@@ -396,6 +505,43 @@ where
     async fn exchange_capabilities(&self, _capabilities: Vec<String>) -> RpcResult<Vec<String>> {
         Ok(self.inner.capabilities().list())
     }
+
+    async fn new_keystone(&self, keystone: serde_json::Value) -> RpcResult<serde_json::Value> {
+        trace!(target: "rpc::engine", "Serving engine_newKeystone");
+        let Some(hvm) = reth_optimism_hemi::hvm() else {
+            return Err(hemi_error("keystones are not available on this node"));
+        };
+        let raw = serde_json::to_vec(&keystone).map_err(|e| hemi_error(&e.to_string()))?;
+        match tokio::task::spawn_blocking(move || hvm.new_keystone(&raw)).await {
+            Ok(Ok(abrev_hash)) => {
+                reth_optimism_hemi::events::notify_keystone(&abrev_hash);
+                reth_optimism_hemi::events::backfill().notify_one();
+                Ok(serde_json::json!({ "status": "VALID" }))
+            }
+            Ok(Err(err)) => Err(hemi_error(&err.to_string())),
+            Err(err) => Err(hemi_error(&err.to_string())),
+        }
+    }
+
+    async fn pop_payouts_by_l2_keystone(
+        &self,
+        abrev_hash: serde_json::Value,
+    ) -> RpcResult<serde_json::Value> {
+        trace!(target: "rpc::engine", "Serving engine_popPayoutsByL2Keystone");
+        let Some(hvm) = reth_optimism_hemi::hvm() else {
+            return Err(hemi_error("hVM/TBC full node is not enabled on this node"));
+        };
+        let raw = serde_json::to_vec(&abrev_hash).map_err(|e| hemi_error(&e.to_string()))?;
+        match tokio::task::spawn_blocking(move || hvm.pop_payouts(&raw)).await {
+            Ok(Ok(payouts)) => Ok(payouts),
+            Ok(Err(err)) => Err(hemi_error(&err.to_string())),
+            Err(err) => Err(hemi_error(&err.to_string())),
+        }
+    }
+}
+
+fn hemi_error(msg: &str) -> jsonrpsee_types::ErrorObjectOwned {
+    jsonrpsee_types::ErrorObject::owned(-32000, msg.to_string(), None::<()>)
 }
 
 impl<Provider, EngineT, Pool, Validator, ChainSpec> IntoEngineApiRpcModule

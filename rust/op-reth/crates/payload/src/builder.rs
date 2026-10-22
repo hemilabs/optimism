@@ -51,7 +51,7 @@ use reth_storage_api::{StateProvider, StateProviderFactory, errors::ProviderErro
 use reth_transaction_pool::{BestTransactionsAttributes, PoolTransaction, TransactionPool};
 use revm::context::{Block, BlockEnv};
 use std::{marker::PhantomData, sync::Arc};
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// SDM/PostExec payload-builder metrics.
 #[derive(Metrics, Clone)]
@@ -114,6 +114,36 @@ where
     })?;
     debug!(target: "payload_builder", "post-exec tx included in block");
     Ok(true)
+}
+
+/// Hemi: builds the Bitcoin Attributes Deposited transaction for a locally sequenced block, when
+/// hVM has new Bitcoin headers for it (hemilabs/op-geth `miner.generateWork`).
+fn hemi_btc_attributes_tx<T: SignedTransaction>(
+    parent: B256,
+    timestamp: u64,
+    no_tx_pool: bool,
+    sequencer_txs: usize,
+) -> Option<Recovered<T>> {
+    let hvm = reth_optimism_hemi::hvm()?;
+    if no_tx_pool || sequencer_txs >= 2 || !hvm.is_active(timestamp) {
+        return None;
+    }
+    let attrs = match hvm.next_btc_attributes(parent, timestamp) {
+        Ok(Some(attrs)) => attrs,
+        Ok(None) => return None,
+        Err(err) => {
+            warn!(target: "payload_builder", %err, "failed to create a Bitcoin Attributes Deposited transaction");
+            return None;
+        }
+    };
+    let tx = op_alloy_consensus::TxBtcAttributesDeposited {
+        to: Some(attrs.to),
+        gas_limit: attrs.gas,
+        input: attrs.data,
+    };
+    let encoded = tx.encoded_2718();
+    let tx = T::decode_2718_exact(&encoded).ok()?;
+    Some(Recovered::new_unchecked(tx, op_alloy_consensus::HEMI_SYSTEM_SENDER))
 }
 
 /// Optimism's payload builder
@@ -480,6 +510,16 @@ impl<Txs> OpBuilder<'_, Txs> {
         let post_exec_mode = ctx.post_exec_mode()?;
         let produce_post_exec = matches!(post_exec_mode, PostExecMode::Produce);
 
+        // Hemi: like hemilabs/op-geth, a locally sequenced block whose attributes carry only the L1
+        // info deposit may carry a Bitcoin Attributes Deposited transaction advancing the hVM view
+        // of Bitcoin. It has to be generated before the hVM state is locked for execution below.
+        let btc_attributes_tx = hemi_btc_attributes_tx::<N::SignedTx>(
+            ctx.parent().hash(),
+            ctx.attributes().timestamp(),
+            ctx.attributes().no_tx_pool(),
+            ctx.attributes().sequencer_transactions().len(),
+        );
+
         let mut builder = ctx.block_builder_with_mode(&mut db, post_exec_mode)?;
 
         // 1. apply pre-execution changes
@@ -491,8 +531,21 @@ impl<Txs> OpBuilder<'_, Txs> {
         // 2. execute sequencer transactions
         let mut info = ctx.execute_sequencer_transactions(&mut builder, None)?;
 
+        // Hemi: include the Bitcoin Attributes Deposited transaction; a block carrying one gets
+        // no mempool transactions.
+        let mut contains_btc_attributes = false;
+        if let Some(tx) = btc_attributes_tx {
+            let hash = *alloy_consensus::transaction::TxHashRef::tx_hash(tx.inner());
+            builder.execute_transaction(tx).map_err(|err| {
+                warn!(target: "payload_builder", %err, %hash, "failed to include the Bitcoin Attributes Deposited transaction");
+                PayloadBuilderError::evm(err)
+            })?;
+            info!(target: "payload_builder", %hash, "block contains a Bitcoin Attributes Deposited transaction, not adding mempool transactions");
+            contains_btc_attributes = true;
+        }
+
         // 3. if mem pool transactions are requested we execute them
-        if !ctx.attributes().no_tx_pool() {
+        if !ctx.attributes().no_tx_pool() && !contains_btc_attributes {
             let best_txs = best(ctx.best_transaction_attributes(builder.evm_mut().block()));
             if ctx
                 .execute_best_transactions(

@@ -39,8 +39,31 @@ pub async fn launch_node(
     builder: WithLaunchContext<NodeBuilder<DatabaseEnv, OpChainSpec>>,
     args: RollupArgs,
 ) -> eyre::Result<(), ErrReport> {
+    // Hemi: start hVM (the embedded Bitcoin nodes) before the node can execute blocks.
+    crate::hemi::init_hvm(
+        &args.hvm,
+        builder.config().chain.genesis(),
+        builder.config().datadir().data_dir(),
+    )
+    .await?;
+
     if !args.proofs_history {
-        let handle = builder.node(OpNode::new(args)).launch_with_debug_capabilities().await?;
+        let handle = builder
+            .node(OpNode::new(args))
+            .on_node_started(|node| {
+                crate::hemi::on_node_started(
+                    node.provider.clone(),
+                    node.chain_spec(),
+                    node.task_executor.clone(),
+                );
+                Ok(())
+            })
+            .extend_rpc_modules(|ctx| {
+                ctx.modules.merge_configured(crate::hemi::kss_rpc_module()?)?;
+                Ok(())
+            })
+            .launch_with_debug_capabilities()
+            .await?;
         return handle.node_exit_future.await;
     }
 
@@ -87,6 +110,11 @@ where
     let handle = builder
         .node(OpNode::new(args))
         .on_node_started(move |node| {
+            crate::hemi::on_node_started(
+                node.provider.clone(),
+                node.chain_spec(),
+                node.task_executor.clone(),
+            );
             spawn_proofs_db_metrics(
                 node.task_executor,
                 mdbx,
@@ -103,6 +131,7 @@ where
                 .boxed())
         })
         .extend_rpc_modules(move |ctx| {
+            ctx.modules.merge_configured(crate::hemi::kss_rpc_module()?)?;
             info!(target: "reth::cli", "Installing proofs-history RPC overrides (eth_getProof, debug_executePayload)");
             let api_ext = EthApiExt::new(ctx.registry.eth_api().clone(), storage.clone());
             let auth_api_ext = EthApiExt::new(ctx.registry.eth_api().clone(), storage.clone());
@@ -146,3 +175,4 @@ pub fn spawn_proofs_db_metrics<S>(
         }
     });
 }
+

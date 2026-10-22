@@ -13323,6 +13323,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "reth-optimism-hemi"
+version = "1.11.3"
+dependencies = [
+ "alloy-consensus 2.1.1",
+ "alloy-op-evm",
+ "alloy-primitives",
+ "clap",
+ "op-alloy-consensus",
+ "op-revm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "reth-optimism-node"
 version = "1.11.3"
 dependencies = [
@@ -13357,9 +13374,11 @@ dependencies = [
  "reth-db-api",
  "reth-db-common",
  "reth-e2e-test-utils",
+ "reth-eth-wire",
  "reth-evm",
  "reth-metrics",
  "reth-network",
+ "reth-network-api",
  "reth-node-api",
  "reth-node-builder",
  "reth-node-core",
@@ -13368,6 +13387,7 @@ dependencies = [
  "reth-optimism-evm",
  "reth-optimism-exex",
  "reth-optimism-forks",
+ "reth-optimism-hemi",
  "reth-optimism-node",
  "reth-optimism-payload-builder",
  "reth-optimism-primitives",
@@ -13396,6 +13416,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tracing",
  "url",
 ]
@@ -13424,6 +13445,7 @@ dependencies = [
  "reth-optimism-chainspec",
  "reth-optimism-evm",
  "reth-optimism-forks",
+ "reth-optimism-hemi",
  "reth-optimism-primitives",
  "reth-optimism-txpool",
  "reth-payload-builder-primitives",
@@ -13533,6 +13555,7 @@ dependencies = [
  "reth-optimism-evm",
  "reth-optimism-flashblocks",
  "reth-optimism-forks",
+ "reth-optimism-hemi",
  "reth-optimism-payload-builder",
  "reth-optimism-post-exec-replay",
  "reth-optimism-primitives",

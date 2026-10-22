@@ -1,0 +1,28 @@
+[package]
+name = "reth-optimism-hemi"
+version = "1.11.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage = "https://hemi.xyz"
+repository = "https://github.com/hemilabs/optimism"
+description = "Hemi hVM support for op-reth: embedded Bitcoin (TBC) node, hVM precompiles, keystones"
+build = "build.rs"
+links = "hvm"
+
+[lints]
+workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+alloy-consensus.workspace = true
+alloy-op-evm.workspace = true
+op-revm.workspace = true
+op-alloy-consensus.workspace = true
+
+clap = { workspace = true, features = ["derive", "env"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+tracing.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }

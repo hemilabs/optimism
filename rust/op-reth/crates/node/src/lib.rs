@@ -24,6 +24,8 @@ pub use engine::OpEngineTypes;
 
 /// Canonical head metrics
 pub mod head_metrics;
+
+pub mod hemi;
 pub use head_metrics::{OpChainHeadMetrics, maintain_chain_head_metrics};
 
 pub mod node;

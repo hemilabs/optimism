@@ -29,6 +29,7 @@ reth-metrics.workspace = true
 
 # op-reth
 reth-optimism-evm.workspace = true
+reth-optimism-hemi.workspace = true
 reth-optimism-forks.workspace = true
 reth-optimism-primitives = { workspace = true, features = ["reth-codec"] }
 reth-optimism-txpool.workspace = true

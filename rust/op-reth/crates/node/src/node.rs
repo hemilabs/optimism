@@ -1666,6 +1666,13 @@ impl OpNetworkBuilder {
         // gossip to prevent other parties in the network from learning about them.
         network_config.tx_gossip_disabled = disable_txpool_gossip;
 
+        // Hemi: Bitcoin block exchange between L2 peers.
+        if reth_optimism_hemi::hvm().is_some_and(|h| h.enabled()) {
+            network_config
+                .extra_protocols
+                .push(crate::hemi::HemiBtcProtocol::new(ctx.task_executor()));
+        }
+
         Ok(network_config)
     }
 }
